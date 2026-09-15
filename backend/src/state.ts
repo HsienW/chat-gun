@@ -4,8 +4,15 @@ import {
   HumanMessage,
 } from "@langchain/core/messages";
 
+import type { CheckpointedExecutionBudget } from "./operations/types.js";
+
 export interface MessageState {
   messages: BaseMessage[];
+  /**
+   * Owned by the X10.2 execution-budget accounting reducer. Optional only
+   * when reading checkpoints created before X10.2.
+   */
+  executionBudgetState?: CheckpointedExecutionBudget;
 }
 
 export function getMessageType(message: BaseMessage | undefined): string | undefined {
