@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "release-gate-report/v1",
+  "reportVersion": "deliberate-regression-1",
+  "policyRef": {
+    "policyId": "runtime-release",
+    "version": "1",
+    "digest": "sha256:redacted-test-policy"
+  },
+  "dataset": {
+    "name": "runtime-regression",
+    "version": "v1.0.0"
+  },
+  "checks": {
+    "deterministicRegression": { "passed": true },
+    "businessConstraint": { "regressionCount": 0 },
+    "duplicateSideEffect": { "regressionCount": 1 },
+    "recovery": { "withinBounds": true },
+    "costLatency": { "withinTolerance": true },
+    "manifest": { "compatibility": "compatible" }
+  },
+  "hardNegativeCases": [
+    {
+      "caseId": "unsafe-replay-after-unknown-effect",
+      "passed": false
+    }
+  ]
+}

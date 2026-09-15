@@ -1,0 +1,25 @@
+{
+  "name": "runtime-bad-trace-regression",
+  "version": "v1.0.0",
+  "items": [
+    {
+      "id": "unknown-effect-reconciliation",
+      "input": {
+        "scenario": "resume after unknown effect",
+        "locale": "zh-TW"
+      },
+      "expectedOutput": {
+        "status": "reconciliation_required",
+        "code": "EFFECT_UNKNOWN"
+      },
+      "metadata": {
+        "source": "redacted_bad_trace",
+        "failureType": "unsafe_tool_replay",
+        "datasetVersion": "v1.0.0",
+        "redactionPolicyVersion": "redaction-v1",
+        "sourceTraceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "runtimeBuildId": "redacted-build-reference"
+      }
+    }
+  ]
+}
