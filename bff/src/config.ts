@@ -130,6 +130,9 @@ export type BffConfig = {
   port: number;
   langGraphApiUrl: URL;
   metricsBackendUrl: URL;
+  operationsRuntimeDeploymentId?: string;
+  operationsTenantId?: string;
+  operationsScopeId?: string;
   frontendDist: string;
   allowedOrigins: string[];
   requireAuth: boolean;
@@ -181,6 +184,11 @@ export function loadConfig(): BffConfig {
     metricsBackendUrl: new URL(
       readOptionalString("AGENT_METRICS_BACKEND_URL") ?? langGraphApiUrl
     ),
+    operationsRuntimeDeploymentId: readOptionalString(
+      "BFF_OPERATIONS_RUNTIME_DEPLOYMENT_ID"
+    ),
+    operationsTenantId: readOptionalString("BFF_OPERATIONS_TENANT_ID"),
+    operationsScopeId: readOptionalString("BFF_OPERATIONS_SCOPE_ID"),
     frontendDist:
       process.env.BFF_FRONTEND_DIST ??
       process.env.FRONTEND_DIST ??

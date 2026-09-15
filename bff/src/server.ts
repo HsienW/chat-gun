@@ -13,6 +13,11 @@ import {
 } from "./identity.js";
 import { BFF_ERROR_MESSAGES } from "./error-messages.js";
 import {
+  defaultOperationsMetricsAuthorizer,
+  proxyOperationsMetrics,
+  type OperationsMetricsAuthorizer,
+} from "./metrics-proxy.js";
+import {
   createBffAbortError,
   createBffErrorEnvelope,
   isBffAbortReason,
@@ -108,6 +113,7 @@ export type ServerDependencies = {
   redisClient?: RedisEvalClient | null;
   closeRedis?: () => Promise<void>;
   principalResolver?: PrincipalResolver;
+  operationsMetricsAuthorizer?: OperationsMetricsAuthorizer;
 };
 
 type RateLimitDecision = {
@@ -1151,6 +1157,8 @@ export function createServer(
     : undefined;
   const principalResolver =
     dependencies.principalResolver ?? selectPrincipalResolver(config);
+  const operationsMetricsAuthorizer =
+    dependencies.operationsMetricsAuthorizer ?? defaultOperationsMetricsAuthorizer;
 
   const server = http.createServer(async (req, res) => {
     const reqUrl = new URL(req.url ?? "/", `http://${getHeader(req, "host") ?? "localhost"}`);
@@ -1260,6 +1268,19 @@ export function createServer(
         ctx,
         config,
         principalResolution
+      );
+      return;
+    }
+
+    if (reqUrl.pathname === "/api/operations/metrics") {
+      await proxyOperationsMetrics(
+        req,
+        res,
+        reqUrl,
+        ctx,
+        config,
+        principalResolution,
+        operationsMetricsAuthorizer
       );
       return;
     }
