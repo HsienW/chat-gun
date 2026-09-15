@@ -8,7 +8,7 @@
     "mcp_agent": "./src/agents/mcp-agent.ts:mcpAgentGraph"
   },
   "http": {
-    "app": "./src/platform/metrics/metrics-endpoint.ts:metricsApp",
+    "app": "./src/operations/http-app.ts:operationsHttpApp",
     "configurable_headers": {
       "includes": [
         "x-request-id",
