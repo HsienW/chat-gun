@@ -1,0 +1,45 @@
+{
+  "baseDataset": {
+    "name": "runtime-bad-trace-regression",
+    "version": "v1.0.0",
+    "items": []
+  },
+  "badTrace": {
+    "schemaVersion": "bad-trace/v1",
+    "traceId": "synthetic-trace-id-to-hash",
+    "failureType": "unsafe_tool_replay",
+    "input": {
+      "scenario": "resume after unknown effect",
+      "locale": "zh-TW",
+      "rawPrompt": "synthetic-discarded-content"
+    },
+    "expectedOutput": {
+      "status": "reconciliation_required",
+      "code": "EFFECT_UNKNOWN"
+    },
+    "runtimeBuildId": "synthetic-build"
+  },
+  "policy": {
+    "policyVersion": "redaction-v1",
+    "datasetName": "runtime-bad-trace-regression",
+    "datasetVersion": "v1.0.0",
+    "caseId": "unknown-effect-reconciliation",
+    "allowedInputFields": ["scenario", "locale"]
+  },
+  "before": {
+    "datasetName": "runtime-bad-trace-regression",
+    "datasetVersion": "v1.0.0",
+    "metrics": {
+      "deterministic_pass_rate": 0,
+      "duplicate_effect_rate": 1
+    }
+  },
+  "after": {
+    "datasetName": "runtime-bad-trace-regression",
+    "datasetVersion": "v1.0.0",
+    "metrics": {
+      "deterministic_pass_rate": 1,
+      "duplicate_effect_rate": 0
+    }
+  }
+}

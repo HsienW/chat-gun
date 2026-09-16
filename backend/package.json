@@ -11,7 +11,9 @@
     "postinstall": "patch-package",
     "start": "langgraphjs dev",
     "test": "vitest run",
-    "eval:opik": "vitest run src/evaluation/opik/experiment.live-smoke.test.ts"
+    "eval:opik": "vitest run src/evaluation/opik/experiment.live-smoke.test.ts",
+    "operations:release-gate": "tsx src/operations/release-gate.cli.ts",
+    "operations:feedback-loop": "tsx src/operations/feedback-loop.cli.ts"
   },
   "dependencies": {
     "@langchain/core": "1.2.10",
