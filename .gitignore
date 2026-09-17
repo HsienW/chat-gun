@@ -217,6 +217,4 @@ backend/.langgraph_api
 backend/eval-results/
 
 # Second-stage planning reference (not in version control)
-/second-stage-plan-en.md
-/second-stage-plan-en-v2.md
-/second-stage-plan-en-v3.md
+/second-stage-plan*.md
