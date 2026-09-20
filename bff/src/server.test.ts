@@ -89,7 +89,7 @@ async function withBff<T>(
 
 async function rawRequest(
   url: string,
-  headers: http.OutgoingHttpHeaders
+  headers: http.OutgoingHttpHeaders | string[]
 ): Promise<{ statusCode: number; body: string }> {
   return new Promise((resolve, reject) => {
     const request = http.request(url, { headers }, (response) => {
@@ -498,6 +498,43 @@ describe("BFF LangGraph stream proxy", () => {
           });
           assert.equal(conflict.status, 400);
           assert.equal(upstreamCalls, 0);
+        });
+      }
+    );
+  });
+
+  it("validates request ID and rejects duplicate or malformed correlation before proxying", async () => {
+    let forwardedRequestId: string | undefined;
+    let upstreamCalls = 0;
+    await withServer(
+      (req, res) => {
+        upstreamCalls += 1;
+        forwardedRequestId = req.headers["x-request-id"] as string | undefined;
+        res.end("ok");
+      },
+      async (upstream) => {
+        await withBff(createTestConfig(upstream.url), async (bff) => {
+          const legal = await fetch(`${bff.url}/api/langgraph/runs`, {
+            headers: { "x-request-id": "request-1:attempt.2" },
+          });
+          assert.equal(legal.status, 200);
+          assert.equal(forwardedRequestId, "request-1:attempt.2");
+
+          const duplicate = await rawRequest(`${bff.url}/api/langgraph/runs`, [
+            "host", new URL(bff.url).host,
+            "x-request-id", "request-1", "x-request-id", "request-2",
+          ]);
+          assert.equal(duplicate.statusCode, 400);
+          assert.equal(JSON.parse(duplicate.body).error.code, "duplicate_request_id_header");
+
+          for (const requestId of ["invalid id", "x".repeat(257)]) {
+            const invalid = await fetch(`${bff.url}/api/langgraph/runs`, {
+              headers: { "x-request-id": requestId },
+            });
+            assert.equal(invalid.status, 400);
+            assert.equal((await invalid.json()).error.code, "invalid_request_id");
+          }
+          assert.equal(upstreamCalls, 1);
         });
       }
     );
