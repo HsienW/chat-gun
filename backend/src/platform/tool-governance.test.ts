@@ -1,6 +1,7 @@
 import type { RunnableConfig } from "@langchain/core/runnables";
+import { readFileSync } from "node:fs";
 import { tool, type StructuredToolInterface } from "@langchain/core/tools";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import {
@@ -11,6 +12,7 @@ import {
   type ToolAuthorizationGovernanceConfig,
 } from "./tool-governance.js";
 import { ToolRiskRegistry, type ToolRiskPolicy } from "../runtime/authorization/tool-risk.js";
+import { executionContextSchema } from "../runtime/execution-context/execution-context.js";
 import {
   createNoopOpikTracer,
   setOpikTracerForTests,
@@ -29,6 +31,12 @@ function createEchoTool(output: string): StructuredToolInterface {
     }
   ) as StructuredToolInterface;
 }
+
+const contextFixture = JSON.parse(readFileSync(
+  new URL("../../../contracts/execution-context.fixture.json", import.meta.url),
+  "utf8"
+)) as { validContext: unknown };
+const executionContext = executionContextSchema.parse(contextFixture.validContext);
 
 function createAuthorizationConfig(
   effect: "allow" | "deny" | "require_confirmation",
@@ -148,10 +156,8 @@ describe("applyToolGovernance", () => {
     let receivedAbort = false;
     const waitingTool = tool(
       async (_input: { value: string }, config?: RunnableConfig) => {
-        const configurable = config?.configurable as
-          | { abortSignal?: AbortSignal }
-          | undefined;
-        const signal = configurable?.abortSignal ?? config?.signal;
+        expect(config?.configurable).not.toHaveProperty("abortSignal");
+        const signal = config?.signal;
 
         return await new Promise<string>((_resolve, reject) => {
           signal?.addEventListener(
@@ -182,6 +188,9 @@ describe("applyToolGovernance", () => {
 });
 
 describe("GovernanceExecutor.executeTyped", () => {
+  beforeEach(() => {
+    vi.stubEnv("NODE_ENV", "development");
+  });
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -230,6 +239,66 @@ describe("GovernanceExecutor.executeTyped", () => {
         resource: expect.objectContaining({ tenantId: "public" }),
       })
     );
+  });
+
+  it.each(["production", "test"])("denies missing identity in %s before authorization or tool dispatch", async (profile) => {
+    vi.stubEnv("NODE_ENV", profile);
+    const invoked = vi.fn(async () => "unexpected");
+    const sourceTool = tool(invoked, {
+      name: "contract_echo",
+      description: "Requires an identity before dispatch.",
+      schema: z.object({ value: z.string() }),
+    }) as StructuredToolInterface;
+    const authorization = createAuthorizationConfig("allow");
+    const executor = new GovernanceExecutor(
+      sourceTool,
+      { ...defaultToolPolicy(sourceTool.name), audit: false },
+      authorization.config
+    );
+    await expect(executor.executeTyped({ value: "valid" })).resolves.toMatchObject({
+      type: "denied_by_authorization",
+      errorCode: "AUTHORIZATION_UNAVAILABLE",
+    });
+    expect(authorization.authorize).not.toHaveBeenCalled();
+    expect(invoked).not.toHaveBeenCalled();
+  });
+
+  it("uses an explicitly trusted ExecutionContext for authorization and decision correlation", async () => {
+    const authorization = createAuthorizationConfig("allow");
+    const executor = new GovernanceExecutor(
+      createEchoTool("ok"),
+      { ...defaultToolPolicy("contract_echo"), audit: false },
+      { ...authorization.config, resolveExecutionContext: () => executionContext }
+    );
+
+    await expect(executor.executeTyped({ value: "valid" }, {
+      configurable: { requestId: "forged-request" },
+    })).resolves.toMatchObject({ type: "succeeded" });
+    expect(authorization.authorize).toHaveBeenCalledWith(expect.objectContaining({
+      principal: executionContext.principal,
+      scope: executionContext.scope,
+      context: expect.objectContaining({ requestId: executionContext.requestId }),
+    }));
+    expect(authorization.recordDecision).toHaveBeenCalledWith(expect.objectContaining({
+      executionContext,
+      requestId: executionContext.requestId,
+      threadId: executionContext.threadId,
+      runId: executionContext.runId,
+    }));
+  });
+
+  it("denies when an installed trusted-context resolver returns no identity", async () => {
+    const authorization = createAuthorizationConfig("allow");
+    const executor = new GovernanceExecutor(
+      createEchoTool("ok"),
+      { ...defaultToolPolicy("contract_echo"), audit: false },
+      { ...authorization.config, resolveExecutionContext: () => null }
+    );
+    await expect(executor.executeTyped({ value: "valid" })).resolves.toMatchObject({
+      type: "denied_by_authorization",
+      errorCode: "AUTHORIZATION_UNAVAILABLE",
+    });
+    expect(authorization.authorize).not.toHaveBeenCalled();
   });
 
   it("returns a typed authorization denial without dispatch", async () => {

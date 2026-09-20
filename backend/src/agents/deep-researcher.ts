@@ -3,6 +3,9 @@ import { RunnableConfig } from "@langchain/core/runnables";
 import { StructuredToolInterface } from "@langchain/core/tools";
 import { Annotation, Command, END, START, StateGraph, interrupt } from "@langchain/langgraph";
 import { MemorySaver } from "@langchain/langgraph-checkpoint";
+import { readCanonicalExecutionContext, readExecutionCorrelation } from "../runtime/execution-context/read-execution-context.js";
+import { readDevelopmentExecutionContext } from "../runtime/execution-context/read-execution-context.js";
+import { instrumentGraphWithExecutionContext } from "../runtime/execution-context/instrument-graph.js";
 
 import { getBooleanEnv } from "../platform/env.js";
 import { GOVERNANCE_CANCELLED_PREFIX } from "../platform/tool-governance.js";
@@ -110,35 +113,13 @@ const DEEP_RESEARCH_TOOL_NAMES = {
 } as const;
 
 function getTracingTaskId(config: unknown): string | undefined {
-  if (!config || typeof config !== "object" || !("configurable" in config)) {
-    return undefined;
-  }
-  const configurable = config.configurable;
-  if (!configurable || typeof configurable !== "object") return undefined;
-
-  for (const key of ["task_id", "thread_id", "run_id"] as const) {
-    const value = Object.entries(configurable).find(
-      ([entryKey]) => entryKey === key
-    )?.[1];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return undefined;
+  const correlation = readExecutionCorrelation(config);
+  // Legacy tracing fallback until all callers provide canonical taskId.
+  return correlation.taskId ?? correlation.threadId ?? correlation.runId;
 }
 
 function getTracingStepId(config: unknown): string | undefined {
-  if (!config || typeof config !== "object" || !("configurable" in config)) {
-    return undefined;
-  }
-  const configurable = config.configurable;
-  if (!configurable || typeof configurable !== "object") return undefined;
-
-  for (const key of ["step_id", "stepId"] as const) {
-    const value = Object.entries(configurable).find(
-      ([entryKey]) => entryKey === key
-    )?.[1];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return undefined;
+  return readExecutionCorrelation(config).stepId;
 }
 
 function traceNode<TArguments extends unknown[], TResult>(
@@ -672,8 +653,7 @@ async function invokeTool(
     };
   }
 
-  const existingStepId =
-    getConfigString(config, "step_id") || getConfigString(config, "stepId");
+  const existingStepId = readExecutionCorrelation(config).stepId;
   const toolConfig: RunnableConfig = {
     ...config,
     configurable: {
@@ -704,6 +684,7 @@ async function invokeTool(
     return {
       content: serializeErrorEnvelope(
         createErrorEnvelope(error, {
+          executionContext: readCanonicalExecutionContext(config),
           source: "backend",
           stage: "tool_invoke",
           provider: toolName,
@@ -737,7 +718,7 @@ function createToolMessage(
 
 async function validateUploads(
   state: typeof DeepResearchState.State,
-  _config: RunnableConfig
+  config: RunnableConfig
 ): Promise<Partial<typeof DeepResearchState.State>> {
   const validationError = validateImageAttachments(state.messages);
   if (!validationError) {
@@ -747,6 +728,7 @@ async function validateUploads(
   return {
     uploadError: serializeErrorEnvelope(
       createErrorEnvelope(new Error(validationError), {
+        executionContext: readCanonicalExecutionContext(config),
         source: "backend",
         stage: "upload_preflight",
         provider: "backend",
@@ -813,7 +795,7 @@ function getLatestImageUserContent(state: typeof DeepResearchState.State): unkno
 
 async function analyzeImages(
   state: typeof DeepResearchState.State,
-  _config: RunnableConfig
+  config: RunnableConfig
 ): Promise<Partial<typeof DeepResearchState.State>> {
   const content = getLatestImageUserContent(state);
   if (!content) {
@@ -837,6 +819,7 @@ async function analyzeImages(
       imageObservations: [
         serializeErrorEnvelope(
           createErrorEnvelope(error, {
+            executionContext: readCanonicalExecutionContext(config),
             source: "backend",
             stage: "image_recognition",
             provider: String(describeLlmGatewayConfig().provider),
@@ -1689,12 +1672,6 @@ async function targetedTools(
 /**
  * Check if the raw request was already repaired to avoid infinite loops — Task 5.11
  */
-function getConfigString(config: RunnableConfig | undefined, key: string): string {
-  const configurable = config?.configurable as Record<string, unknown> | undefined;
-  const value = configurable?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : "";
-}
-
 function getConfigNumber(config: RunnableConfig | undefined, key: string): number | undefined {
   const configurable = config?.configurable as Record<string, unknown> | undefined;
   const value = configurable?.[key];
@@ -1717,8 +1694,7 @@ function getClarificationTimeoutMs(config: RunnableConfig | undefined): number {
 }
 
 function getRunId(config: RunnableConfig | undefined): string {
-  const runId = (config as { runId?: unknown } | undefined)?.runId;
-  return typeof runId === "string" && runId.trim() ? runId.trim() : "";
+  return readExecutionCorrelation(config).runId ?? "";
 }
 
 function isClarificationTimedOut(
@@ -1813,7 +1789,7 @@ function buildClarificationInterrupt(
 
   return {
     type: "weather_clarification",
-    threadId: getConfigString(config, "thread_id"),
+    threadId: readExecutionCorrelation(config).threadId ?? "",
     runId: getRunId(config),
     candidates: clarification.candidates.map((candidate, index) => ({
       ...candidate,
@@ -2917,13 +2893,18 @@ const builder = new StateGraph(DeepResearchState)
 
 const deepResearcherCheckpointer = new MemorySaver();
 
-export const deepResearcherGraph = applyInteractionGovernance(
-  instrumentGraphWithOpik(
-    builder.compile({
-      checkpointer: deepResearcherCheckpointer,
-    }),
-    "weather"
+export const deepResearcherGraph = instrumentGraphWithExecutionContext(
+  applyInteractionGovernance(
+    instrumentGraphWithOpik(
+      builder.compile({ checkpointer: deepResearcherCheckpointer }),
+      "weather"
+    ),
+    productionInteractionOrchestrator
   ),
-  productionInteractionOrchestrator
+  (input, config) =>
+    process.env.NODE_ENV === "development" &&
+    process.env.EXECUTION_CONTEXT_DEV_ENABLED === "true"
+      ? readDevelopmentExecutionContext(input, config)
+      : undefined
 );
 

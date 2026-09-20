@@ -393,7 +393,7 @@ describe("WeatherToolResult contract (Task 4.1-4.8)", () => {
     );
 
     try {
-      const raw = await weatherTool.invoke(
+      await expect(weatherTool.invoke(
         {
           location: "London",
           resolvedCandidate: {
@@ -407,15 +407,10 @@ describe("WeatherToolResult contract (Task 4.1-4.8)", () => {
             timezone: "Europe/London",
           },
         },
-        { configurable: { abortSignal: controller.signal } }
-      );
-      const result = JSON.parse(String(raw)) as WeatherToolResult;
+        { signal: controller.signal }
+      )).rejects.toThrow("[governance_timeout] current_weather");
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(result.status).toBe("error");
-      if (result.status === "error") {
-        expect(result.code).toBe("weather_timeout");
-      }
     } finally {
       clearTimeout(abortTimer);
     }
