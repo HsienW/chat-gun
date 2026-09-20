@@ -1,0 +1,38 @@
+{
+  "validContext": {
+    "requestId": "request-1",
+    "threadId": "thread-1",
+    "runId": "run-1",
+    "taskId": "task-1",
+    "stepId": "step-1",
+    "attempt": 1,
+    "principal": {
+      "principalId": "principal-1",
+      "principalType": "user",
+      "tenantId": "tenant-1",
+      "roles": ["member"],
+      "scopes": ["task:read"],
+      "authSource": "trusted_gateway",
+      "authenticatedAt": "2026-09-20T00:00:00.000Z"
+    },
+    "scope": {
+      "scopeId": "scope-1",
+      "scopeType": "tenant",
+      "tenantId": "tenant-1"
+    }
+  },
+  "legacyConfig": {
+    "runId": "run-1",
+    "configurable": {
+      "x-request-id": "request-1",
+      "thread_id": "thread-1",
+      "task_id": "task-1",
+      "step_id": "step-1",
+      "run_id": "run-1"
+    }
+  },
+  "malformedRequestId": "bad id",
+  "oversizedIdLength": 257,
+  "unknownField": "runID",
+  "concurrentRunIds": ["run-1", "run-2"]
+}
