@@ -65,6 +65,31 @@ describe('extractTaskEventGeneration', () => {
 });
 
 describe('agent runtime event extraction', () => {
+  it('preserves valid canonical correlation and accepts legacy events without it', () => {
+    expect(extractDirectAgentRuntimeEvents({ runtimeEvents: [{
+      type: 'agent.plan.start',
+      title: 'Plan',
+      ts: 100,
+      correlation: { requestId: 'request-1', threadId: 'thread-1', runId: 'run-1' },
+      futureField: 'ignored',
+    }] })).toEqual([{
+      type: 'agent.plan.start',
+      title: 'Plan',
+      ts: 100,
+      correlation: { requestId: 'request-1', threadId: 'thread-1', runId: 'run-1' },
+    }]);
+    expect(extractDirectAgentRuntimeEvents({ runtimeEvents: [{
+      type: 'agent.plan.start', title: 'Old', ts: 101,
+    }] })).toEqual([{ type: 'agent.plan.start', title: 'Old', ts: 101 }]);
+  });
+
+  it('drops malformed correlation without dropping a valid event', () => {
+    expect(extractDirectAgentRuntimeEvents({ runtimeEvents: [{
+      type: 'agent.plan.start', title: 'Plan', ts: 100,
+      correlation: { requestId: 'bad id', threadId: 'thread-1', runId: 'run-1' },
+    }] })).toEqual([{ type: 'agent.plan.start', title: 'Plan', ts: 100 }]);
+  });
+
   it('extracts direct runtime events from raw stream updates', () => {
     const events = extractDirectAgentRuntimeEvents({
       runtimeEvents: [{ type: 'agent.plan.start', title: 'Plan', ts: 100 }],

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import fixture from '../../../contracts/execution-context.fixture.json';
 
 import {
   createInteractionMetadataFetch,
@@ -7,6 +8,27 @@ import {
 } from '@/lib/interaction-request-metadata';
 
 describe('interaction request metadata', () => {
+  it('uses the shared cross-layer ID fixture', () => {
+    expect(() => createInteractionRequestMetadata(undefined, () => fixture.malformedRequestId)).toThrow();
+    expect(() => createInteractionRequestMetadata(undefined, () => 'x'.repeat(fixture.oversizedIdLength))).toThrow();
+  });
+  it('rejects malformed generated request IDs before submit', () => {
+    expect(() => createInteractionRequestMetadata(undefined, () => 'bad id')).toThrow();
+  });
+
+  it('omits a malformed active-run hint and never stores malformed metadata', () => {
+    const metadata = createInteractionRequestMetadata(
+      { runId: '../../invalid', generation: 1 },
+      () => '11111111-1111-4111-8111-111111111111'
+    );
+    expect(metadata.activeRunHint).toBeUndefined();
+    const options = { config: { configurable: { existing: true } } };
+    expect(withInteractionRequestMetadata(options, {
+      requestId: 'bad id',
+      idempotencyKey: '22222222-2222-4222-8222-222222222222',
+    })).toBe(options);
+  });
+
   it('creates request-scoped UUID metadata and carries a prior active-run hint', () => {
     const values = [
       '11111111-1111-4111-8111-111111111111',
@@ -90,6 +112,7 @@ describe('interaction request metadata', () => {
 
     await metadataFetch('http://localhost/api/langgraph/runs/stream', {
       method: 'POST',
+      headers: { 'x-request-id': 'bad id', 'x-idempotency-key': 'bad id' },
       body: JSON.stringify({
         config: {
           configurable: {

@@ -55,33 +55,33 @@ function parseInteractionRequestMetadata(
     return undefined;
   }
 
-  if (
-    record.activeRunHint !== undefined &&
-    !isInteractionActiveRunHint(record.activeRunHint)
-  ) {
+  const hint = record.activeRunHint;
+  if (hint !== undefined && !isInteractionActiveRunHint(hint)) {
     return undefined;
   }
 
   return {
     requestId: record.requestId,
     idempotencyKey: record.idempotencyKey,
-    ...(record.activeRunHint
-      ? { activeRunHint: record.activeRunHint as InteractionActiveRunHint }
-      : {}),
+    ...(hint && isInteractionActiveRunHint(hint) ? { activeRunHint: hint } : {}),
   };
 }
 
-function extractBodyMetadata(body: BodyInit | null | undefined) {
-  if (typeof body !== 'string') return undefined;
+function extractBodyMetadata(body: BodyInit | null | undefined): {
+  present: boolean;
+  metadata?: InteractionRequestMetadata;
+} {
+  if (typeof body !== 'string') return { present: false };
   try {
     const bodyRecord = asRecord(JSON.parse(body));
     const config = asRecord(bodyRecord?.config);
     const configurable = asRecord(config?.configurable);
-    return parseInteractionRequestMetadata(
-      configurable?.clientInteractionMetadata
-    );
+    const rawMetadata = configurable?.clientInteractionMetadata;
+    return rawMetadata === undefined
+      ? { present: false }
+      : { present: true, metadata: parseInteractionRequestMetadata(rawMetadata) };
   } catch {
-    return undefined;
+    return { present: false };
   }
 }
 
@@ -89,10 +89,17 @@ export function createInteractionRequestMetadata(
   activeRunHint?: InteractionActiveRunHint,
   createUuid: () => string = () => crypto.randomUUID()
 ): InteractionRequestMetadata {
+  const requestId = createUuid();
+  const idempotencyKey = createUuid();
+  if (!UUID_V4_PATTERN.test(requestId) || !UUID_V4_PATTERN.test(idempotencyKey)) {
+    throw new TypeError('Invalid generated interaction request metadata');
+  }
   return {
-    requestId: createUuid(),
-    idempotencyKey: createUuid(),
-    ...(activeRunHint ? { activeRunHint } : {}),
+    requestId,
+    idempotencyKey,
+    ...(activeRunHint && isInteractionActiveRunHint(activeRunHint)
+      ? { activeRunHint }
+      : {}),
   };
 }
 
@@ -100,13 +107,15 @@ export function withInteractionRequestMetadata<TOptions extends SubmitOptions>(
   options: TOptions,
   metadata: InteractionRequestMetadata
 ): TOptions {
+  const validated = parseInteractionRequestMetadata(metadata);
+  if (!validated) return options;
   return {
     ...options,
     config: {
       ...options.config,
       configurable: {
         ...options.config?.configurable,
-        clientInteractionMetadata: metadata,
+        clientInteractionMetadata: validated,
       },
     },
   };
@@ -117,7 +126,16 @@ export function createInteractionMetadataFetch(
 ): typeof fetch {
   return async (input, init) => {
     const headers = new Headers(init?.headers);
-    const metadata = extractBodyMetadata(init?.body);
+    const bodyMetadata = extractBodyMetadata(init?.body);
+    if (bodyMetadata.present) {
+      for (const name of [
+        'x-request-id',
+        'x-idempotency-key',
+        'x-active-run-id',
+        'x-active-run-generation',
+      ]) headers.delete(name);
+    }
+    const metadata = bodyMetadata.metadata;
     if (metadata) {
       headers.set('x-request-id', metadata.requestId);
       headers.set('x-idempotency-key', metadata.idempotencyKey);
