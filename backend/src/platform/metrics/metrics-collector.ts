@@ -1,6 +1,10 @@
 import { getAgentRuntimeConfig } from "../runtime-config.js";
+import type { ExecutionContext } from "../../runtime/execution-context/execution-context.js";
+
+type MetricCorrelation = Pick<ExecutionContext, "requestId" | "threadId" | "runId" | "taskId">;
 
 export type TaskMetric = {
+  correlation?: MetricCorrelation;
   kind: "task";
   taskId: string;
   status: "running" | "completed" | "failed" | "cancelled";
@@ -10,6 +14,7 @@ export type TaskMetric = {
 };
 
 export type StepMetric = {
+  correlation?: MetricCorrelation;
   kind: "step";
   stepId: string;
   taskId: string;
@@ -21,6 +26,7 @@ export type StepMetric = {
 };
 
 export type ToolMetric = {
+  correlation?: MetricCorrelation;
   kind: "tool";
   toolName: string;
   taskId: string;

@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { executionContextSchema } from "../execution-context/execution-context.js";
 
 import type { AuditLogger } from "../../platform/observability.js";
 import {
@@ -28,6 +30,11 @@ const scope = {
   tenantId: "tenant-1",
   principalId: "principal-1",
 };
+const contextFixture = JSON.parse(readFileSync(
+  new URL("../../../../contracts/execution-context.fixture.json", import.meta.url),
+  "utf8"
+)) as { validContext: unknown };
+const executionContext = executionContextSchema.parse(contextFixture.validContext);
 const identity = {
   runId: "run-1",
   stepId: "step-1",
@@ -220,6 +227,58 @@ function runInput(
 }
 
 describe("ToolExecutionRunner", () => {
+  it("derives ledger, tool config, and audit correlation from one context", async () => {
+    const ledger = createLedger();
+    const executor = createExecutor([{ type: "succeeded", result: { operationId: "live" } }]);
+    const auditRecord = vi.fn<AuditLogger["record"]>(async () => undefined);
+    const recordMetric = vi.fn(async () => undefined);
+    const runner = createRunner(ledger, createResultStore(), {
+      auditLogger: { record: auditRecord },
+      recordMetric,
+    });
+
+    await runner.execute({
+      ...runInput(executor, createDescriptor()),
+      requestId: "legacy-request",
+      executionContext,
+    });
+
+    expect(ledger.prepare).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: executionContext.requestId,
+      threadId: executionContext.threadId,
+      taskId: executionContext.taskId,
+    }));
+    expect(executor.executeTyped).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        configurable: expect.objectContaining({
+          execution_context: expect.objectContaining({
+            requestId: executionContext.requestId,
+            toolExecutionId: "execution-1",
+          }),
+        }),
+      })
+    );
+    expect(auditRecord).toHaveBeenCalledWith(
+      "tool.side_effect.prepared",
+      expect.anything(),
+      executionContext
+    );
+    expect(recordMetric).toHaveBeenCalledWith(
+      "tool.side_effect.outcome",
+      expect.anything(),
+      executionContext
+    );
+  });
+
+  it("rejects a side-effect identity that conflicts with canonical context", async () => {
+    const runner = createRunner(createLedger(), createResultStore());
+    await expect(runner.execute({
+      ...runInput(createExecutor([]), createDescriptor()),
+      executionContext: { ...executionContext, runId: "other-run" },
+    })).rejects.toThrow("conflicts");
+  });
+
   it("uses the legacy path for a tool without a side-effect descriptor", async () => {
     const ledger = createLedger();
     const executor = createExecutor([

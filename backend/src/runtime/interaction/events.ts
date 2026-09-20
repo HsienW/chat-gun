@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { AuditLogger } from "../../platform/observability.js";
 import type { SpanManager } from "../../platform/tracing/span-manager.js";
+import type { ExecutionContext } from "../execution-context/execution-context.js";
+import { executionCorrelation } from "../execution-context/read-execution-context.js";
 import { redact } from "../audit/redaction.js";
 import type { EventRepository } from "../persistence/event-repository.js";
 import type { TaskEvent, TaskEventType } from "../types.js";
@@ -33,6 +35,7 @@ export interface InteractionInputReference {
 
 export interface InteractionEventPayload {
   schemaVersion: "1.0";
+  correlation?: ReturnType<typeof executionCorrelation>;
   threadId: string;
   priorTaskId: string;
   priorRunId: string;
@@ -94,8 +97,9 @@ export function createInteractionInputReference(
 }
 
 export function createInteractionTaskEvent(
-  input: Omit<InteractionEventPayload, "schemaVersion"> & {
+  input: Omit<InteractionEventPayload, "schemaVersion" | "correlation"> & {
     eventType: InteractionTaskEventType;
+    executionContext?: ExecutionContext;
   },
   dependencies: InteractionEventFactoryDependencies = DEFAULT_FACTORY_DEPENDENCIES
 ): InteractionTaskEvent {
@@ -119,6 +123,9 @@ export function createInteractionTaskEvent(
     eventType: input.eventType,
     payload: {
       schemaVersion: "1.0",
+      ...(input.executionContext
+        ? { correlation: executionCorrelation(input.executionContext) }
+        : {}),
       threadId: input.threadId,
       priorTaskId: input.priorTaskId,
       priorRunId: input.priorRunId,
@@ -137,6 +144,7 @@ export function createInteractionTaskEvent(
 
 export function createTentativeClassificationTaskEvents(
   input: {
+    executionContext?: ExecutionContext;
     threadId: string;
     priorTaskId: string;
     priorRunId: string;
@@ -156,6 +164,9 @@ export function createTentativeClassificationTaskEvents(
 
   const basePayload = {
     schemaVersion: "1.0" as const,
+    ...(input.executionContext
+      ? { correlation: executionCorrelation(input.executionContext) }
+      : {}),
     threadId: input.threadId,
     priorTaskId: input.priorTaskId,
     priorRunId: input.priorRunId,
@@ -217,7 +228,7 @@ export class InteractionEventRecorder {
     private readonly spanManager: SpanManager
   ) {}
 
-  async record(event: InteractionTaskEvent): Promise<void> {
+  async record(event: InteractionTaskEvent, executionContext?: ExecutionContext): Promise<void> {
     const payload = asInteractionEventPayload(event.payload);
     if (!payload) throw new Error("Invalid interaction event payload");
 
@@ -247,15 +258,26 @@ export class InteractionEventRecorder {
     if (auditPayload === null || typeof auditPayload !== "object") {
       throw new Error("Invalid redacted interaction audit payload");
     }
-    await this.auditLogger.record(
-      `interaction.${event.eventType}`,
-      auditPayload as Record<string, unknown>
-    );
+    if (executionContext) {
+      await this.auditLogger.record(
+        `interaction.${event.eventType}`,
+        auditPayload as Record<string, unknown>,
+        executionContext
+      );
+    } else {
+      await this.auditLogger.record(
+        `interaction.${event.eventType}`,
+        auditPayload as Record<string, unknown>
+      );
+    }
 
     const span = this.spanManager.getActiveSpan();
     if (span) {
       this.spanManager.setAttributes(span, {
         "interaction.event_type": event.eventType,
+        ...(payload.correlation
+          ? { "request.id": payload.correlation.requestId }
+          : {}),
         "interaction.thread_id": payload.threadId,
         "interaction.task_id": payload.priorTaskId,
         "interaction.run_id": payload.priorRunId,

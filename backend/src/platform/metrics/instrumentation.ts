@@ -6,6 +6,8 @@ import type {
   ToolMetric,
 } from "./metrics-collector.js";
 import { getMetricsCollector } from "./metrics-collector.js";
+import type { ExecutionContext } from "../../runtime/execution-context/execution-context.js";
+import { executionCorrelation } from "../../runtime/execution-context/read-execution-context.js";
 
 type TaskMetricInput = Omit<TaskMetric, "kind" | "ts">;
 type StepMetricInput = Omit<StepMetric, "kind" | "ts">;
@@ -46,23 +48,38 @@ function recordSafely(
 
 export function recordTaskMetric(
   input: TaskMetricInput,
-  recorder: MetricRecorder = getMetricsCollector()
+  recorder: MetricRecorder = getMetricsCollector(),
+  context?: ExecutionContext
 ): void {
-  recordSafely("task", recorder, { kind: "task", ...input, ts: Date.now() });
+  recordSafely("task", recorder, {
+    kind: "task", ...input,
+    ...(context ? { correlation: executionCorrelation(context) } : {}),
+    ts: Date.now(),
+  });
 }
 
 export function recordStepMetric(
   input: StepMetricInput,
-  recorder: MetricRecorder = getMetricsCollector()
+  recorder: MetricRecorder = getMetricsCollector(),
+  context?: ExecutionContext
 ): void {
-  recordSafely("step", recorder, { kind: "step", ...input, ts: Date.now() });
+  recordSafely("step", recorder, {
+    kind: "step", ...input,
+    ...(context ? { correlation: executionCorrelation(context) } : {}),
+    ts: Date.now(),
+  });
 }
 
 export function recordToolMetric(
   input: ToolMetricInput,
-  recorder: MetricRecorder = getMetricsCollector()
+  recorder: MetricRecorder = getMetricsCollector(),
+  context?: ExecutionContext
 ): void {
-  recordSafely("tool", recorder, { kind: "tool", ...input, ts: Date.now() });
+  recordSafely("tool", recorder, {
+    kind: "tool", ...input,
+    ...(context ? { correlation: executionCorrelation(context) } : {}),
+    ts: Date.now(),
+  });
 }
 
 export function recordTokenMetric(
