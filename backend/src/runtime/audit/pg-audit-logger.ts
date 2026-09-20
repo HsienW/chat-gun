@@ -8,6 +8,8 @@ import {
   type RecordDecisionInput,
 } from "../authorization/decision-store.js";
 import type { Queryable } from "../persistence/rows.js";
+import type { ExecutionContext } from "../execution-context/execution-context.js";
+import { executionContextSchema } from "../execution-context/execution-context.js";
 import {
   createAuditEvent,
   type AuditActorType,
@@ -18,10 +20,14 @@ import { redact } from "./redaction.js";
 
 export interface AuditEventFilters {
   taskId?: string;
+  runId?: string;
 }
 
 interface AuditEventRow extends Record<string, unknown> {
   event_id: string;
+  request_id: string | null;
+  thread_id: string | null;
+  run_id: string | null;
   task_id: string | null;
   step_id: string | null;
   tool_execution_id: string | null;
@@ -119,6 +125,9 @@ function mapAuditEvent(row: AuditEventRow): AuditEvent {
 
   return {
     eventId: row.event_id,
+    ...(row.request_id ? { requestId: row.request_id } : {}),
+    ...(row.thread_id ? { threadId: row.thread_id } : {}),
+    ...(row.run_id ? { runId: row.run_id } : {}),
     ...(row.task_id ? { taskId: row.task_id } : {}),
     ...(row.step_id ? { stepId: row.step_id } : {}),
     ...(row.tool_execution_id ? { toolExecutionId: row.tool_execution_id } : {}),
@@ -147,16 +156,20 @@ export class PgAuditLogger implements AuditLogger, AuthorizationDecisionObserver
   private async persistEvent(event: AuditEvent): Promise<void> {
     await this.db.query(
       `INSERT INTO audit_events (
-         event_id, task_id, step_id, tool_execution_id,
+         event_id, request_id, thread_id, run_id,
+         task_id, step_id, tool_execution_id,
          actor_type, actor_id, action, resource_type, resource_id,
          decision, reason_code, payload, before_state_ref, after_state_ref,
          created_at
        ) VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-         $11, $12, $13, $14, $15
+         $11, $12, $13, $14, $15, $16, $17, $18
        )`,
       [
         event.eventId,
+        event.requestId ?? null,
+        event.threadId ?? null,
+        event.runId ?? null,
         event.taskId ?? null,
         event.stepId ?? null,
         event.toolExecutionId ?? null,
@@ -175,18 +188,43 @@ export class PgAuditLogger implements AuditLogger, AuthorizationDecisionObserver
     );
   }
 
-  async record(eventName: string, payload: Record<string, unknown>): Promise<void> {
+  async record(
+    eventName: string,
+    payload: Record<string, unknown>,
+    executionContext?: ExecutionContext
+  ): Promise<void> {
     try {
+      const correlation = executionContext === undefined
+        ? undefined
+        : executionContextSchema.parse(executionContext);
       const resource = inferResource(eventName, payload);
-      const eventPayload = withoutResourceMetadata(payload);
+      const resourcePayload = withoutResourceMetadata(payload);
+      const eventPayload = correlation === undefined
+        ? resourcePayload
+        : (() => {
+            const {
+              requestId: _requestId,
+              threadId: _threadId,
+              runId: _runId,
+              ...otherPayload
+            } = resourcePayload;
+            return otherPayload;
+          })();
       const persistedPayload = this.redactEnabled
         ? redact(eventPayload)
         : eventPayload;
       const event = createAuditEvent({
-        ...(optionalString(payload.taskId) ? { taskId: String(payload.taskId) } : {}),
-        ...(optionalString(payload.stepId) ? { stepId: String(payload.stepId) } : {}),
-        ...(optionalString(payload.toolExecutionId)
-          ? { toolExecutionId: String(payload.toolExecutionId) }
+        ...(correlation === undefined ? {} : {
+          requestId: correlation.requestId,
+          threadId: correlation.threadId,
+          runId: correlation.runId,
+        }),
+        ...((correlation?.taskId ?? optionalString(payload.taskId))
+          ? { taskId: correlation?.taskId ?? String(payload.taskId) } : {}),
+        ...((correlation?.stepId ?? optionalString(payload.stepId))
+          ? { stepId: correlation?.stepId ?? String(payload.stepId) } : {}),
+        ...((correlation?.toolExecutionId ?? optionalString(payload.toolExecutionId))
+          ? { toolExecutionId: correlation?.toolExecutionId ?? String(payload.toolExecutionId) }
           : {}),
         actorType: "system",
         actorId: "backend",
@@ -216,10 +254,24 @@ export class PgAuditLogger implements AuditLogger, AuthorizationDecisionObserver
     contextSummary: Readonly<Record<string, unknown>> =
       this.authorizationRedactor.redact(input.request.context ?? {})
   ): Promise<void> {
+    const executionContext = input.executionContext === undefined
+      ? undefined
+      : executionContextSchema.parse(input.executionContext);
+    if (executionContext && (
+      executionContext.principal.principalId !== input.request.principal.principalId ||
+      executionContext.scope.scopeId !== input.request.scope.scopeId
+    )) {
+      throw new Error("Authorization decision identity conflicts with ExecutionContext");
+    }
     const opaquePrincipalId = `principal_sha256:${createHash("sha256")
       .update(input.request.principal.principalId)
       .digest("hex")}`;
     const event = createAuditEvent({
+      ...(executionContext ? {
+        requestId: executionContext.requestId,
+        threadId: executionContext.threadId,
+        runId: executionContext.runId,
+      } : {}),
       ...(input.taskId ? { taskId: input.taskId } : {}),
       ...(input.stepId ? { stepId: input.stepId } : {}),
       ...(input.toolExecutionId
@@ -273,13 +325,18 @@ export class PgAuditLogger implements AuditLogger, AuthorizationDecisionObserver
       values.push(filters.taskId);
       conditions.push(`task_id = $${values.length}`);
     }
+    if (filters.runId !== undefined) {
+      values.push(filters.runId);
+      conditions.push(`run_id = $${values.length}`);
+    }
 
     const whereClause = conditions.length > 0
       ? `WHERE ${conditions.join(" AND ")}`
       : "";
     const queryResult = await this.db.query<AuditEventRow>(
       `SELECT
-         event_id, task_id, step_id, tool_execution_id,
+         event_id, request_id, thread_id, run_id,
+         task_id, step_id, tool_execution_id,
          actor_type, actor_id, action, resource_type, resource_id,
          decision, reason_code, payload, before_state_ref, after_state_ref,
          created_at

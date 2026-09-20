@@ -20,6 +20,7 @@ const migrationNames = [
   "014_create_decision_records.sql",
   "015_create_decision_evidence_refs.sql",
   "016_create_context_refs.sql",
+  "017_add_audit_correlation.sql",
 ] as const;
 
 function expectedResults(
@@ -111,6 +112,7 @@ describe("runMigrations", () => {
     expect(executedSql).toContain("CREATE TABLE IF NOT EXISTS context_refs");
     expect(executedSql).toContain("idx_context_refs_source");
     expect(executedSql).toContain("idx_context_refs_target");
+    expect(executedSql).toContain("idx_audit_events_run_id");
   });
 
   it("runs down migrations in reverse order when applied", async () => {
