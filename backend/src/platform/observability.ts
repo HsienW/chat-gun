@@ -1,4 +1,6 @@
 import { PgAuditLogger } from "../runtime/audit/pg-audit-logger.js";
+import type { ExecutionContext } from "../runtime/execution-context/execution-context.js";
+import { executionCorrelation } from "../runtime/execution-context/read-execution-context.js";
 import { getPool } from "../runtime/persistence/connection.js";
 import { getEnv } from "./env.js";
 import { getMetricsCollector } from "./metrics/metrics-collector.js";
@@ -6,11 +8,11 @@ import { getMetricsCollector } from "./metrics/metrics-collector.js";
 export type AuditPayload = Record<string, unknown>;
 
 export interface AuditLogger {
-  record(eventName: string, payload: AuditPayload): Promise<void>;
+  record(eventName: string, payload: AuditPayload, context?: ExecutionContext): Promise<void>;
 }
 
 export class ConsoleAuditLogger implements AuditLogger {
-  async record(eventName: string, payload: AuditPayload): Promise<void> {
+  async record(eventName: string, payload: AuditPayload, _context?: ExecutionContext): Promise<void> {
     console.info(`[audit] ${eventName}`, JSON.stringify(payload));
   }
 }
@@ -18,10 +20,10 @@ export class ConsoleAuditLogger implements AuditLogger {
 export class CompositeAuditLogger implements AuditLogger {
   constructor(private readonly loggers: readonly AuditLogger[]) {}
 
-  async record(eventName: string, payload: AuditPayload): Promise<void> {
+  async record(eventName: string, payload: AuditPayload, context?: ExecutionContext): Promise<void> {
     for (const logger of this.loggers) {
       try {
-        await logger.record(eventName, payload);
+        await logger.record(eventName, payload, context);
       } catch (error) {
         console.warn(
           JSON.stringify({
@@ -86,9 +88,13 @@ function sanitizeMetricPayload(
 
 export async function recordMetric(
   name: string,
-  payload: AuditPayload = {}
+  payload: AuditPayload = {},
+  context?: ExecutionContext
 ): Promise<void> {
-  const safePayload = sanitizeMetricPayload(payload);
+  const safePayload = sanitizeMetricPayload({
+    ...payload,
+    ...(context ? executionCorrelation(context) : {}),
+  });
   console.info(`[metric] ${name}`, JSON.stringify(safePayload));
 
   try {

@@ -104,6 +104,7 @@ export interface RecordDecisionInput {
   request: AuthorizationRequest;
   decision: AuthorizationDecision;
   policyVersion?: string;
+  executionContext?: import("../execution-context/execution-context.js").ExecutionContext;
   taskId?: string;
   stepId?: string;
   toolExecutionId?: string;

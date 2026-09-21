@@ -89,10 +89,7 @@ export function getWeatherConfig(): WeatherConfig {
 }
 
 function getRunnableSignal(config: RunnableConfig | undefined): AbortSignal | undefined {
-  const configurable = config?.configurable as
-    | { abortSignal?: unknown }
-    | undefined;
-  const maybeSignal = configurable?.abortSignal ?? config?.signal;
+  const maybeSignal = config?.signal;
   return maybeSignal instanceof AbortSignal ? maybeSignal : undefined;
 }
 

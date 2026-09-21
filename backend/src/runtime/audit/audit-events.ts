@@ -6,6 +6,9 @@ export type AuditDecision = "allow" | "deny" | "pending_confirmation" | "neutral
 
 export interface AuditEvent {
   eventId: string;
+  requestId?: string;
+  threadId?: string;
+  runId?: string;
   taskId?: string;
   stepId?: string;
   toolExecutionId?: string;

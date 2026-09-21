@@ -17,6 +17,8 @@ import type {
 import type { DecisionStore } from "../runtime/authorization/decision-store.js";
 import type { PrincipalContext } from "../runtime/authorization/principal.js";
 import type { RuntimeScope } from "../runtime/authorization/scope.js";
+import { readExecutionCorrelation } from "../runtime/execution-context/read-execution-context.js";
+import { executionContextSchema, type ExecutionContext } from "../runtime/execution-context/execution-context.js";
 import type {
   ToolRiskPolicy,
   ToolRiskRegistry,
@@ -77,6 +79,10 @@ export interface ToolAuthorizationGovernanceConfig {
   authorizationEngine: Pick<AuthorizationEngine, "authorize">;
   decisionStore: DecisionStore;
   policyVersion?: string;
+  /** X13 supplies this only after establishing the trusted Agent Server boundary. */
+  resolveExecutionContext?: (
+    config: unknown
+  ) => ExecutionContext | null | Promise<ExecutionContext | null>;
   resolveContext?: (
     config: unknown
   ) => ToolAuthorizationContext | null | Promise<ToolAuthorizationContext | null>;
@@ -107,22 +113,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function resolveDecisionCorrelation(config: unknown): DecisionCorrelation {
-  if (!isRecord(config) || !isRecord(config.configurable)) return {};
-  const correlation: DecisionCorrelation = {};
-  for (const field of [
-    "requestId",
-    "threadId",
-    "runId",
-    "taskId",
-    "stepId",
-    "toolExecutionId",
-  ] as const) {
-    const value = config.configurable[field];
-    if (typeof value === "string" && value.length > 0) {
-      correlation[field] = value;
-    }
-  }
-  return correlation;
+  return readExecutionCorrelation(config);
 }
 
 class GovernanceTimeoutError extends Error {
@@ -206,34 +197,8 @@ function getAbortSignal(config: unknown): AbortSignal | undefined {
   }
 
   const runnableConfig = config as RunnableConfig;
-  const configurable = runnableConfig.configurable as
-    | { abortSignal?: unknown }
-    | undefined;
-  const signal = configurable?.abortSignal ?? runnableConfig.signal;
+  const signal = runnableConfig.signal;
   return signal instanceof AbortSignal ? signal : undefined;
-}
-
-function getConfigString(
-  config: unknown,
-  keys: readonly string[]
-): string | undefined {
-  if (!config || typeof config !== "object") return undefined;
-  const runnableConfig = config as Record<string, unknown>;
-  const configurable =
-    runnableConfig.configurable &&
-    typeof runnableConfig.configurable === "object" &&
-    !Array.isArray(runnableConfig.configurable)
-      ? (runnableConfig.configurable as Record<string, unknown>)
-      : undefined;
-
-  for (const record of [runnableConfig, configurable]) {
-    if (!record) continue;
-    for (const key of keys) {
-      const value = record[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
-  }
-  return undefined;
 }
 
 function withGovernanceSignal(
@@ -242,19 +207,15 @@ function withGovernanceSignal(
 ): RunnableConfig {
   const runnableConfig =
     config && typeof config === "object" ? (config as RunnableConfig) : {};
-  const configurable =
-    runnableConfig.configurable &&
-    typeof runnableConfig.configurable === "object"
-      ? runnableConfig.configurable
-      : {};
+  const configurable = isRecord(runnableConfig.configurable)
+    ? runnableConfig.configurable
+    : {};
+  const { abortSignal: _legacySignal, ...serializableConfigurable } = configurable;
 
   return {
     ...runnableConfig,
     signal,
-    configurable: {
-      ...configurable,
-      abortSignal: signal,
-    },
+    configurable: serializableConfigurable,
   };
 }
 
@@ -485,10 +446,21 @@ async function authorizeToolDispatch(
       return authorizationDenial(classification.reasonCode);
     }
 
-    const context =
-      (await authorization.resolveContext?.(config)) ??
-      createDevelopmentAuthorizationContext();
-    const correlation = resolveDecisionCorrelation(config);
+    const resolvedExecutionContext = await authorization.resolveExecutionContext?.(config);
+    if (authorization.resolveExecutionContext && resolvedExecutionContext == null) {
+      return authorizationDenial("AUTHORIZATION_UNAVAILABLE");
+    }
+    const executionContext = resolvedExecutionContext === undefined
+      ? undefined
+      : executionContextSchema.parse(resolvedExecutionContext);
+    const context = executionContext
+      ? { principal: executionContext.principal, scope: executionContext.scope }
+      : (await authorization.resolveContext?.(config)) ??
+        (process.env.NODE_ENV === "development"
+          ? createDevelopmentAuthorizationContext()
+          : null);
+    if (context === null) return authorizationDenial("AUTHORIZATION_UNAVAILABLE");
+    const correlation = executionContext ?? resolveDecisionCorrelation(config);
     const request: AuthorizationRequest = {
       principal: context.principal,
       scope: context.scope,
@@ -503,6 +475,7 @@ async function authorizeToolDispatch(
         decision,
         policyVersion:
           authorization.policyVersion ?? DEFAULT_AUTHORIZATION_POLICY_VERSION,
+        ...(executionContext ? { executionContext } : {}),
         ...correlation,
       });
       return authorizationDenial(decision.reasonCode, decision.decisionId);
@@ -521,6 +494,7 @@ async function authorizeToolDispatch(
         decision: confirmationDecision,
         policyVersion:
           authorization.policyVersion ?? DEFAULT_AUTHORIZATION_POLICY_VERSION,
+        ...(executionContext ? { executionContext } : {}),
         ...correlation,
       });
       await authorization.onRequireConfirmation?.(
@@ -537,6 +511,7 @@ async function authorizeToolDispatch(
       decision,
       policyVersion:
         authorization.policyVersion ?? DEFAULT_AUTHORIZATION_POLICY_VERSION,
+      ...(executionContext ? { executionContext } : {}),
       ...correlation,
     });
     return { type: "authorized", decisionId: decision.decisionId };
@@ -629,8 +604,7 @@ export class GovernanceExecutor<TResult = unknown>
     await auditToolEvent("tool.invoke.start", this.policy, commonAuditPayload);
     let wasDispatched = false;
     try {
-      const stepId = getConfigString(config, ["step_id", "stepId"]);
-      const toolCallId = getConfigString(config, ["tool_call_id", "toolCallId"]);
+      const { stepId, toolCallId } = readExecutionCorrelation(config);
       const result = await getOpikTracer().withToolSpan(
         {
           toolName: this.sourceTool.name,

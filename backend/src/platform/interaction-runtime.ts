@@ -26,6 +26,8 @@ import {
   type InteractionStrategy,
 } from "../runtime/interaction/policy.js";
 import { PgEventRepository } from "../runtime/persistence/event-repository.js";
+import { readCanonicalExecutionContext, readExecutionCorrelation } from "../runtime/execution-context/read-execution-context.js";
+import type { ExecutionContext } from "../runtime/execution-context/execution-context.js";
 import { getPool } from "../runtime/persistence/connection.js";
 import type { Queryable } from "../runtime/persistence/rows.js";
 import { getEnv } from "./env.js";
@@ -44,6 +46,7 @@ const NATIVE_QUEUE_OWNERSHIP_REQUIRED_DISPOSITION =
 type MetricPayload = Record<string, string | number | boolean>;
 
 export interface InteractionRunContext {
+  executionContext?: ExecutionContext;
   threadId: string;
   scopeId: string;
   taskId: string;
@@ -77,7 +80,7 @@ export interface InteractionOrchestratorConfig {
   decideCancellation?: DecideRunCancellation;
   eventRecorder?: Pick<InteractionEventRecorder, "record">;
   ensureTask?: (context: InteractionRunContext) => Promise<void>;
-  recordMetric?: (name: string, payload: MetricPayload) => void | Promise<void>;
+  recordMetric?: (name: string, payload: MetricPayload, context?: ExecutionContext) => void | Promise<void>;
 }
 
 export type InteractionRunStart = {
@@ -254,17 +257,18 @@ function readRunContext(input: unknown, config: unknown): InteractionRunContext 
     ? runnableConfig.configurable
     : {};
   const records = [runnableConfig, configurable];
-  const threadId = readString(records, ["thread_id", "threadId"]);
-  const runId = readString(records, ["run_id", "runId"]);
+  const correlation = readExecutionCorrelation(config);
+  const executionContext = readCanonicalExecutionContext(config);
+  const { threadId, runId, requestId } = correlation;
   if (!threadId || !runId) {
     throw new InteractionRuntimeConfigurationError(
       "Configured interaction governance requires threadId and runId"
     );
   }
 
-  const taskId = readString(records, ["task_id", "taskId"]) ?? runId;
+  // Legacy interaction callers may omit taskId until the bounded migration ends.
+  const taskId = correlation.taskId ?? runId;
   const scopeId = readString(records, ["scope_id", "scopeId"]) ?? threadId;
-  const requestId = readString(records, ["x-request-id", "request_id", "requestId"]);
   const idempotencyKey = readString(records, [
     "x-idempotency-key",
     "idempotency_key",
@@ -276,6 +280,7 @@ function readRunContext(input: unknown, config: unknown): InteractionRunContext 
   );
 
   return {
+    ...(executionContext ? { executionContext } : {}),
     threadId,
     scopeId,
     taskId,
@@ -313,6 +318,9 @@ function createDecisionEvent(input: {
   const authoritativeOwnership =
     input.replacementOwnership ?? input.activeOwnership;
   return createInteractionTaskEvent({
+    ...(input.context.executionContext
+      ? { executionContext: input.context.executionContext }
+      : {}),
     eventType: input.eventType,
     threadId: input.context.threadId,
     priorTaskId: input.activeOwnership.taskId,
@@ -358,14 +366,24 @@ function requireConfiguredDependencies(config: InteractionOrchestratorConfig) {
 
 async function recordDecision(
   config: InteractionOrchestratorConfig,
-  event: InteractionTaskEvent
+  event: InteractionTaskEvent,
+  context: InteractionRunContext
 ): Promise<void> {
-  await config.eventRecorder?.record(event);
-  await config.recordMetric?.("interaction.decision", {
+  if (context.executionContext) {
+    await config.eventRecorder?.record(event, context.executionContext);
+  } else {
+    await config.eventRecorder?.record(event);
+  }
+  const metric = {
     eventType: event.eventType,
     strategy: event.payload.decision?.strategy ?? "unknown",
     disposition: event.payload.decision?.disposition ?? "unknown",
-  });
+  };
+  if (context.executionContext) {
+    await config.recordMetric?.("interaction.decision", metric, context.executionContext);
+  } else {
+    await config.recordMetric?.("interaction.decision", metric);
+  }
 }
 
 function isSupersedingStrategy(
@@ -424,7 +442,7 @@ export function createInteractionOrchestrator(
           disposition: "initial_claim",
           reasonCode: "NO_ACTIVE_RUN",
         });
-        await recordDecision(config, event);
+        await recordDecision(config, event, context);
         return {
           configured: true,
           context,
@@ -465,7 +483,7 @@ export function createInteractionOrchestrator(
           classification: classification.classification,
           reasonCode: classification.reasonCode,
         });
-        await recordDecision(config, event);
+        await recordDecision(config, event, context);
         throw new InteractionGovernanceRejectedError(
           "INPUT_CLASSIFICATION_CONFIRMATION_REQUIRED"
         );
@@ -488,7 +506,7 @@ export function createInteractionOrchestrator(
           classification: classification.classification,
           reasonCode: classification.reasonCode,
         });
-        await recordDecision(config, event);
+        await recordDecision(config, event, context);
         throw new InteractionGovernanceRejectedError("POLICY_REJECTED");
       }
 
@@ -502,7 +520,7 @@ export function createInteractionOrchestrator(
           classification: classification.classification,
           reasonCode: NATIVE_QUEUE_OWNERSHIP_REQUIRED,
         });
-        await recordDecision(config, event);
+        await recordDecision(config, event, context);
         throw new InteractionGovernanceRejectedError(
           NATIVE_QUEUE_OWNERSHIP_REQUIRED
         );
@@ -542,7 +560,7 @@ export function createInteractionOrchestrator(
           sideEffectState: cancellation.phase,
           cancellationPath: cancellation.path,
         });
-        await recordDecision(config, event);
+        await recordDecision(config, event, context);
         throw new InteractionGovernanceRejectedError(
           "ACTIVE_RUN_REQUIRES_CORRECTIVE_OR_MANUAL_HANDLING"
         );
@@ -566,7 +584,7 @@ export function createInteractionOrchestrator(
         sideEffectState: cancellation.phase,
         cancellationPath: cancellation.path,
       });
-      await recordDecision(config, event);
+      await recordDecision(config, event, context);
       return {
         configured: true,
         context,

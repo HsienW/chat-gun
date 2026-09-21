@@ -3,9 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PgAuditLogger } from "./pg-audit-logger.js";
 import type { Queryable } from "../persistence/rows.js";
 import type { SpanManager } from "../../platform/tracing/span-manager.js";
+import type { ExecutionContext } from "../execution-context/execution-context.js";
 
 interface AuditRow extends Record<string, unknown> {
   event_id: string;
+  request_id: string | null;
+  thread_id: string | null;
+  run_id: string | null;
   task_id: string | null;
   step_id: string | null;
   tool_execution_id: string | null;
@@ -32,29 +36,35 @@ class FakeAuditDb implements Queryable {
     if (text.includes("INSERT INTO audit_events")) {
       this.rows.push({
         event_id: String(values[0]),
-        task_id: values[1] === null ? null : String(values[1]),
-        step_id: values[2] === null ? null : String(values[2]),
-        tool_execution_id: values[3] === null ? null : String(values[3]),
-        actor_type: String(values[4]),
-        actor_id: String(values[5]),
-        action: String(values[6]),
-        resource_type: String(values[7]),
-        resource_id: String(values[8]),
-        decision: String(values[9]),
-        reason_code: values[10] === null ? null : String(values[10]),
-        payload: values[11],
-        before_state_ref: values[12] === null ? null : String(values[12]),
-        after_state_ref: values[13] === null ? null : String(values[13]),
-        created_at: String(values[14]),
+        request_id: values[1] === null ? null : String(values[1]),
+        thread_id: values[2] === null ? null : String(values[2]),
+        run_id: values[3] === null ? null : String(values[3]),
+        task_id: values[4] === null ? null : String(values[4]),
+        step_id: values[5] === null ? null : String(values[5]),
+        tool_execution_id: values[6] === null ? null : String(values[6]),
+        actor_type: String(values[7]),
+        actor_id: String(values[8]),
+        action: String(values[9]),
+        resource_type: String(values[10]),
+        resource_id: String(values[11]),
+        decision: String(values[12]),
+        reason_code: values[13] === null ? null : String(values[13]),
+        payload: values[14],
+        before_state_ref: values[15] === null ? null : String(values[15]),
+        after_state_ref: values[16] === null ? null : String(values[16]),
+        created_at: String(values[17]),
       });
       return { rows: [], rowCount: 1 };
     }
 
     if (text.includes("SELECT") && text.includes("audit_events")) {
-      const taskId = values[0];
-      const rows = taskId === undefined
-        ? this.rows
-        : this.rows.filter((row) => row.task_id === taskId);
+      const filters = [...values];
+      const taskId = text.includes("task_id = $") ? filters.shift() : undefined;
+      const runId = text.includes("run_id = $") ? filters.shift() : undefined;
+      const rows = this.rows.filter((row) =>
+        (taskId === undefined || row.task_id === taskId) &&
+        (runId === undefined || row.run_id === runId)
+      );
       return { rows: rows as unknown as TResult[], rowCount: rows.length };
     }
 
@@ -67,6 +77,46 @@ afterEach(() => {
 });
 
 describe("PgAuditLogger", () => {
+  it("indexes canonical request, thread, and run identity for audit lookup", async () => {
+    const db = new FakeAuditDb();
+    const logger = new PgAuditLogger(db);
+    const context: ExecutionContext = {
+      requestId: "request-1",
+      threadId: "thread-1",
+      runId: "run-1",
+      taskId: "task-1",
+      attempt: 1,
+      principal: {
+        principalId: "principal-1",
+        principalType: "user",
+        tenantId: "tenant-1",
+        roles: [],
+        scopes: [],
+        authSource: "trusted_gateway",
+        authenticatedAt: "2026-09-20T00:00:00.000Z",
+      },
+      scope: { scopeId: "scope-1", scopeType: "tenant", tenantId: "tenant-1" },
+    };
+
+    await logger.record("task.started", {
+      taskId: "task-1",
+      requestId: "stale-payload-id",
+      threadId: "stale-payload-thread",
+      runId: "stale-payload-run",
+    }, context);
+    await logger.record("task.started", { taskId: "task-2" }, { ...context, runId: "run-2", taskId: "task-2" });
+
+    expect(db.rows[0]).toMatchObject({
+      request_id: "request-1",
+      thread_id: "thread-1",
+      run_id: "run-1",
+    });
+    expect(db.rows[0]?.payload).toEqual({ taskId: "task-1" });
+    await expect(logger.getEvents({ runId: "run-1" })).resolves.toMatchObject([
+      { requestId: "request-1", threadId: "thread-1", runId: "run-1" },
+    ]);
+  });
+
   it("writes redacted events and queries a task audit trail", async () => {
     const db = new FakeAuditDb();
     const logger = new PgAuditLogger(db);

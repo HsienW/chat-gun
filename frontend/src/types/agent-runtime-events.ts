@@ -5,7 +5,13 @@ export type ContextSource = {
   summary?: string;
 };
 
-export type AgentRuntimeEvent =
+export type ExecutionEventCorrelation = {
+  requestId: string;
+  threadId: string;
+  runId: string;
+};
+
+export type AgentRuntimeEvent = (
   | { type: 'agent.plan.start'; title: string; ts: number }
   | { type: 'agent.tool.start'; toolName: string; input?: unknown; ts: number }
   | {
@@ -29,4 +35,5 @@ export type AgentRuntimeEvent =
       originalType: string;
       rawPayload?: Record<string, unknown>;
       ts: number;
-    };
+    }
+) & { correlation?: ExecutionEventCorrelation };

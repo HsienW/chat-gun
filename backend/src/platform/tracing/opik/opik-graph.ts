@@ -1,4 +1,5 @@
 import { getOpikTracer, type AgentRunMetadata, type OpikTracer } from "./opik-tracer.js";
+import { readExecutionCorrelation } from "../../../runtime/execution-context/read-execution-context.js";
 
 const TRACED_STREAM_METHODS = new Set<PropertyKey>([
   "stream",
@@ -6,32 +7,9 @@ const TRACED_STREAM_METHODS = new Set<PropertyKey>([
   "streamLog",
 ]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function readNonEmptyString(
-  record: Record<string, unknown>,
-  keys: readonly string[]
-): string | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return undefined;
-}
-
 function readAgentRunMetadata(config: unknown): AgentRunMetadata | undefined {
-  if (!isRecord(config)) return undefined;
-  const configurable = isRecord(config.configurable) ? config.configurable : {};
-  const threadId = readNonEmptyString(configurable, ["thread_id", "threadId"]);
-  const runId =
-    readNonEmptyString(config, ["runId", "run_id"]) ??
-    readNonEmptyString(configurable, ["run_id", "runId"]);
+  const { threadId, runId, taskId, requestId } = readExecutionCorrelation(config);
   if (!threadId || !runId) return undefined;
-
-  const taskId = readNonEmptyString(configurable, ["task_id", "taskId"]);
-  const requestId = readNonEmptyString(configurable, ["request_id", "requestId"]);
   return {
     threadId,
     runId,
@@ -41,12 +19,7 @@ function readAgentRunMetadata(config: unknown): AgentRunMetadata | undefined {
 }
 
 function readStepId(config: unknown): string | undefined {
-  if (!isRecord(config)) return undefined;
-  const configurable = isRecord(config.configurable) ? config.configurable : {};
-  return (
-    readNonEmptyString(config, ["step_id", "stepId"]) ??
-    readNonEmptyString(configurable, ["step_id", "stepId"])
-  );
+  return readExecutionCorrelation(config).stepId;
 }
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {

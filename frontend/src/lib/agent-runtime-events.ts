@@ -3,9 +3,11 @@ import {
   RUNTIME_EVENT_NODE_KEYS,
 } from '@/lib/runtime-event-config';
 import { isInteractionActiveRunHint } from '@/lib/interaction-request-metadata';
+import type { InteractionActiveRunHint } from '@/lib/interaction-request-metadata';
 import type {
   AgentRuntimeEvent,
   ContextSource,
+  ExecutionEventCorrelation,
 } from '@/types/agent-runtime-events';
 
 type ProcessedRuntimeEvent = {
@@ -25,10 +27,7 @@ export type WeatherClarificationInterruptToolResult = {
   content: string;
 };
 
-export type TaskEventActiveRunHint = {
-  runId: string;
-  generation: number;
-};
+export type TaskEventActiveRunHint = InteractionActiveRunHint;
 
 const KNOWN_RUNTIME_EVENT_TYPES = new Set<AgentRuntimeEvent['type']>([
   'agent.plan.start',
@@ -244,9 +243,25 @@ function getUnknownRawPayload(
   return Object.keys(payload).length > 0 ? payload : undefined;
 }
 
+const EVENT_CORRELATION_ID_PATTERN = /^[A-Za-z0-9_\-:.]{1,256}$/;
+
+function parseEventCorrelation(value: unknown): ExecutionEventCorrelation | undefined {
+  const record = asRecord(value);
+  if (!record) return undefined;
+  const { requestId, threadId, runId } = record;
+  if (
+    typeof requestId !== 'string' || !EVENT_CORRELATION_ID_PATTERN.test(requestId) ||
+    typeof threadId !== 'string' || !EVENT_CORRELATION_ID_PATTERN.test(threadId) ||
+    typeof runId !== 'string' || !EVENT_CORRELATION_ID_PATTERN.test(runId)
+  ) return undefined;
+  return { requestId, threadId, runId };
+}
+
 function normalizeAgentRuntimeEvent(value: unknown): AgentRuntimeEvent | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
+  const correlation = parseEventCorrelation(record.correlation);
+  const correlationFields = correlation ? { correlation } : {};
 
   const type = record.type;
 
@@ -260,6 +275,7 @@ function normalizeAgentRuntimeEvent(value: unknown): AgentRuntimeEvent | undefin
       originalType: type,
       rawPayload: getUnknownRawPayload(record),
       ts: getEventTimestamp(record),
+      ...correlationFields,
     };
   }
 
@@ -270,6 +286,7 @@ function normalizeAgentRuntimeEvent(value: unknown): AgentRuntimeEvent | undefin
           originalType: record.originalType,
           rawPayload: asRecord(record.rawPayload),
           ts: getEventTimestamp(record),
+          ...correlationFields,
         }
       : undefined;
   }
@@ -281,7 +298,7 @@ function normalizeAgentRuntimeEvent(value: unknown): AgentRuntimeEvent | undefin
   switch (type) {
     case 'agent.plan.start':
       return typeof record.title === 'string'
-        ? { type, title: record.title, ts: record.ts }
+        ? { type, title: record.title, ts: record.ts, ...correlationFields }
         : undefined;
     case 'agent.tool.start':
       return typeof record.toolName === 'string'
@@ -290,6 +307,7 @@ function normalizeAgentRuntimeEvent(value: unknown): AgentRuntimeEvent | undefin
             toolName: record.toolName,
             input: record.input,
             ts: record.ts,
+            ...correlationFields,
           }
         : undefined;
     case 'agent.tool.success':
@@ -300,6 +318,7 @@ function normalizeAgentRuntimeEvent(value: unknown): AgentRuntimeEvent | undefin
             output: record.output,
             costMs: record.costMs,
             ts: record.ts,
+            ...correlationFields,
           }
         : undefined;
     case 'agent.tool.error':
@@ -309,6 +328,7 @@ function normalizeAgentRuntimeEvent(value: unknown): AgentRuntimeEvent | undefin
             toolName: record.toolName,
             error: record.error,
             ts: record.ts,
+            ...correlationFields,
           }
         : undefined;
     case 'agent.context.build':
@@ -318,11 +338,12 @@ function normalizeAgentRuntimeEvent(value: unknown): AgentRuntimeEvent | undefin
             sources: record.sources as ContextSource[],
             tokenEstimate: record.tokenEstimate,
             ts: record.ts,
+            ...correlationFields,
           }
         : undefined;
     case 'agent.answer.stream':
       return typeof record.delta === 'string'
-        ? { type, delta: record.delta, ts: record.ts }
+        ? { type, delta: record.delta, ts: record.ts, ...correlationFields }
         : undefined;
     case 'agent.card.emit':
       return typeof record.cardType === 'string'
@@ -331,6 +352,7 @@ function normalizeAgentRuntimeEvent(value: unknown): AgentRuntimeEvent | undefin
             cardType: record.cardType,
             payload: record.payload,
             ts: record.ts,
+            ...correlationFields,
           }
         : undefined;
   }

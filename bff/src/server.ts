@@ -93,6 +93,14 @@ type ValidatedIdempotencyHeader =
         | "invalid_idempotency_key";
     };
 
+type ValidatedRequestId =
+  | { ok: true; requestId: string }
+  | {
+      ok: false;
+      requestId: string;
+      errorCode: "duplicate_request_id_header" | "invalid_request_id";
+    };
+
 type ValidatedActiveRunHint =
   | { ok: true; present: false }
   | { ok: true; present: true; runId: string; generation: string }
@@ -141,6 +149,12 @@ function getRawHeaderValues(req: IncomingMessage, name: string): string[] {
   return values;
 }
 
+const CORRELATION_ID_PATTERN = /^[A-Za-z0-9_\-:.]+$/;
+
+function isValidCorrelationId(value: string): boolean {
+  return value.length >= 1 && value.length <= 256 && CORRELATION_ID_PATTERN.test(value);
+}
+
 function validateIdempotencyHeader(
   req: IncomingMessage
 ): ValidatedIdempotencyHeader {
@@ -161,11 +175,7 @@ function validateIdempotencyHeader(
   }
   const clientKey = canonicalValue ?? aliasValue;
   if (clientKey === undefined) return { ok: true, present: false };
-  if (
-    clientKey.length < 1 ||
-    clientKey.length > 256 ||
-    !/^[A-Za-z0-9_\-:.]+$/.test(clientKey)
-  ) {
+  if (!isValidCorrelationId(clientKey)) {
     return { ok: false, errorCode: "invalid_idempotency_key" };
   }
   return { ok: true, present: true, clientKey };
@@ -191,9 +201,7 @@ function validateActiveRunHint(req: IncomingMessage): ValidatedActiveRunHint {
   }
   const parsedGeneration = Number(generation);
   if (
-    runId.length < 1 ||
-    runId.length > 256 ||
-    !/^[A-Za-z0-9_\-:.]+$/.test(runId) ||
+    !isValidCorrelationId(runId) ||
     !/^[1-9]\d*$/.test(generation) ||
     !Number.isSafeInteger(parsedGeneration)
   ) {
@@ -228,8 +236,17 @@ function getRateLimitIp(req: IncomingMessage): string {
   return req.socket.remoteAddress ?? "unknown";
 }
 
-function getRequestId(req: IncomingMessage): string {
-  return getHeader(req, "x-request-id") ?? crypto.randomUUID();
+function getRequestId(req: IncomingMessage): ValidatedRequestId {
+  const values = getRawHeaderValues(req, "x-request-id");
+  if (values.length > 1) {
+    return { ok: false, requestId: crypto.randomUUID(), errorCode: "duplicate_request_id_header" };
+  }
+  const clientId = values[0];
+  if (clientId === undefined) return { ok: true, requestId: crypto.randomUUID() };
+  if (!isValidCorrelationId(clientId)) {
+    return { ok: false, requestId: crypto.randomUUID(), errorCode: "invalid_request_id" };
+  }
+  return { ok: true, requestId: clientId };
 }
 
 function getOrigin(req: IncomingMessage): string | undefined {
@@ -1162,8 +1179,9 @@ export function createServer(
 
   const server = http.createServer(async (req, res) => {
     const reqUrl = new URL(req.url ?? "/", `http://${getHeader(req, "host") ?? "localhost"}`);
+    const validatedRequestId = getRequestId(req);
     const ctx: RequestContext = {
-      requestId: getRequestId(req),
+      requestId: validatedRequestId.requestId,
       startedAt: Date.now(),
       clientIp: getClientIp(req),
       userId: "anonymous",
@@ -1178,6 +1196,16 @@ export function createServer(
     res.on("finish", () => logAudit(ctx, req, res.statusCode));
     applyCors(req, res, config);
     res.setHeader("x-request-id", ctx.requestId);
+
+    if (!validatedRequestId.ok) {
+      sendJson(res, 400, {
+        error: {
+          code: validatedRequestId.errorCode,
+          message: "Invalid request ID header",
+        },
+      }, ctx.requestId);
+      return;
+    }
 
     if (!isOriginAllowed(getOrigin(req), config)) {
       sendJson(res, 403, { error: "Origin not allowed" }, ctx.requestId);

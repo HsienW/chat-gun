@@ -9,6 +9,8 @@ import {
   getSpanManager,
   type SpanManager,
 } from "../../platform/tracing/span-manager.js";
+import { executionContextSchema, type ExecutionContext } from "../execution-context/execution-context.js";
+import { withExecutionContext } from "../execution-context/read-execution-context.js";
 import {
   checkBudget,
   recordAttempt as recordBudgetAttempt,
@@ -67,6 +69,7 @@ export type ToolExecutionRunResult<TResult> =
     };
 
 export interface ToolExecutionRunInput<TInput, TResult> {
+  executionContext?: ExecutionContext;
   identity: ReplayIdentityInput;
   requestHash: string;
   scope: TrustedScope;
@@ -85,7 +88,8 @@ export interface ToolExecutionRunnerObservability {
   spanManager: SpanManager;
   recordMetric(
     name: string,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
+    context?: ExecutionContext
   ): Promise<void> | void;
 }
 
@@ -148,6 +152,25 @@ export class ToolExecutionRunner {
   async execute<TInput, TResult>(
     input: ToolExecutionRunInput<TInput, TResult>
   ): Promise<ToolExecutionRunResult<TResult>> {
+    if (input.executionContext) {
+      const context = executionContextSchema.parse(input.executionContext);
+      if (
+        context.runId !== input.identity.runId ||
+        (context.stepId !== undefined && context.stepId !== input.identity.stepId) ||
+        context.scope.scopeId !== input.scope.scopeId ||
+        context.scope.tenantId !== input.scope.tenantId ||
+        context.principal.principalId !== input.scope.principalId
+      ) {
+        throw new Error("Tool execution identity conflicts with ExecutionContext");
+      }
+      input = {
+        ...input,
+        executionContext: context,
+        requestId: context.requestId,
+        threadId: context.threadId,
+        taskId: context.taskId,
+      };
+    }
     if (!input.descriptor) {
       return this.executeReadOnly(input.executor, input.input, input.signal);
     }
@@ -251,7 +274,7 @@ export class ToolExecutionRunner {
       resourceType: "tool_execution",
       resourceId: prepareResult.execution.toolExecutionId,
       ...correlation,
-    });
+    }, input.executionContext);
     try {
       await this.ledger.transitionExecution({
         toolExecutionId: prepareResult.execution.toolExecutionId,
@@ -356,7 +379,7 @@ export class ToolExecutionRunner {
     let retryBudget = input.retryBudget;
 
     while (true) {
-      const executionConfig = {
+      const legacyExecutionConfig = {
         signal: input.signal,
         configurable: {
           ...(input.requestId ? { requestId: input.requestId } : {}),
@@ -369,6 +392,14 @@ export class ToolExecutionRunner {
             input.identity.logicalToolCallId ?? input.identity.toolCallId,
         },
       };
+      const executionConfig = input.executionContext
+        ? withExecutionContext(legacyExecutionConfig, {
+            ...input.executionContext,
+            stepId: input.identity.stepId,
+            toolExecutionId,
+            toolCallId: input.identity.logicalToolCallId ?? input.identity.toolCallId,
+          })
+        : legacyExecutionConfig;
       let executeAttempt = input.executor.executeTyped.bind(input.executor);
       if (input.executor.authorizeTyped !== undefined) {
         if (input.executor.executeAuthorizedTyped === undefined) {
@@ -463,11 +494,16 @@ export class ToolExecutionRunner {
         };
       }
 
-      await this.observability.recordMetric("tool.side_effect.outcome", {
+      const metric = {
         toolName: input.descriptor.toolName,
         outcomeType: outcome.type,
         count: 1,
-      });
+      };
+      if (input.executionContext) {
+        await this.observability.recordMetric("tool.side_effect.outcome", metric, input.executionContext);
+      } else {
+        await this.observability.recordMetric("tool.side_effect.outcome", metric);
+      }
       if (outcome.type === "succeeded") {
         return this.persistCommittedResult(
           input,
@@ -683,7 +719,7 @@ export class ToolExecutionRunner {
         ...(reference.externalOperationId
           ? { externalOperationId: reference.externalOperationId }
           : {}),
-      });
+      }, input.executionContext);
       return { type: "succeeded", source, result, toolExecutionId };
     } catch {
       return {

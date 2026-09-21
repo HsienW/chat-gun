@@ -1,6 +1,10 @@
+import type { ExecutionContext } from "../runtime/execution-context/execution-context.js";
+import { executionCorrelation } from "../runtime/execution-context/read-execution-context.js";
+
 export type ErrorSource = "backend" | "bff" | "frontend" | "external";
 
 export type ErrorEnvelope = {
+  correlation?: ReturnType<typeof executionCorrelation>;
   error: {
     source: ErrorSource;
     stage: string;
@@ -18,6 +22,7 @@ export type ErrorEnvelope = {
 };
 
 export type ErrorEnvelopeInput = {
+  executionContext?: ExecutionContext;
   source: ErrorSource;
   stage: string;
   provider?: string;
@@ -156,6 +161,9 @@ export function createErrorEnvelope(
   };
 
   return {
+    ...(input.executionContext
+      ? { correlation: executionCorrelation(input.executionContext) }
+      : {}),
     error: {
       source: input.source,
       stage: input.stage,
