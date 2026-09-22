@@ -1,6 +1,5 @@
 import { RunnableConfig } from "@langchain/core/runnables";
-import { END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph";
-import { ToolNode } from "@langchain/langgraph/prebuilt";
+import { Annotation, END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph";
 
 import { getEnv } from "../platform/env.js";
 import { llmGateway } from "../platform/llm-gateway.js";
@@ -13,30 +12,58 @@ import {
   withOpikNode,
 } from "../platform/tracing/opik/opik-graph.js";
 import { mcpSystemMessage } from "../prompts.js";
-import { loadAgentTools } from "../tools/registry.js";
+import { loadAgentToolRuntime } from "../tools/registry.js";
+import {
+  createToolAuthorizationGraphNodes,
+  routeAfterAuthorizationConfirmation,
+  routeAfterAuthorizationGate,
+  routeAfterPhysicalDispatch,
+  type AuthorizationGraphState,
+} from "../runtime/authorization/confirmation-graph.js";
+import {
+  readDevelopmentExecutionContext,
+  readExecutionContext,
+} from "../runtime/execution-context/read-execution-context.js";
+import { instrumentGraphWithExecutionContext } from "../runtime/execution-context/instrument-graph.js";
 import { normalizeAiMessageForStream } from "./message-normalization.js";
 
-const tools = await loadAgentTools("mcp_agent", { includeMcp: true });
-const toolNode = new ToolNode(tools);
-const tracedToolNode = withOpikNode(
-  "tools",
-  async (
-    state: typeof MessagesAnnotation.State,
-    config: RunnableConfig
-  ) => toolNode.invoke(state, config)
-);
+const { tools, confirmationStore } = await loadAgentToolRuntime("mcp_agent", {
+  includeMcp: true,
+});
+const authorizationNodes = createToolAuthorizationGraphNodes({
+  tools,
+  confirmationStore,
+});
 
-function shouldContinue(state: typeof MessagesAnnotation.State): "tools" | typeof END {
+const McpAgentAnnotation = Annotation.Root({
+  ...MessagesAnnotation.spec,
+  toolQueue: Annotation<AuthorizationGraphState["toolQueue"]>({
+    reducer: (_left, right) => right,
+    default: () => [],
+  }),
+  activeToolCall: Annotation<AuthorizationGraphState["activeToolCall"]>({
+    reducer: (_left, right) => right,
+    default: () => undefined,
+  }),
+  pendingAuthorization: Annotation<AuthorizationGraphState["pendingAuthorization"]>({
+    reducer: (_left, right) => right,
+    default: () => undefined,
+  }),
+});
+
+function shouldContinue(
+  state: typeof McpAgentAnnotation.State
+): "authorization_gate" | typeof END {
   const lastMessage = state.messages[state.messages.length - 1] as {
     tool_calls?: unknown[];
   };
-  return lastMessage?.tool_calls?.length ? "tools" : END;
+  return lastMessage?.tool_calls?.length ? "authorization_gate" : END;
 }
 
 async function callModel(
-  state: typeof MessagesAnnotation.State,
+  state: typeof McpAgentAnnotation.State,
   _config: RunnableConfig
-): Promise<typeof MessagesAnnotation.Update> {
+): Promise<typeof McpAgentAnnotation.Update> {
   const llm = llmGateway.createChatModel({
     purpose: "tool",
     model: getEnv("MCP_AGENT_MODEL").trim() || undefined,
@@ -58,17 +85,58 @@ async function callModel(
   };
 }
 
-const builder = new StateGraph(MessagesAnnotation)
+const builder = new StateGraph(McpAgentAnnotation)
   .addNode("call_model", withOpikNode("call_model", callModel))
-  .addNode("tools", tracedToolNode)
+  .addNode(
+    "authorization_gate",
+    withOpikNode("authorization_gate", authorizationNodes.authorizationGate)
+  )
+  .addNode(
+    "authorization_confirmation",
+    withOpikNode(
+      "authorization_confirmation",
+      authorizationNodes.authorizationConfirmation
+    )
+  )
+  .addNode(
+    "physical_dispatch",
+    withOpikNode("physical_dispatch", authorizationNodes.physicalDispatch)
+  )
   .addEdge(START, "call_model")
   .addConditionalEdges("call_model", shouldContinue, {
-    tools: "tools",
+    authorization_gate: "authorization_gate",
     [END]: END,
   })
-  .addEdge("tools", "call_model");
+  .addConditionalEdges("authorization_gate", routeAfterAuthorizationGate, {
+    confirmation: "authorization_confirmation",
+    dispatch: "physical_dispatch",
+    gate: "authorization_gate",
+    model: "call_model",
+  })
+  .addConditionalEdges(
+    "authorization_confirmation",
+    routeAfterAuthorizationConfirmation,
+    {
+      dispatch: "physical_dispatch",
+      gate: "authorization_gate",
+      model: "call_model",
+    }
+  )
+  .addConditionalEdges("physical_dispatch", routeAfterPhysicalDispatch, {
+    gate: "authorization_gate",
+    model: "call_model",
+  });
 
-export const mcpAgentGraph = applyInteractionGovernance(
-  instrumentGraphWithOpik(builder.compile(), "mcp_agent"),
-  productionInteractionOrchestrator
+function resolveMcpExecutionContext(input: unknown, config: unknown) {
+  return getEnv("TOOL_AUTHORIZATION_PROFILE", "production") === "development"
+    ? readDevelopmentExecutionContext(input, config)
+    : readExecutionContext(input, config, "production");
+}
+
+export const mcpAgentGraph = instrumentGraphWithExecutionContext(
+  applyInteractionGovernance(
+    instrumentGraphWithOpik(builder.compile(), "mcp_agent"),
+    productionInteractionOrchestrator
+  ),
+  resolveMcpExecutionContext
 );

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -6,9 +7,19 @@ import { loadConfig } from "./config.js";
 import {
   ApiKeyPrincipalResolver,
   DevelopmentPrincipalResolver,
+  SCOPE_TYPES,
   selectPrincipalResolver,
   type ApiKeyPrincipalProfile,
 } from "./identity.js";
+
+const sharedScopeTypes = (
+  JSON.parse(
+    readFileSync(
+      new URL("../../contracts/execution-context.fixture.json", import.meta.url),
+      "utf8"
+    )
+  ) as { trustedAuthorization: { scopeTypes: string[] } }
+).trustedAuthorization.scopeTypes;
 
 const authenticatedAt = new Date("2026-08-18T00:00:00.000Z");
 
@@ -25,6 +36,7 @@ function profile(
     tenantId: "tenant-1",
     roles: ["order-reader"],
     scopes: ["orders:read"],
+    activeScope: { scopeId: "tenant-1", scopeType: "tenant" },
     ...overrides,
   };
 }
@@ -34,6 +46,10 @@ afterEach(() => {
 });
 
 describe("PrincipalResolver", () => {
+  it("keeps BFF scope types aligned with the shared cross-layer fixture", () => {
+    expect([...SCOPE_TYPES]).toEqual(sharedScopeTypes);
+  });
+
   it("selects the development resolver when authentication is not required", () => {
     const config = { ...loadConfig(), requireAuth: false };
 
@@ -72,6 +88,7 @@ describe("PrincipalResolver", () => {
         authSource: "service_token",
         authenticatedAt: "2026-08-18T00:00:00.000Z",
       },
+      activeScope: { scopeId: "tenant-1", scopeType: "tenant" },
     });
   });
 
@@ -130,6 +147,33 @@ describe("PrincipalResolver", () => {
         authSource: "development",
         authenticatedAt: "2026-08-18T00:00:00.000Z",
       },
+      activeScope: { scopeId: "public", scopeType: "tenant" },
+    });
+  });
+
+  it("returns the authentication source active scope without guessing from permission scopes", () => {
+    const config = {
+      ...loadConfig(),
+      requireAuth: true,
+      apiKeys: new Set(["secret-key"]),
+      apiKeyPrincipals: new Map([
+        [
+          "secret-key",
+          profile({
+            scopes: ["team:read", "conversation:write"],
+            activeScope: { scopeId: "team-7", scopeType: "team" },
+          }),
+        ],
+      ]),
+    };
+    const resolver = new ApiKeyPrincipalResolver(() => authenticatedAt);
+
+    expect(
+      resolver.resolve(request({ "x-api-key": "secret-key" }), config)
+    ).toMatchObject({
+      ok: true,
+      principal: { scopes: ["team:read", "conversation:write"] },
+      activeScope: { scopeId: "team-7", scopeType: "team" },
     });
   });
 });

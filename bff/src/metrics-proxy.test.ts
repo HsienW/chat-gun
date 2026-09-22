@@ -33,6 +33,7 @@ function createConfig(upstreamUrl: string): BffConfig {
           tenantId: "tenant-1",
           roles: ["operations-reader"],
           scopes: ["operations:metrics:read"],
+          activeScope: { scopeId: "tenant-1", scopeType: "tenant" },
         },
       ],
     ]),

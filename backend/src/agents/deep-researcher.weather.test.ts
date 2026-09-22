@@ -8,6 +8,57 @@ import {
 } from "../platform/llm-gateway.js";
 import type { WeatherToolResult } from "../tools/weather-types.js";
 
+vi.mock("../tools/authorization/tool-authorization.js", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../tools/authorization/tool-authorization.js")
+  >();
+  const db = {
+    async query<TResult extends Record<string, unknown>>() {
+      return { rows: [] as TResult[], rowCount: 0 };
+    },
+  };
+
+  return {
+    ...actual,
+    createRuntimeToolAuthorizationComposition: () => {
+      const composition = actual.createRuntimeToolAuthorizationComposition({
+        profile: "development",
+        db,
+      });
+      const resolveExecutionContext =
+        composition.authorization.resolveExecutionContext;
+      return {
+        ...composition,
+        authorization: {
+          ...composition.authorization,
+          resolveExecutionContext: (config: unknown) => {
+            const runnableConfig =
+              config && typeof config === "object" && !Array.isArray(config)
+                ? (config as Record<string, unknown>)
+                : {};
+            const configurable =
+              runnableConfig.configurable &&
+              typeof runnableConfig.configurable === "object" &&
+              !Array.isArray(runnableConfig.configurable)
+                ? (runnableConfig.configurable as Record<string, unknown>)
+                : {};
+            return resolveExecutionContext?.({
+              ...runnableConfig,
+              configurable: {
+                request_id: "test-request",
+                thread_id: "test-thread",
+                run_id: "test-run",
+                task_id: "test-task",
+                ...configurable,
+              },
+            });
+          },
+        },
+      };
+    },
+  };
+});
+
 type WeatherState = Parameters<
   typeof deepResearcherWeatherTestInternals.buildWeatherToolAnswer
 >[0];

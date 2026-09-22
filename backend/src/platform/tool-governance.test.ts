@@ -13,6 +13,7 @@ import {
 } from "./tool-governance.js";
 import { ToolRiskRegistry, type ToolRiskPolicy } from "../runtime/authorization/tool-risk.js";
 import { executionContextSchema } from "../runtime/execution-context/execution-context.js";
+import { createConfirmationRequiredDescriptor } from "../runtime/authorization/confirmation.js";
 import {
   createNoopOpikTracer,
   setOpikTracerForTests,
@@ -41,7 +42,8 @@ const executionContext = executionContextSchema.parse(contextFixture.validContex
 function createAuthorizationConfig(
   effect: "allow" | "deny" | "require_confirmation",
   onRequireConfirmation?: ToolAuthorizationGovernanceConfig["onRequireConfirmation"],
-  riskTier: ToolRiskPolicy["riskTier"] = "read"
+  riskTier: ToolRiskPolicy["riskTier"] = "read",
+  includeContextProvider = true
 ): {
   config: ToolAuthorizationGovernanceConfig;
   authorize: ReturnType<typeof vi.fn>;
@@ -79,6 +81,15 @@ function createAuthorizationConfig(
       }),
       authorizationEngine: { authorize },
       decisionStore: { record: recordDecision },
+      policyVersion: "runtime-authorization-v1",
+      ...(includeContextProvider
+        ? {
+            resolveContext: () => ({
+              principal: executionContext.principal,
+              scope: executionContext.scope,
+            }),
+          }
+        : {}),
       ...(onRequireConfirmation === undefined ? {} : { onRequireConfirmation }),
     },
   };
@@ -209,18 +220,37 @@ describe("GovernanceExecutor.executeTyped", () => {
     });
   });
 
-  it("authorizes with an isolated development identity before dispatch", async () => {
+  it("authorizes with an explicitly injected development identity before dispatch", async () => {
     const invoked = vi.fn(async ({ value }: { value: string }) => `${value}:ok`);
     const sourceTool = tool(invoked, {
       name: "contract_echo",
       description: "Echoes a value after authorization.",
       schema: z.object({ value: z.string() }),
     }) as StructuredToolInterface;
-    const authorization = createAuthorizationConfig("allow");
+    const authorization = createAuthorizationConfig("allow", undefined, "read", false);
     const executor = new GovernanceExecutor(
       sourceTool,
       { ...defaultToolPolicy(sourceTool.name), audit: false },
-      authorization.config
+      {
+        ...authorization.config,
+        resolveContext: () => ({
+          principal: {
+            principalId: "anonymous",
+            principalType: "user",
+            tenantId: "public",
+            roles: [],
+            scopes: [],
+            authSource: "development",
+            authenticatedAt: "2026-08-18T00:00:00.000Z",
+          },
+          scope: {
+            scopeId: "development-public-anonymous",
+            scopeType: "principal",
+            tenantId: "public",
+            ownerPrincipalId: "anonymous",
+          },
+        }),
+      }
     );
 
     await expect(executor.executeTyped({ value: "valid" })).resolves.toEqual({
@@ -241,6 +271,28 @@ describe("GovernanceExecutor.executeTyped", () => {
     );
   });
 
+  it("does not treat NODE_ENV=development as authorization opt-in", async () => {
+    const invoked = vi.fn(async () => "unexpected");
+    const sourceTool = tool(invoked, {
+      name: "contract_echo",
+      description: "Requires an explicit authorization profile before dispatch.",
+      schema: z.object({ value: z.string() }),
+    }) as StructuredToolInterface;
+    const authorization = createAuthorizationConfig("allow", undefined, "read", false);
+    const executor = new GovernanceExecutor(
+      sourceTool,
+      { ...defaultToolPolicy(sourceTool.name), audit: false },
+      authorization.config
+    );
+
+    await expect(executor.executeTyped({ value: "valid" })).resolves.toMatchObject({
+      type: "denied_by_authorization",
+      errorCode: "AUTHORIZATION_UNAVAILABLE",
+    });
+    expect(authorization.authorize).not.toHaveBeenCalled();
+    expect(invoked).not.toHaveBeenCalled();
+  });
+
   it.each(["production", "test"])("denies missing identity in %s before authorization or tool dispatch", async (profile) => {
     vi.stubEnv("NODE_ENV", profile);
     const invoked = vi.fn(async () => "unexpected");
@@ -249,7 +301,7 @@ describe("GovernanceExecutor.executeTyped", () => {
       description: "Requires an identity before dispatch.",
       schema: z.object({ value: z.string() }),
     }) as StructuredToolInterface;
-    const authorization = createAuthorizationConfig("allow");
+    const authorization = createAuthorizationConfig("allow", undefined, "read", false);
     const executor = new GovernanceExecutor(
       sourceTool,
       { ...defaultToolPolicy(sourceTool.name), audit: false },
@@ -331,6 +383,30 @@ describe("GovernanceExecutor.executeTyped", () => {
     );
   });
 
+  it("fails closed without dispatch when decision persistence fails", async () => {
+    const invoked = vi.fn(async () => "unexpected");
+    const sourceTool = tool(invoked, {
+      name: "contract_echo",
+      description: "Must persist authorization before dispatch.",
+      schema: z.object({ value: z.string() }),
+    }) as StructuredToolInterface;
+    const authorization = createAuthorizationConfig("allow");
+    authorization.recordDecision.mockRejectedValueOnce(
+      new Error("decision store unavailable")
+    );
+    const executor = new GovernanceExecutor(
+      sourceTool,
+      { ...defaultToolPolicy(sourceTool.name), audit: false },
+      authorization.config
+    );
+
+    await expect(executor.executeTyped({ value: "valid" })).resolves.toMatchObject({
+      type: "denied_by_authorization",
+      errorCode: "AUTHORIZATION_UNAVAILABLE",
+    });
+    expect(invoked).not.toHaveBeenCalled();
+  });
+
   it("persists correlation before dispatch and redacts it through the decision store", async () => {
     const invoked = vi.fn(async () => "ok");
     const sourceTool = tool(invoked, {
@@ -379,7 +455,17 @@ describe("GovernanceExecutor.executeTyped", () => {
       description: "Waits for confirmation before dispatch.",
       schema: z.object({ value: z.string() }),
     }) as StructuredToolInterface;
-    const onRequireConfirmation = vi.fn(async () => undefined);
+    const onRequireConfirmation = vi.fn(async (decision, request) =>
+      createConfirmationRequiredDescriptor({
+        decisionId: decision.decisionId,
+        executionContext,
+        action: request.action,
+        toolName: "contract_echo",
+        resource: request.resource,
+        policyVersion: "runtime-authorization-v1",
+        timeoutMs: 60_000,
+      })
+    );
     const authorization = createAuthorizationConfig(
       "require_confirmation",
       onRequireConfirmation
@@ -390,10 +476,13 @@ describe("GovernanceExecutor.executeTyped", () => {
       authorization.config
     );
 
-    await expect(executor.executeTyped({ value: "valid" })).resolves.toEqual({
-      type: "denied_by_authorization",
-      errorCode: "REQUIRES_CONFIRMATION",
+    await expect(executor.executeTyped({ value: "valid" })).resolves.toMatchObject({
+      type: "confirmation_required",
       decisionId: "decision-require_confirmation",
+      descriptor: {
+        schemaVersion: "1.0",
+        decisionId: "decision-require_confirmation",
+      },
     });
     expect(onRequireConfirmation).toHaveBeenCalledOnce();
     expect(invoked).not.toHaveBeenCalled();
@@ -406,7 +495,17 @@ describe("GovernanceExecutor.executeTyped", () => {
       description: "Must remain denied before confirmation.",
       schema: z.object({ value: z.string() }),
     }) as StructuredToolInterface;
-    const onRequireConfirmation = vi.fn(async () => undefined);
+    const onRequireConfirmation = vi.fn(async (decision, request) =>
+      createConfirmationRequiredDescriptor({
+        decisionId: decision.decisionId,
+        executionContext,
+        action: request.action,
+        toolName: "contract_echo",
+        resource: request.resource,
+        policyVersion: "runtime-authorization-v1",
+        timeoutMs: 60_000,
+      })
+    );
     const authorization = createAuthorizationConfig(
       "deny",
       onRequireConfirmation,

@@ -2,12 +2,27 @@ import assert from "node:assert/strict";
 import http, { type Server } from "node:http";
 import net from "node:net";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import { describe, it } from "vitest";
 
 import { createServer } from "./server.js";
 import type { ServerDependencies } from "./server.js";
 import type { BffConfig } from "./config.js";
 import type { RedisEvalClient } from "./redis-rate-limit.js";
+
+const sharedAuthorizationFixture = JSON.parse(
+  readFileSync(
+    new URL("../../contracts/execution-context.fixture.json", import.meta.url),
+    "utf8"
+  )
+) as {
+  trustedAuthorization: {
+    confirmation: {
+      interrupt: Record<string, unknown>;
+      resumeApprove: Record<string, unknown>;
+    };
+  };
+};
 
 type StartedServer = {
   server: Server;
@@ -134,6 +149,7 @@ describe("BFF metrics proxy", () => {
                 tenantId: "tenant-metrics",
                 roles: ["metrics-reader"],
                 scopes: ["metrics:read"],
+                activeScope: { scopeId: "tenant-metrics", scopeType: "tenant" },
               },
             ],
           ]),
@@ -285,6 +301,7 @@ describe("BFF LangGraph stream proxy", () => {
                 tenantId: "tenant-1",
                 roles: ["runner"],
                 scopes: ["runs:write"],
+                activeScope: { scopeId: "tenant-1", scopeType: "tenant" },
               },
             ],
           ]),
@@ -380,6 +397,7 @@ describe("BFF LangGraph stream proxy", () => {
                 tenantId: "trusted-tenant",
                 roles: ["operator", "auditor"],
                 scopes: ["runs:read", "runs:write"],
+                activeScope: { scopeId: "team-7", scopeType: "team" },
               },
             ],
           ]),
@@ -406,6 +424,8 @@ describe("BFF LangGraph stream proxy", () => {
     assert.equal(upstreamHeaders["x-bff-tenant-id"], "trusted-tenant");
     assert.equal(upstreamHeaders["x-bff-roles"], "operator,auditor");
     assert.equal(upstreamHeaders["x-bff-scopes"], "runs:read,runs:write");
+    assert.equal(upstreamHeaders["x-bff-scope-id"], "team-7");
+    assert.equal(upstreamHeaders["x-bff-scope-type"], "team");
     assert.equal(upstreamHeaders["x-bff-auth-source"], "service_token");
     assert.match(
       String(upstreamHeaders["x-bff-authenticated-at"]),
@@ -434,6 +454,7 @@ describe("BFF LangGraph stream proxy", () => {
                 tenantId: "trusted-tenant",
                 roles: [],
                 scopes: [],
+                activeScope: { scopeId: "trusted-tenant", scopeType: "tenant" },
               },
             ],
           ]),
@@ -649,6 +670,83 @@ describe("BFF LangGraph stream proxy", () => {
         });
       }
     );
+  });
+
+  it("passes authorization interrupt/resume unchanged while overwriting canonical identity", async () => {
+    const resumeBody = {
+      command: {
+        resume: sharedAuthorizationFixture.trustedAuthorization.confirmation.resumeApprove,
+      },
+    };
+    const interruptFrame = [
+      "event: interrupt",
+      `data: ${JSON.stringify({
+        __interrupt__: [{
+          value: sharedAuthorizationFixture.trustedAuthorization.confirmation.interrupt,
+        }],
+      })}`,
+      "",
+      "",
+    ].join("\n");
+    let upstreamBody = "";
+    let upstreamHeaders: http.IncomingHttpHeaders = {};
+
+    await withServer(
+      (req, res) => {
+        upstreamHeaders = req.headers;
+        req.setEncoding("utf8");
+        req.on("data", (chunk: string) => {
+          upstreamBody += chunk;
+        });
+        req.on("end", () => {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          res.end(interruptFrame);
+        });
+      },
+      async (upstream) => {
+        const config = createTestConfig(upstream.url, {
+          requireAuth: true,
+          apiKeys: new Set(["bff-key"]),
+          apiKeyPrincipals: new Map([
+            [
+              "bff-key",
+              {
+                principalId: "trusted-principal",
+                principalType: "user",
+                tenantId: "trusted-tenant",
+                roles: ["operator"],
+                scopes: ["tool:approve"],
+                activeScope: { scopeId: "trusted-tenant", scopeType: "tenant" },
+              },
+            ],
+          ]),
+        });
+        await withBff(config, async (bff) => {
+          const response = await fetch(
+            `${bff.url}/api/langgraph/threads/thread-1/runs/stream`,
+            {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                "x-api-key": "bff-key",
+                "x-bff-principal-id": "forged",
+                "x-bff-scope-id": "forged-scope",
+              },
+              body: JSON.stringify(resumeBody),
+            }
+          );
+
+          assert.equal(response.status, 200);
+          assert.equal(await response.text(), interruptFrame);
+        });
+      }
+    );
+
+    assert.equal(upstreamBody, JSON.stringify(resumeBody));
+    assert.equal(upstreamHeaders["x-bff-principal-id"], "trusted-principal");
+    assert.equal(upstreamHeaders["x-bff-tenant-id"], "trusted-tenant");
+    assert.equal(upstreamHeaders["x-bff-scope-id"], "trusted-tenant");
+    assert.equal(upstreamHeaders["x-bff-scope-type"], "tenant");
   });
 
   it("returns bff_timeout when upstream exceeds BFF_UPSTREAM_TIMEOUT_MS", async () => {

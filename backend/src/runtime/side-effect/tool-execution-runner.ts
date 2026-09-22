@@ -102,7 +102,9 @@ const defaultObservability: ToolExecutionRunnerObservability = {
 function errorCodeOf<TResult>(
   outcome: Exclude<GovernedToolOutcome<TResult>, { type: "succeeded" | "cancelled" }>
 ): string {
-  return outcome.errorCode;
+  return outcome.type === "confirmation_required"
+    ? "REQUIRES_CONFIRMATION"
+    : outcome.errorCode;
 }
 
 function dispatchStateOf<TResult>(
@@ -110,7 +112,8 @@ function dispatchStateOf<TResult>(
 ): "before" | "after" | "unknown" {
   if (
     outcome.type === "rejected_before_dispatch" ||
-    outcome.type === "denied_by_authorization"
+    outcome.type === "denied_by_authorization" ||
+    outcome.type === "confirmation_required"
   ) {
     return "before";
   }
@@ -121,6 +124,7 @@ function dispatchStateOf<TResult>(
 function outcomeErrorCode<TResult>(
   outcome: GovernedToolOutcome<TResult>
 ): string | undefined {
+  if (outcome.type === "confirmation_required") return "REQUIRES_CONFIRMATION";
   return outcome.type === "succeeded" || outcome.type === "cancelled"
     ? undefined
     : outcome.errorCode;
@@ -455,6 +459,15 @@ export class ToolExecutionRunner {
             decisionId: authorizationOutcome.decisionId,
           };
         }
+        if (authorizationOutcome.type === "confirmation_required") {
+          await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+          return {
+            type: "failed",
+            errorCode: "REQUIRES_CONFIRMATION",
+            toolExecutionId,
+            decisionId: authorizationOutcome.decisionId,
+          };
+        }
         executeAttempt = input.executor.executeAuthorizedTyped.bind(
           input.executor
         );
@@ -524,6 +537,15 @@ export class ToolExecutionRunner {
         return {
           type: "failed",
           errorCode: outcome.errorCode,
+          toolExecutionId,
+          decisionId: outcome.decisionId,
+        };
+      }
+      if (outcome.type === "confirmation_required") {
+        await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+        return {
+          type: "failed",
+          errorCode: "REQUIRES_CONFIRMATION",
           toolExecutionId,
           decisionId: outcome.decisionId,
         };

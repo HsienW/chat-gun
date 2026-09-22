@@ -70,6 +70,19 @@ describe("readExecutionContext", () => {
     }, "development")).toThrow();
   });
 
+  it.each([
+    { "x-bff-scope-id": ["scope-1", "scope-2"] },
+    { "x-bff-scope-id": '["scope-1","scope-2"]' },
+    { "x-bff-scope-id": "scope-1,scope-2" },
+    { "x-bff-scope-type": ["tenant", "team"] },
+    { "x-bff-scope-type": '["tenant","team"]' },
+    { "x-bff-scope-type": "tenant,team" },
+  ])("rejects non-scalar or repeated active scope headers: %o", (override) => {
+    expect(() => readExecutionContext(undefined, {
+      configurable: { ...legacyConfig.configurable, ...override },
+    }, "production")).toThrow();
+  });
+
   it("rejects malformed and oversized IDs before consumers see them", () => {
     expect(() => readExecutionContext(undefined, { configurable: { ...legacyConfig.configurable, run_id: "bad id" } }, "production")).toThrow();
     expect(() => readExecutionContext(undefined, { configurable: { ...legacyConfig.configurable, run_id: "x".repeat(257) } }, "production")).toThrow();
