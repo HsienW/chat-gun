@@ -7,6 +7,7 @@ import { fileURLToPath, URL } from "node:url";
 import { loadConfig, type BffConfig } from "./config.js";
 import {
   selectPrincipalResolver,
+  type ActiveScope,
   type PrincipalContext,
   type PrincipalResolution,
   type PrincipalResolver,
@@ -341,6 +342,7 @@ function copyRequestHeaders(
   req: IncomingMessage,
   ctx: RequestContext,
   principal: PrincipalContext,
+  activeScope: ActiveScope,
   routeNamespace: string,
   idempotencyHeader: Extract<ValidatedIdempotencyHeader, { ok: true }>,
   activeRunHint: Extract<ValidatedActiveRunHint, { ok: true }>,
@@ -364,6 +366,8 @@ function copyRequestHeaders(
   headers.set("x-bff-tenant-id", principal.tenantId);
   headers.set("x-bff-roles", principal.roles.join(","));
   headers.set("x-bff-scopes", principal.scopes.join(","));
+  headers.set("x-bff-scope-id", activeScope.scopeId);
+  headers.set("x-bff-scope-type", activeScope.scopeType);
   headers.set("x-bff-auth-source", principal.authSource);
   headers.set("x-bff-authenticated-at", principal.authenticatedAt);
   if (legacyHeaderMode) {
@@ -986,6 +990,7 @@ async function proxyLangGraph(
             req,
             ctx,
             principalResolution.principal,
+            principalResolution.activeScope,
             reqUrl.pathname,
             idempotencyHeader,
             activeRunHint,

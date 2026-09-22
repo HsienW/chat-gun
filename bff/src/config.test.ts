@@ -95,4 +95,60 @@ describe("identity compatibility configuration", () => {
 
     expect(loadConfig().legacyHeaderMode).toBe(true);
   });
+
+  it("requires one valid active scope in every API-key principal profile", () => {
+    vi.stubEnv(
+      "BFF_API_KEY_PRINCIPALS_JSON",
+      JSON.stringify({
+        key: {
+          principalId: "service-1",
+          principalType: "service",
+          tenantId: "tenant-1",
+          roles: [],
+          scopes: ["runs:read"],
+        },
+      })
+    );
+
+    expect(() => loadConfig()).toThrow(
+      "BFF_API_KEY_PRINCIPALS_JSON contains an invalid profile"
+    );
+  });
+
+  it("normalizes permission scopes and rejects comma-containing tokens", () => {
+    vi.stubEnv(
+      "BFF_API_KEY_PRINCIPALS_JSON",
+      JSON.stringify({
+        key: {
+          principalId: "service-1",
+          principalType: "service",
+          tenantId: "tenant-1",
+          roles: [],
+          scopes: [" runs:read ", "runs:read", "runs:write"],
+          activeScope: { scopeId: "tenant-1", scopeType: "tenant" },
+        },
+      })
+    );
+    expect(loadConfig().apiKeyPrincipals.get("key")?.scopes).toEqual([
+      "runs:read",
+      "runs:write",
+    ]);
+
+    vi.stubEnv(
+      "BFF_API_KEY_PRINCIPALS_JSON",
+      JSON.stringify({
+        key: {
+          principalId: "service-1",
+          principalType: "service",
+          tenantId: "tenant-1",
+          roles: [],
+          scopes: ["runs:read,runs:write"],
+          activeScope: { scopeId: "tenant-1", scopeType: "tenant" },
+        },
+      })
+    );
+    expect(() => loadConfig()).toThrow(
+      "BFF_API_KEY_PRINCIPALS_JSON contains an invalid profile"
+    );
+  });
 });

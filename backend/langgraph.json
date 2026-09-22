@@ -14,7 +14,16 @@
         "x-request-id",
         "x-idempotency-key",
         "x-active-run-id",
-        "x-active-run-generation"
+        "x-active-run-generation",
+        "x-bff-principal-id",
+        "x-bff-principal-type",
+        "x-bff-tenant-id",
+        "x-bff-roles",
+        "x-bff-scopes",
+        "x-bff-auth-source",
+        "x-bff-authenticated-at",
+        "x-bff-scope-id",
+        "x-bff-scope-type"
       ]
     }
   },

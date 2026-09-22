@@ -9,8 +9,21 @@ export const PRINCIPAL_TYPES = [
   "service",
 ] as const;
 
+export const SCOPE_TYPES = [
+  "principal",
+  "tenant",
+  "team",
+  "conversation",
+] as const;
+
 export type PrincipalType = (typeof PRINCIPAL_TYPES)[number];
+export type ScopeType = (typeof SCOPE_TYPES)[number];
 export type AuthSource = "service_token" | "development";
+
+export interface ActiveScope {
+  scopeId: string;
+  scopeType: ScopeType;
+}
 
 export interface PrincipalContext {
   principalId: string;
@@ -28,10 +41,11 @@ export interface ApiKeyPrincipalProfile {
   tenantId: string;
   roles: string[];
   scopes: string[];
+  activeScope: ActiveScope;
 }
 
 export type PrincipalResolution =
-  | { ok: true; principal: PrincipalContext }
+  | { ok: true; principal: PrincipalContext; activeScope: ActiveScope }
   | { ok: false; status: number; message: string };
 
 export interface PrincipalResolver {
@@ -86,6 +100,7 @@ export class ApiKeyPrincipalResolver implements PrincipalResolver {
         authSource: "service_token",
         authenticatedAt: authenticatedAt.toISOString(),
       },
+      activeScope: { ...profile.activeScope },
     };
   }
 }
@@ -109,6 +124,7 @@ export class DevelopmentPrincipalResolver implements PrincipalResolver {
         authSource: "development",
         authenticatedAt: authenticatedAt.toISOString(),
       },
+      activeScope: { scopeId: "public", scopeType: "tenant" },
     };
   }
 }

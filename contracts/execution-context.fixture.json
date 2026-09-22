@@ -34,5 +34,67 @@
   "malformedRequestId": "bad id",
   "oversizedIdLength": 257,
   "unknownField": "runID",
-  "concurrentRunIds": ["run-1", "run-2"]
+  "concurrentRunIds": ["run-1", "run-2"],
+  "trustedAuthorization": {
+    "scopeTypes": ["principal", "tenant", "team", "conversation"],
+    "principalHeaders": [
+      "x-bff-principal-id",
+      "x-bff-principal-type",
+      "x-bff-tenant-id",
+      "x-bff-roles",
+      "x-bff-scopes",
+      "x-bff-auth-source",
+      "x-bff-authenticated-at"
+    ],
+    "activeScopeHeaders": ["x-bff-scope-id", "x-bff-scope-type"],
+    "permissionScopes": ["runs:read", "runs:write"],
+    "permissionScopesCsv": "runs:read,runs:write",
+    "mcpRiskDescriptor": {
+      "schemaVersion": "1.0",
+      "serverName": "filesystem",
+      "toolName": "write_file",
+      "riskTier": "sensitive",
+      "actions": ["tool:write"],
+      "requireConfirmation": true,
+      "resource": {
+        "strategy": "scope_tool",
+        "resourceType": "mcp_tool"
+      }
+    },
+    "confirmation": {
+      "interrupt": {
+        "type": "tool_authorization_confirmation",
+        "schemaVersion": "1.0",
+        "approvalId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "decisionId": "decision-1",
+        "expiresAt": "2026-09-21T00:01:00.000Z",
+        "resumeCompatibility": {
+          "type": "tool_authorization_confirmation",
+          "schemaVersion": "1.0",
+          "decisions": ["approve", "deny"]
+        },
+        "summary": {
+          "toolName": "write_file",
+          "action": "tool:write",
+          "resourceType": "mcp_tool"
+        }
+      },
+      "resumeApprove": {
+        "type": "tool_authorization_confirmation",
+        "schemaVersion": "1.0",
+        "approvalId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "decisionId": "decision-1",
+        "decision": "approve"
+      }
+    },
+    "scenarioMatrix": {
+      "allow": "TOOL_ACTION_AUTHORIZED",
+      "deny": "UNREGISTERED_TOOL_DENIED",
+      "confirm": "REQUIRES_CONFIRMATION",
+      "timeout": "CONFIRMATION_TIMEOUT",
+      "restart": "pending_confirmation_restored",
+      "replay": "CONFIRMATION_REPLAYED_OR_EXPIRED",
+      "crossTenant": "CROSS_TENANT_DENIED"
+    }
+  }
 }

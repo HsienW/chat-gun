@@ -3,7 +3,11 @@ import { fileURLToPath } from "node:url";
 
 import "dotenv/config";
 
-import type { ApiKeyPrincipalProfile } from "./identity.js";
+import {
+  SCOPE_TYPES,
+  type ActiveScope,
+  type ApiKeyPrincipalProfile,
+} from "./identity.js";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultFrontendDist = path.resolve(dirname, "../../frontend/dist");
@@ -80,6 +84,46 @@ function isPrincipalType(
   );
 }
 
+function parseActiveScope(value: unknown): ActiveScope | undefined {
+  if (!isRecord(value)) return undefined;
+  const keys = Object.keys(value);
+  if (
+    keys.some((key) => key !== "scopeId" && key !== "scopeType") ||
+    typeof value.scopeId !== "string" ||
+    value.scopeId.trim().length === 0 ||
+    typeof value.scopeType !== "string" ||
+    !SCOPE_TYPES.some((scopeType) => scopeType === value.scopeType)
+  ) {
+    return undefined;
+  }
+  return {
+    scopeId: value.scopeId.trim(),
+    scopeType: value.scopeType as ActiveScope["scopeType"],
+  };
+}
+
+function isScopeCompatible(
+  principalId: string,
+  tenantId: string,
+  activeScope: ActiveScope
+): boolean {
+  if (activeScope.scopeType === "principal") {
+    return activeScope.scopeId === principalId;
+  }
+  if (activeScope.scopeType === "tenant") {
+    return activeScope.scopeId === tenantId;
+  }
+  return true;
+}
+
+function normalizePermissionScopes(scopes: string[]): string[] | undefined {
+  const normalized = scopes.map((scope) => scope.trim());
+  if (normalized.some((scope) => scope.length === 0 || scope.includes(","))) {
+    return undefined;
+  }
+  return [...new Set(normalized)];
+}
+
 function readApiKeyPrincipals(): Map<string, ApiKeyPrincipalProfile> {
   const raw = readOptionalString("BFF_API_KEY_PRINCIPALS_JSON");
   if (raw === undefined) return new Map();
@@ -104,6 +148,10 @@ function readApiKeyPrincipals(): Map<string, ApiKeyPrincipalProfile> {
     }
     const candidate = value;
     const principalType = candidate.principalType;
+    const activeScope = parseActiveScope(candidate.activeScope);
+    const scopes = isStringArray(candidate.scopes)
+      ? normalizePermissionScopes(candidate.scopes)
+      : undefined;
     if (
       typeof candidate.principalId !== "string" ||
       candidate.principalId.trim().length === 0 ||
@@ -111,7 +159,13 @@ function readApiKeyPrincipals(): Map<string, ApiKeyPrincipalProfile> {
       typeof candidate.tenantId !== "string" ||
       candidate.tenantId.trim().length === 0 ||
       !isStringArray(candidate.roles) ||
-      !isStringArray(candidate.scopes)
+      scopes === undefined ||
+      activeScope === undefined ||
+      !isScopeCompatible(
+        candidate.principalId.trim(),
+        candidate.tenantId.trim(),
+        activeScope
+      )
     ) {
       throw new Error("BFF_API_KEY_PRINCIPALS_JSON contains an invalid profile");
     }
@@ -120,7 +174,8 @@ function readApiKeyPrincipals(): Map<string, ApiKeyPrincipalProfile> {
       principalType,
       tenantId: candidate.tenantId.trim(),
       roles: candidate.roles.map((role) => role.trim()),
-      scopes: candidate.scopes.map((scope) => scope.trim()),
+      scopes,
+      activeScope,
     });
   }
   return profiles;

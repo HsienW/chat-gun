@@ -145,6 +145,10 @@ function readTrustedIdentity(
     const parsedScopeType = SCOPE_TYPES.find((candidate) => candidate === scopeType);
     if (
       typeof scopeId !== "string" ||
+      scopeId.trim().length === 0 ||
+      scopeId.includes(",") ||
+      scopeId.trim().startsWith("[") ||
+      scopeId.trim().startsWith("{") ||
       parsedScopeType === undefined
     ) {
       return { principal: principalResult.principal };

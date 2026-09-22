@@ -106,9 +106,21 @@ function invalid(field: TrustedPrincipalHeaderName): TrustedPrincipalParseResult
   };
 }
 
+function findArrayValuedHeader(
+  headers: TrustedPrincipalHeaders
+): TrustedPrincipalHeaderName | undefined {
+  if (hasHeaderGetter(headers)) return undefined;
+  return Object.values(TRUSTED_PRINCIPAL_HEADERS).find((name) =>
+    Array.isArray(headers[name])
+  );
+}
+
 export function parseTrustedPrincipal(
   headers: TrustedPrincipalHeaders
 ): TrustedPrincipalParseResult {
+  const arrayValuedHeader = findArrayValuedHeader(headers);
+  if (arrayValuedHeader !== undefined) return invalid(arrayValuedHeader);
+
   const principalId = readTrustedHeader(headers, TRUSTED_PRINCIPAL_HEADERS.principalId)?.trim();
   if (!principalId) return missing(TRUSTED_PRINCIPAL_HEADERS.principalId);
 

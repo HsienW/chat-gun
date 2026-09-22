@@ -17,6 +17,15 @@ const canonicalHeaders = {
 };
 
 describe("parseTrustedPrincipal", () => {
+  it("rejects array-valued trusted principal headers", () => {
+    expect(parseTrustedPrincipal({
+      ...canonicalHeaders,
+      "x-bff-principal-id": ["principal-1", "principal-2"],
+    })).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_TRUSTED_PRINCIPAL_FIELD" },
+    });
+  });
   it("parses canonical trusted headers into PrincipalContext", () => {
     expect(parseTrustedPrincipal(canonicalHeaders)).toEqual({
       ok: true,
