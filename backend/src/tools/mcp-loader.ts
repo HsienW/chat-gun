@@ -8,7 +8,14 @@ import { getBooleanEnv, getEnv } from "../platform/env.js";
 import {
   applyToolGovernance,
   auditToolLoad,
+  type ToolAuthorizationGovernanceConfig,
 } from "../platform/tool-governance.js";
+import {
+  assertUniqueExposedMcpToolNames,
+  createMcpToolRiskPoliciesForExposedTools,
+  type McpToolRiskDescriptorV1,
+} from "./authorization/mcp-risk.js";
+import { ToolRiskRegistry } from "../runtime/authorization/tool-risk.js";
 
 type StdioMcpServerConfig = {
   transport: "stdio";
@@ -292,7 +299,10 @@ async function loadStdioServerTools(
   });
 }
 
-export async function loadMcpTools(): Promise<StructuredToolInterface[]> {
+export async function loadMcpTools(
+  authorization: ToolAuthorizationGovernanceConfig,
+  riskDescriptors: readonly McpToolRiskDescriptorV1[]
+): Promise<StructuredToolInterface[]> {
   const configs = getMcpServerConfigs();
   const serverNames = Object.keys(configs);
 
@@ -300,14 +310,26 @@ export async function loadMcpTools(): Promise<StructuredToolInterface[]> {
     return [];
   }
 
-  const tools = (
-    await Promise.all(
-      serverNames.map((serverName) =>
-        loadStdioServerTools(serverName, configs[serverName])
-      )
-    )
-  ).flat();
-  const governedTools = applyToolGovernance(tools);
+  const loadedServers = await Promise.all(
+    serverNames.map(async (serverName) => ({
+      serverName,
+      tools: await loadStdioServerTools(serverName, configs[serverName]),
+    }))
+  );
+  const exposedServers = loadedServers.map(({ serverName, tools }) => ({
+      serverName,
+      toolNames: tools.map(({ name }) => name),
+    }));
+  assertUniqueExposedMcpToolNames(exposedServers);
+  const loadedRiskRegistry = new ToolRiskRegistry(
+    createMcpToolRiskPoliciesForExposedTools(exposedServers, riskDescriptors),
+    { unregisteredToolDefault: "deny" }
+  );
+  const tools = loadedServers.flatMap(({ tools: serverTools }) => serverTools);
+  const governedTools = applyToolGovernance(tools, {
+    ...authorization,
+    riskRegistry: loadedRiskRegistry,
+  });
   await auditToolLoad("mcp", governedTools);
   return governedTools;
 }

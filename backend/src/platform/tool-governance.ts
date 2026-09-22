@@ -15,6 +15,7 @@ import type {
   AuthorizationRequest,
 } from "../runtime/authorization/authorization.js";
 import type { DecisionStore } from "../runtime/authorization/decision-store.js";
+import type { ConfirmationRequiredDescriptor } from "../runtime/authorization/confirmation.js";
 import type { PrincipalContext } from "../runtime/authorization/principal.js";
 import type { RuntimeScope } from "../runtime/authorization/scope.js";
 import { readExecutionCorrelation } from "../runtime/execution-context/read-execution-context.js";
@@ -53,6 +54,10 @@ const DEFAULT_MAX_OUTPUT_CHARS = 24_000;
 const GOVERNANCE_TIMEOUT_PREFIX = "[governance_timeout]";
 export const GOVERNANCE_CANCELLED_PREFIX = "[governance_cancelled]";
 const governedTools = new WeakSet<object>();
+const governedExecutors = new WeakMap<
+  object,
+  GovernedToolExecutor<unknown, unknown>
+>();
 
 type GovernedFailureType =
   | "rejected_before_dispatch"
@@ -78,7 +83,7 @@ export interface ToolAuthorizationGovernanceConfig {
   riskRegistry: ToolRiskRegistry;
   authorizationEngine: Pick<AuthorizationEngine, "authorize">;
   decisionStore: DecisionStore;
-  policyVersion?: string;
+  policyVersion: string;
   /** X13 supplies this only after establishing the trusted Agent Server boundary. */
   resolveExecutionContext?: (
     config: unknown
@@ -93,11 +98,10 @@ export interface ToolAuthorizationGovernanceConfig {
   ) => string | null;
   onRequireConfirmation?: (
     decision: AuthorizationDecision,
-    request: AuthorizationRequest
-  ) => void | Promise<void>;
+    request: AuthorizationRequest,
+    executionContext: ExecutionContext | undefined
+  ) => ConfirmationRequiredDescriptor | Promise<ConfirmationRequiredDescriptor>;
 }
-
-const DEFAULT_AUTHORIZATION_POLICY_VERSION = "runtime-authorization-v1";
 
 interface DecisionCorrelation {
   requestId?: string;
@@ -360,36 +364,20 @@ function legacyErrorForOutcome(
   if (outcome.type === "cancelled") {
     return `Error: ${toolName} failed by tool governance - ${GOVERNANCE_CANCELLED_PREFIX} cancelled ${outcome.dispatchState} dispatch`;
   }
-  if (outcome.errorCode === "GOVERNANCE_TIMEOUT") {
+  const errorCode =
+    outcome.type === "confirmation_required"
+      ? "REQUIRES_CONFIRMATION"
+      : outcome.errorCode;
+  if (errorCode === "GOVERNANCE_TIMEOUT") {
     return `Error: ${toolName} failed by tool governance - ${GOVERNANCE_TIMEOUT_PREFIX} tool execution timed out after ${timeoutMs}ms: ${toolName}`;
   }
-  if (outcome.errorCode === "TOOL_INPUT_VALIDATION_FAILED") {
+  if (errorCode === "TOOL_INPUT_VALIDATION_FAILED") {
     return `Error: ${toolName} failed by tool governance - Received tool input did not match expected schema`;
   }
-  if (outcome.errorCode === "TOOL_INPUT_TOO_LARGE") {
+  if (errorCode === "TOOL_INPUT_TOO_LARGE") {
     return `Error: ${toolName} blocked by tool governance - input exceeds policy limit.`;
   }
-  return `Error: ${toolName} failed by tool governance - ${outcome.errorCode}`;
-}
-
-function createDevelopmentAuthorizationContext(): ToolAuthorizationContext {
-  return {
-    principal: {
-      principalId: "anonymous",
-      principalType: "user",
-      tenantId: "public",
-      roles: [],
-      scopes: [],
-      authSource: "development",
-      authenticatedAt: new Date().toISOString(),
-    },
-    scope: {
-      scopeId: "development-public-anonymous",
-      scopeType: "principal",
-      tenantId: "public",
-      ownerPrincipalId: "anonymous",
-    },
-  };
+  return `Error: ${toolName} failed by tool governance - ${errorCode}`;
 }
 
 function authorizationDenial(
@@ -455,10 +443,7 @@ async function authorizeToolDispatch(
       : executionContextSchema.parse(resolvedExecutionContext);
     const context = executionContext
       ? { principal: executionContext.principal, scope: executionContext.scope }
-      : (await authorization.resolveContext?.(config)) ??
-        (process.env.NODE_ENV === "development"
-          ? createDevelopmentAuthorizationContext()
-          : null);
+      : (await authorization.resolveContext?.(config)) ?? null;
     if (context === null) return authorizationDenial("AUTHORIZATION_UNAVAILABLE");
     const correlation = executionContext ?? resolveDecisionCorrelation(config);
     const request: AuthorizationRequest = {
@@ -473,8 +458,7 @@ async function authorizeToolDispatch(
       await authorization.decisionStore.record({
         request,
         decision,
-        policyVersion:
-          authorization.policyVersion ?? DEFAULT_AUTHORIZATION_POLICY_VERSION,
+        policyVersion: authorization.policyVersion,
         ...(executionContext ? { executionContext } : {}),
         ...correlation,
       });
@@ -492,25 +476,28 @@ async function authorizeToolDispatch(
       await authorization.decisionStore.record({
         request,
         decision: confirmationDecision,
-        policyVersion:
-          authorization.policyVersion ?? DEFAULT_AUTHORIZATION_POLICY_VERSION,
+        policyVersion: authorization.policyVersion,
         ...(executionContext ? { executionContext } : {}),
         ...correlation,
       });
-      await authorization.onRequireConfirmation?.(
+      const descriptor = await authorization.onRequireConfirmation?.(
         confirmationDecision,
-        request
+        request,
+        executionContext
       );
-      return authorizationDenial(
-        confirmationDecision.reasonCode,
-        confirmationDecision.decisionId
-      );
+      if (descriptor === undefined) {
+        return authorizationDenial("AUTHORIZATION_UNAVAILABLE");
+      }
+      return {
+        type: "confirmation_required",
+        decisionId: confirmationDecision.decisionId,
+        descriptor,
+      };
     }
     await authorization.decisionStore.record({
       request,
       decision,
-      policyVersion:
-        authorization.policyVersion ?? DEFAULT_AUTHORIZATION_POLICY_VERSION,
+      policyVersion: authorization.policyVersion,
       ...(executionContext ? { executionContext } : {}),
       ...correlation,
     });
@@ -596,7 +583,7 @@ export class GovernanceExecutor<TResult = unknown>
 
     if (!authorizationAlreadyEvaluated) {
       const authorizationOutcome = await this.authorizeTyped(input, config);
-      if (authorizationOutcome.type === "denied_by_authorization") {
+      if (authorizationOutcome.type !== "authorized") {
         return authorizationOutcome;
       }
     }
@@ -655,7 +642,12 @@ export class GovernanceExecutor<TResult = unknown>
         outcomeType: outcome.type,
         ...(outcome.type === "cancelled"
           ? { dispatchState: outcome.dispatchState }
-          : { errorCode: outcome.errorCode }),
+          : {
+              errorCode:
+                outcome.type === "confirmation_required"
+                  ? "REQUIRES_CONFIRMATION"
+                  : outcome.errorCode,
+            }),
       });
       await recordMetric("tool.invoke.failure.count", {
         toolName: this.sourceTool.name,
@@ -665,6 +657,12 @@ export class GovernanceExecutor<TResult = unknown>
       return outcome;
     }
   }
+}
+
+export function getGovernedToolExecutor(
+  tool: StructuredToolInterface
+): GovernedToolExecutor<unknown, unknown> | null {
+  return governedExecutors.get(tool as object) ?? null;
 }
 
 function wrapToolWithGovernance(
@@ -692,6 +690,7 @@ function wrapToolWithGovernance(
   wrappedTool.call = governedInvoke as StructuredToolInterface["call"];
 
   governedTools.add(wrappedTool as object);
+  governedExecutors.set(wrappedTool as object, executor);
   return wrappedTool;
 }
 
