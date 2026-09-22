@@ -13,7 +13,11 @@ import type {
   PrepareSideEffectResult,
   ToolExecutionRecord,
 } from "./business-effect-ledger.js";
-import type { GovernedToolExecutor } from "./governed-outcome.js";
+import type {
+  GovernedAuthorizationOutcome,
+  GovernedToolExecutor,
+} from "./governed-outcome.js";
+import { createConfirmationRequiredDescriptor } from "../authorization/confirmation.js";
 import { createReplayKey, hashBusinessEffectKey } from "./identity.js";
 import type { ResultReferenceStore } from "./result-reference-store.js";
 import type { SideEffectToolDescriptor } from "./side-effect-descriptor.js";
@@ -128,14 +132,7 @@ function createLedger() {
 }
 
 function createPreflightExecutor(
-  authorizationOutcomes: Array<
-    | { type: "authorized"; decisionId?: string }
-    | {
-        type: "denied_by_authorization";
-        errorCode: string;
-        decisionId: string;
-      }
-  >,
+  authorizationOutcomes: GovernedAuthorizationOutcome[],
   outcomes: Array<
     Awaited<
       ReturnType<GovernedToolExecutor<TestInput, TestResult>["executeTyped"]>
@@ -443,6 +440,39 @@ describe("ToolExecutionRunner", () => {
       errorCode: "MISSING_ROLE_SCOPE_GRANT",
       toolExecutionId: "execution-1",
       decisionId: "decision-deny",
+    });
+    expect(ledger.recordAttempt).not.toHaveBeenCalled();
+    expect(executor.executeAuthorizedTyped).not.toHaveBeenCalled();
+  });
+
+  it("does not create or retry a physical attempt while confirmation is pending", async () => {
+    const ledger = createLedger();
+    const descriptor = createConfirmationRequiredDescriptor({
+      decisionId: "decision-confirm",
+      executionContext,
+      action: "tool:write",
+      toolName: "side_effect_tool",
+      resource: {
+        resourceType: "record",
+        resourceId: "resource-1",
+        tenantId: executionContext.scope.tenantId,
+      },
+      policyVersion: "runtime-authorization-v1",
+      timeoutMs: 60_000,
+    });
+    const executor = createPreflightExecutor(
+      [{ type: "confirmation_required", decisionId: descriptor.decisionId, descriptor }],
+      []
+    );
+    const runner = createRunner(ledger, createResultStore());
+
+    await expect(
+      runner.execute(runInput(executor, createDescriptor(), createBudget(3)))
+    ).resolves.toEqual({
+      type: "failed",
+      errorCode: "REQUIRES_CONFIRMATION",
+      toolExecutionId: "execution-1",
+      decisionId: "decision-confirm",
     });
     expect(ledger.recordAttempt).not.toHaveBeenCalled();
     expect(executor.executeAuthorizedTyped).not.toHaveBeenCalled();
