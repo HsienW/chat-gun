@@ -16,6 +16,9 @@ import {
   type McpToolRiskDescriptorV1,
 } from "./authorization/mcp-risk.js";
 import { ToolRiskRegistry } from "../runtime/authorization/tool-risk.js";
+import type { RuntimeToolDescriptorRegistry } from "../runtime/tool-dispatch/runtime-tool-descriptor.js";
+import type { RuntimeToolDispatchPipeline } from "../runtime/tool-dispatch/pipeline.js";
+import { registerMcpRuntimeToolDescriptors } from "./production-runtime-tool-descriptors.js";
 
 type StdioMcpServerConfig = {
   transport: "stdio";
@@ -35,6 +38,11 @@ type McpJsonSchema = {
 };
 
 const activeClients: Client[] = [];
+
+export interface LoadMcpToolsOptions {
+  descriptorRegistry?: RuntimeToolDescriptorRegistry;
+  dispatchPipeline?: RuntimeToolDispatchPipeline;
+}
 
 function getNpxCommand(): string {
   return process.platform === "win32" ? "npx.cmd" : "npx";
@@ -301,7 +309,8 @@ async function loadStdioServerTools(
 
 export async function loadMcpTools(
   authorization: ToolAuthorizationGovernanceConfig,
-  riskDescriptors: readonly McpToolRiskDescriptorV1[]
+  riskDescriptors: readonly McpToolRiskDescriptorV1[],
+  options: LoadMcpToolsOptions = {}
 ): Promise<StructuredToolInterface[]> {
   const configs = getMcpServerConfigs();
   const serverNames = Object.keys(configs);
@@ -321,14 +330,31 @@ export async function loadMcpTools(
       toolNames: tools.map(({ name }) => name),
     }));
   assertUniqueExposedMcpToolNames(exposedServers);
+  if (options.dispatchPipeline !== undefined && options.descriptorRegistry === undefined) {
+    throw new Error("MCP dispatch pipeline requires a runtime descriptor registry");
+  }
+  if (options.descriptorRegistry !== undefined) {
+    registerMcpRuntimeToolDescriptors(
+      options.descriptorRegistry,
+      loadedServers,
+      riskDescriptors
+    );
+  }
   const loadedRiskRegistry = new ToolRiskRegistry(
     createMcpToolRiskPoliciesForExposedTools(exposedServers, riskDescriptors),
     { unregisteredToolDefault: "deny" }
   );
   const tools = loadedServers.flatMap(({ tools: serverTools }) => serverTools);
+  const dispatchPipeline = options.dispatchPipeline;
   const governedTools = applyToolGovernance(tools, {
     ...authorization,
     riskRegistry: loadedRiskRegistry,
+  }, {
+    createExecutor:
+      dispatchPipeline === undefined
+        ? undefined
+        : (tool, defaultExecutor) =>
+            dispatchPipeline.createExecutor(tool.name, defaultExecutor),
   });
   await auditToolLoad("mcp", governedTools);
   return governedTools;

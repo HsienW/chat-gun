@@ -16,6 +16,11 @@ import {
   recordAttempt as recordBudgetAttempt,
   type RetryBudget,
 } from "../retry/retry-budget.js";
+import { classifyError } from "../retry/error-classification.js";
+import {
+  DEFAULT_RETRY_POLICY,
+  type RetryPolicy,
+} from "../retry/retry-policy.js";
 import type {
   BusinessEffectLedger,
   PrepareSideEffectResult,
@@ -53,7 +58,8 @@ export type ToolExecutionRunResult<TResult> =
         | "SIDE_EFFECT_RESULT_NOT_REUSABLE"
         | "SIDE_EFFECT_COMMITTED_RESULT_UNAVAILABLE"
         | "SIDE_EFFECT_RECONCILIATION_REQUIRED"
-        | "SIDE_EFFECT_PERSISTENCE_UNCERTAIN";
+        | "SIDE_EFFECT_PERSISTENCE_UNCERTAIN"
+        | "SIDE_EFFECT_OUTPUT_VALIDATION_FAILED";
       toolExecutionId?: string;
     }
   | {
@@ -77,6 +83,8 @@ export interface ToolExecutionRunInput<TInput, TResult> {
   executor: GovernedToolExecutor<TInput, TResult>;
   descriptor?: SideEffectToolDescriptor<TInput, TResult>;
   retryBudget?: RetryBudget;
+  retryPolicy?: RetryPolicy;
+  validateResult?: (result: TResult) => boolean;
   signal?: AbortSignal;
   requestId?: string;
   threadId?: string;
@@ -139,6 +147,30 @@ function assertDescriptorMatchesIdentity<TInput, TResult>(
     descriptor.toolVersion !== identity.toolVersion
   ) {
     throw new Error("Side-effect descriptor does not match tool identity");
+  }
+}
+
+function isResultValid<TResult>(
+  validator: ((result: TResult) => boolean) | undefined,
+  result: TResult
+): boolean {
+  if (validator === undefined) {
+    return true;
+  }
+  try {
+    return validator(result);
+  } catch {
+    return false;
+  }
+}
+
+async function ignoreObservabilityFailure(
+  operation: () => Promise<void> | void
+): Promise<void> {
+  try {
+    await operation();
+  } catch {
+    // Export failures must not rewrite or erase the durable execution outcome.
   }
 }
 
@@ -274,11 +306,17 @@ export class ToolExecutionRunner {
       businessEffectKey,
       toolExecutionId: prepareResult.execution.toolExecutionId,
     };
-    await this.observability.auditLogger.record("tool.side_effect.prepared", {
-      resourceType: "tool_execution",
-      resourceId: prepareResult.execution.toolExecutionId,
-      ...correlation,
-    }, input.executionContext);
+    await ignoreObservabilityFailure(() =>
+      this.observability.auditLogger.record(
+        "tool.side_effect.prepared",
+        {
+          resourceType: "tool_execution",
+          resourceId: prepareResult.execution.toolExecutionId,
+          ...correlation,
+        },
+        input.executionContext
+      )
+    );
     try {
       await this.ledger.transitionExecution({
         toolExecutionId: prepareResult.execution.toolExecutionId,
@@ -356,16 +394,23 @@ export class ToolExecutionRunner {
       scope: input.scope,
       toolVersion: input.descriptor.toolVersion,
     });
-    return result === null
+    if (result === null) {
+      return {
+        type: "deferred",
+        errorCode: "SIDE_EFFECT_RESULT_NOT_REUSABLE",
+        toolExecutionId: execution.toolExecutionId,
+      };
+    }
+    return isResultValid(input.validateResult, result)
       ? {
-          type: "deferred",
-          errorCode: "SIDE_EFFECT_RESULT_NOT_REUSABLE",
-          toolExecutionId: execution.toolExecutionId,
-        }
-      : {
           type: "succeeded",
           source,
           result,
+          toolExecutionId: execution.toolExecutionId,
+        }
+      : {
+          type: "deferred",
+          errorCode: "SIDE_EFFECT_OUTPUT_VALIDATION_FAILED",
           toolExecutionId: execution.toolExecutionId,
         };
   }
@@ -512,11 +557,15 @@ export class ToolExecutionRunner {
         outcomeType: outcome.type,
         count: 1,
       };
-      if (input.executionContext) {
-        await this.observability.recordMetric("tool.side_effect.outcome", metric, input.executionContext);
-      } else {
-        await this.observability.recordMetric("tool.side_effect.outcome", metric);
-      }
+      await ignoreObservabilityFailure(() =>
+        input.executionContext
+          ? this.observability.recordMetric(
+              "tool.side_effect.outcome",
+              metric,
+              input.executionContext
+            )
+          : this.observability.recordMetric("tool.side_effect.outcome", metric)
+      );
       if (outcome.type === "succeeded") {
         return this.persistCommittedResult(
           input,
@@ -551,8 +600,17 @@ export class ToolExecutionRunner {
         };
       }
       if (outcome.type === "failed_not_committed") {
+        const classifiedError = classifyError({
+          code: outcome.errorCode,
+          message: outcome.errorCode,
+        });
+        const retryPolicy = input.retryPolicy ?? DEFAULT_RETRY_POLICY;
+        const categoryAllowsRetry =
+          classifiedError.retryable &&
+          retryPolicy.retryableCategories.includes(classifiedError.category);
         const canRetry = retryBudget
-          ? checkBudget(retryBudget, input.signal).canRetry
+          ? categoryAllowsRetry &&
+            checkBudget(retryBudget, input.signal).canRetry
           : false;
         if (canRetry) continue;
         await this.transitionOrDefer(toolExecutionId, "executing", "failed");
@@ -701,6 +759,7 @@ export class ToolExecutionRunner {
     result: TResult,
     source: "live" | "reconciled"
   ): Promise<ToolExecutionRunResult<TResult>> {
+    const outputIsValid = isResultValid(input.validateResult, result);
     try {
       const reference = await this.resultStore.save({
         toolExecutionId,
@@ -726,22 +785,47 @@ export class ToolExecutionRunner {
       const businessEffectKey = hashBusinessEffectKey(
         input.descriptor.deriveBusinessEffectKey(input.input, input.scope)
       );
-      await this.observability.auditLogger.record("tool.side_effect.committed", {
-        resourceType: "tool_execution",
-        resourceId: toolExecutionId,
-        requestId: input.requestId,
-        threadId: input.threadId,
-        runId: input.identity.runId,
-        replayKey,
-        businessEffectKey,
-        toolExecutionId,
-        ...(reference.externalSystemNamespace
-          ? { externalSystemNamespace: reference.externalSystemNamespace }
-          : {}),
-        ...(reference.externalOperationId
-          ? { externalOperationId: reference.externalOperationId }
-          : {}),
-      }, input.executionContext);
+      await ignoreObservabilityFailure(() =>
+        this.observability.auditLogger.record("tool.side_effect.committed", {
+          resourceType: "tool_execution",
+          resourceId: toolExecutionId,
+          requestId: input.requestId,
+          threadId: input.threadId,
+          runId: input.identity.runId,
+          replayKey,
+          businessEffectKey,
+          toolExecutionId,
+          ...(reference.externalSystemNamespace
+            ? { externalSystemNamespace: reference.externalSystemNamespace }
+            : {}),
+          ...(reference.externalOperationId
+            ? { externalOperationId: reference.externalOperationId }
+            : {}),
+        }, input.executionContext)
+      );
+      if (!outputIsValid) {
+        await ignoreObservabilityFailure(() =>
+          this.observability.auditLogger.record(
+            "tool.side_effect.output_validation_failed",
+            {
+              resourceType: "tool_execution",
+              resourceId: toolExecutionId,
+              requestId: input.requestId,
+              threadId: input.threadId,
+              runId: input.identity.runId,
+              replayKey,
+              businessEffectKey,
+              toolExecutionId,
+            },
+            input.executionContext
+          )
+        );
+        return {
+          type: "deferred",
+          errorCode: "SIDE_EFFECT_OUTPUT_VALIDATION_FAILED",
+          toolExecutionId,
+        };
+      }
       return { type: "succeeded", source, result, toolExecutionId };
     } catch {
       return {

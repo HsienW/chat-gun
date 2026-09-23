@@ -380,6 +380,63 @@ describe("ToolExecutionRunner", () => {
     });
   });
 
+  it("commits effect truth and parks repair when mutation output validation fails", async () => {
+    const ledger = createLedger();
+    const resultStore = createResultStore();
+    const auditLogger: AuditLogger = {
+      record: vi.fn(async () => undefined),
+    };
+    const executor = createExecutor([
+      { type: "succeeded", result: { operationId: "invalid-result" } },
+    ]);
+    const runner = createRunner(ledger, resultStore, { auditLogger });
+
+    await expect(
+      runner.execute({
+        ...runInput(executor, createDescriptor(), createBudget(3)),
+        validateResult: () => false,
+      })
+    ).resolves.toEqual({
+      type: "deferred",
+      errorCode: "SIDE_EFFECT_OUTPUT_VALIDATION_FAILED",
+      toolExecutionId: "execution-1",
+    });
+    expect(executor.executeTyped).toHaveBeenCalledOnce();
+    expect(resultStore.save).toHaveBeenCalledOnce();
+    expect(ledger.commitExecutionAndBusinessEffect).toHaveBeenCalledOnce();
+    expect(auditLogger.record).toHaveBeenCalledWith(
+      "tool.side_effect.output_validation_failed",
+      expect.objectContaining({ toolExecutionId: "execution-1" }),
+      undefined
+    );
+  });
+
+  it("preserves a committed result when observability exporters throw synchronously", async () => {
+    const ledger = createLedger();
+    const executor = createExecutor([
+      { type: "succeeded", result: { operationId: "operation-1" } },
+    ]);
+    const runner = createRunner(ledger, createResultStore(), {
+      auditLogger: {
+        record: vi.fn(() => {
+          throw new Error("audit unavailable");
+        }),
+      },
+      recordMetric: vi.fn(() => {
+        throw new Error("metric unavailable");
+      }),
+    });
+
+    await expect(
+      runner.execute(runInput(executor, createDescriptor()))
+    ).resolves.toMatchObject({
+      type: "succeeded",
+      source: "live",
+      result: { operationId: "operation-1" },
+    });
+    expect(ledger.commitExecutionAndBusinessEffect).toHaveBeenCalledOnce();
+  });
+
   it("links an allow decision before creating a physical attempt", async () => {
     const ledger = createLedger();
     const executor = createPreflightExecutor(
@@ -509,7 +566,7 @@ describe("ToolExecutionRunner", () => {
           decisionId: "decision-deny",
         },
       ],
-      [{ type: "failed_not_committed", errorCode: "PROVIDER_REJECTED" }]
+      [{ type: "failed_not_committed", errorCode: "TIMEOUT" }]
     );
     const runner = createRunner(ledger, createResultStore());
 
@@ -525,6 +582,27 @@ describe("ToolExecutionRunner", () => {
     expect(ledger.recordAttempt).toHaveBeenCalledOnce();
     expect(executor.executeAuthorizedTyped).toHaveBeenCalledOnce();
     expect(executor.authorizeTyped).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a business rejection even when budget remains", async () => {
+    const ledger = createLedger();
+    const executor = createPreflightExecutor(
+      [{ type: "authorized", decisionId: "decision-allow" }],
+      [{ type: "failed_not_committed", errorCode: "BUSINESS_REJECTED" }]
+    );
+    const runner = createRunner(ledger, createResultStore());
+
+    await expect(
+      runner.execute(
+        runInput(executor, createDescriptor(), createBudget(3))
+      )
+    ).resolves.toMatchObject({
+      type: "failed",
+      errorCode: "BUSINESS_REJECTED",
+    });
+    expect(ledger.recordAttempt).toHaveBeenCalledOnce();
+    expect(executor.executeAuthorizedTyped).toHaveBeenCalledOnce();
+    expect(executor.authorizeTyped).toHaveBeenCalledOnce();
   });
 
   it("retries a reconciled not_committed outcome with a new physical attempt", async () => {

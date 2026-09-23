@@ -48,6 +48,13 @@ export interface GovernedTool {
   policy: ToolPolicy;
 }
 
+export interface ToolGovernanceOptions {
+  createExecutor?: (
+    tool: StructuredToolInterface,
+    defaultExecutor: GovernedToolExecutor<unknown, unknown>
+  ) => GovernedToolExecutor<unknown, unknown>;
+}
+
 const DEFAULT_TOOL_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_INPUT_CHARS = 8_000;
 const DEFAULT_MAX_OUTPUT_CHARS = 24_000;
@@ -668,7 +675,8 @@ export function getGovernedToolExecutor(
 function wrapToolWithGovernance(
   sourceTool: StructuredToolInterface,
   policy: ToolPolicy,
-  authorization?: ToolAuthorizationGovernanceConfig
+  authorization?: ToolAuthorizationGovernanceConfig,
+  options?: ToolGovernanceOptions
 ): StructuredToolInterface {
   if (governedTools.has(sourceTool as object)) {
     return sourceTool;
@@ -678,7 +686,9 @@ function wrapToolWithGovernance(
     Object.create(Object.getPrototypeOf(sourceTool)) as StructuredToolInterface,
     sourceTool
   );
-  const executor = new GovernanceExecutor(sourceTool, policy, authorization);
+  const defaultExecutor = new GovernanceExecutor(sourceTool, policy, authorization);
+  const executor =
+    options?.createExecutor?.(sourceTool, defaultExecutor) ?? defaultExecutor;
   const governedInvoke = async (input: unknown, config?: unknown): Promise<unknown> => {
     const outcome = await executor.executeTyped(input, config);
     return outcome.type === "succeeded"
@@ -696,13 +706,14 @@ function wrapToolWithGovernance(
 
 export function applyToolGovernance(
   tools: StructuredToolInterface[],
-  authorization?: ToolAuthorizationGovernanceConfig
+  authorization?: ToolAuthorizationGovernanceConfig,
+  options?: ToolGovernanceOptions
 ): StructuredToolInterface[] {
   return tools
     .map((tool) => ({ tool, policy: defaultToolPolicy(tool.name) }))
     .filter((entry) => entry.policy.enabled)
     .map((entry) =>
-      wrapToolWithGovernance(entry.tool, entry.policy, authorization)
+      wrapToolWithGovernance(entry.tool, entry.policy, authorization, options)
     );
 }
 
