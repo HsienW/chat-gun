@@ -60,6 +60,7 @@ interface RuntimeToolDescriptor<TInput, TOutput> {
 - `taskStepAdapter`：Task/Step start/complete 與 event 發射。
 - `compensation`：`SagaOrchestrator`／`CompensationRegistry` 供 ambiguous／parking 分支使用。
 - `observability`：audit、metric、span。
+- 模組位置：composition root 放 `backend/src/runtime/tool-dispatch/pipeline.ts`；`RuntimeToolDescriptor` 型別與 registry 放 `backend/src/runtime/tool-dispatch/runtime-tool-descriptor.ts`（與 `side-effect`／`retry`／`compensation` 平級，不塞入 platform 層）。
 
 composition root MUST 於 dispatch 前驗證所有 mandatory dependency 存在；缺任一 dependency 即 fail-closed，不得以空值降級。
 
@@ -100,6 +101,30 @@ Tool Call Decode（pipeline 接縫，X15 填 detailed decode）
 ### Structured tool result 版本化
 
 - 新增 versioned structured tool result envelope（`schemaVersion` + stable kind + correlation + payload），取代「raw result + legacy error string」。
+- envelope 介面（design 層契約，實作細節於 T6 定稿）：
+
+```typescript
+interface StructuredToolResultEnvelope<TResult = unknown> {
+  schemaVersion: "1.0";          // major.minor；unknown future version 由 presentation adapter 依相容策略降級，不硬編碼版本白名單
+  kind: "tool_result";            // stable kind，discriminated union 的判別欄位
+  correlation: {
+    requestId: string;
+    threadId: string;
+    runId: string;
+    toolCallId: string;
+    stepId?: string;
+  };
+  tool: {
+    name: string;
+    version: string;
+    riskTier: ToolRiskTier;
+    readOnly: boolean;
+  };
+  outcome: GovernedToolOutcome<TResult>; // 非 success 亦為 typed outcome，legacy string 不入此欄
+  emittedAt: string;             // ISO-8601
+}
+```
+
 - `GovernedToolOutcome.succeeded` 的 raw result 先過 `outputSchema`，再包進 envelope；非 success 一律以 typed outcome 進入 envelope，legacy string 僅由 presentation adapter 產生（frontend fallback／舊 client 相容），不承擔機讀語意。
 - Tool result 於 model feedback、Task event、frontend fallback、audit 全程維持 structured，不得以 legacy string 反推狀態。
 
@@ -116,6 +141,48 @@ Tool Call Decode（pipeline 接縫，X15 填 detailed decode）
 - 依 descriptor `isConcurrencySafe` 與 `isReadOnly` 分類：mutation／unknown → serial；read-only 且 `isConcurrencySafe(input)` → 可 bounded concurrent（上限由 config 提供）。
 - 分類拋錯或 input validation 失敗 → conservative serial/no-dispatch，不得提升 concurrency。
 - 本 Change 不實作 rate-limit／circuit-breaker／`Retry-After` 完整政策（X16）；僅保留 scheduling 階段的結構與分類點。
+
+## LangGraph Integration（與 LangGraph 的接線模型）
+
+生產環境目前**不使用 LangChain `ToolNode`**；三條 dispatch 路徑的接線各不相同，因此 pipeline 的接線點在「governed executor 表面」，而非取代 `ToolNode` 或新增 graph node：
+
+| Agent | 現行接線 | 實際 dispatch 入口 |
+|---|---|---|
+| deep-researcher | `loadAgentTools` → governed `StructuredToolInterface` → node 內 `selectedTool.invoke(input, toolConfig)`（`deep-researcher.ts:678`） | `GovernanceExecutor.executeTyped`（`tool-governance.ts:510`） |
+| math-agent | node 內 raw `calculatorTool.invoke({expression})`（`math-agent.ts:47`），**完全繞過 governance** | 無（直接呼叫 raw tool） |
+| mcp-agent | `llm.bindTools` → 自訂 graph nodes（authorizationGate／authorizationConfirmation／physicalDispatch） | `physicalDispatch` → `getGovernedToolExecutor(tool).executeAuthorizedTyped`（`confirmation-graph.ts:187-216`） |
+
+### 接線機制：pipeline dispatcher 相容既有 `GovernedToolExecutor` 表面
+
+- pipeline 的 dispatcher 實作與既有 `GovernedToolExecutor` 相容的表面（`authorizeTyped`／`executeTyped`／`executeAuthorizedTyped`），並在既有注入點 `wrapToolWithGovernance`／`getGovernedToolExecutor` 上，把背後的 executor 由 `GovernanceExecutor` 換成 pipeline dispatcher。
+- 如此 LangGraph 既有 graph 拓撲、node 邊界與 message 流程不變；只有 executor 內部路徑擴充為完整 pipeline（input schema → descriptor resolution → authorization/HITL → scheduling → Task/Step → side-effect prepare → retry → dispatch → output schema → reconcile → compensate → structured result）。
+- 各 agent 不需改 graph 結構，只把 dispatch 入口重導向 pipeline：
+  - **math-agent**：`calculatorTool.invoke` → `dispatcher.executeTyped(...)`（read-only 分支），移除 raw tool import。
+  - **deep-researcher**：`wrapToolWithGovernance` 的 wrapped `.invoke` 改委派 pipeline dispatcher；node 內 `selectedTool.invoke` 原樣保留。
+  - **mcp-agent**：保留 authorizationGate／authorizationConfirmation／physicalDispatch 圖結構；`physicalDispatch` 的 `getGovernedToolExecutor(tool).executeAuthorizedTyped` 改指向 pipeline dispatcher 的 authorized-execute 入口，不保留與 dispatcher 並行的第二套執行邏輯。
+
+### model → pipeline → result → model 訊息流
+
+```text
+model 產出 tool_call（bind_tools，或 math-agent 自行抽取 expression）
+  → Agent node 解出 toolName/toolCallId/input（即 pipeline 的 Tool Call Decode 接縫）
+    → pipeline dispatcher.execute{Typed,AuthorizedTyped}(input, executionContext)
+      → structured GovernedToolOutcome（succeeded / rejected / denied / cancelled / ambiguous / confirmation_required …）
+    → node 包回 ToolMessage（或 math-agent 包 AIMessage）
+  → model 讀取 tool result 續行
+```
+
+- pipeline 只吃「已解碼的 tool_call + execution context」並回傳 structured outcome；不自行產生或消費 `ToolMessage`，message 包裝留在 node 層，避免 pipeline 綁定單一 graph 框架。
+
+### streaming／checkpoint／interrupt 語意
+
+- pipeline 在既有 graph node 內執行，因此 LangGraph 的 state checkpoint（node 前後快照）與 `interrupt()`（mcp-agent `authorizationConfirmation` 的 durable HITL）原樣保留，pipeline 不重複實作。
+- pipeline MUST 為 checkpoint-safe：所有暫存狀態（active tool call、pending 事件、reconcile 中間態）都從 `RunnableConfig`／canonical execution context（`requestId/threadId/runId/toolCallId/stepId`）推導，不寫入 module-level mutable state，不將不可序列化物件寫入 graph state。
+- 串流／事件：pipeline 經 observability port 發射 Task event／audit／trace，沿用既有 LangGraph event 流；durable replay／reconciliation 依賴未經 L 驗證的 checkpoint 行為，依 X11 標記「基於未驗證假設」。
+
+### 相容性主張的成立條件
+
+- 因接線點在 executor 表面、graph 拓撲不變，本 Change「additive、不變 Graph ID／route」的主張成立；若未來改採 `ToolNode` 取代或新增 dispatch node，則須重新評估此主張並更新本節。
 
 ## 分層設計
 
@@ -174,6 +241,6 @@ Browser → BFF（既有 proxy，原樣透傳）
 - **business-effect key 不穩定造成誤 commit／誤 replay**：`deriveBusinessEffectKey` 單一來源；缺 descriptor 註冊 fail-closed。
 - **ambiguous timeout 被誤 blind retry**：reconcile-first 強制，retry 只接 `not_committed` 或 external idempotency guarantee。
 - **mandatory dependency unavailable 被誤放行**：dispatch 前 fail-closed；fault-injection test。
-- **三條路徑遷移漏接**：architecture test 以 import/invoke 靜態攔截。
+- **三條路徑遷移漏接**：architecture test 以 import 靜態攔截 + runtime smoke（dispatcher instrumentation）雙層防護（見 T7）。
 - **structured envelope 與 legacy string 漂移**：versioned envelope 單一來源；contract fixture；frontend fallback 只讀 structured。
 - **durable replay/reconciliation 依賴未經 L 驗證的 checkpoint 行為**：依 X11 約束標記「基於未驗證假設」；deterministic + mock 證明契約，live 另列。
