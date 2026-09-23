@@ -9,6 +9,7 @@ import {
   defaultToolPolicy,
   GovernanceExecutor,
   GovernedDispatchError,
+  type GovernedToolExecutor,
   type ToolAuthorizationGovernanceConfig,
 } from "./tool-governance.js";
 import { ToolRiskRegistry, type ToolRiskPolicy } from "../runtime/authorization/tool-risk.js";
@@ -206,6 +207,30 @@ describe("GovernanceExecutor.executeTyped", () => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
     setOpikTracerForTests(undefined);
+  });
+
+  it("uses an injected governed executor without changing the wrapped tool contract", async () => {
+    vi.stubEnv("TOOL_AUDIT_ENABLED", "false");
+    const executeTyped = vi.fn().mockResolvedValue({
+      type: "succeeded" as const,
+      result: "pipeline-result",
+    });
+    const injectedExecutor: GovernedToolExecutor<unknown, unknown> = {
+      executeTyped,
+    };
+
+    const [governedTool] = applyToolGovernance(
+      [createEchoTool("raw-result")],
+      undefined,
+      {
+        createExecutor: () => injectedExecutor,
+      }
+    );
+
+    await expect(governedTool.invoke({ value: "valid" })).resolves.toBe(
+      "pipeline-result"
+    );
+    expect(executeTyped).toHaveBeenCalledWith({ value: "valid" }, undefined);
   });
 
   it("returns succeeded with the governed result", async () => {
