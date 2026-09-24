@@ -27,6 +27,25 @@ describe("inferErrorCode", () => {
     });
   });
 
+  it("maps Tool argument decode failures from their structured code", () => {
+    const error = Object.assign(new Error("safe failure"), {
+      name: "ToolArgumentDecodeError",
+      code: "provider_decode_failure",
+      decodeKind: "incomplete",
+    });
+
+    expect(inferErrorCode(error).code).toBe("provider_decode_failure");
+  });
+
+  it("maps provider envelope validation from its structured code", () => {
+    const error = Object.assign(new Error("safe envelope failure"), {
+      name: "ProviderEnvelopeValidationError",
+      code: "PROVIDER_ENVELOPE_INVALID",
+    });
+
+    expect(inferErrorCode(error).code).toBe("provider_envelope_invalid");
+  });
+
   it("keeps regex-like message text only as telemetry details", () => {
     const envelope = createErrorEnvelope(new Error("fetch failed timeout"), {
       source: "backend",

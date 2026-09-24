@@ -56,6 +56,8 @@ const PUBLIC_CAUSE_ERROR_CODES = new Set([
   "provider_http_error",
   "provider_request_validation_error",
   "llm_response_json_parse_failed",
+  "provider_envelope_invalid",
+  "provider_decode_failure",
   "timeout",
   "unknown_error",
 ]);
@@ -100,6 +102,28 @@ export function inferErrorCode(
 ): { code: string; details?: Record<string, unknown> } {
   const message = error instanceof Error ? error.message : String(error);
   const statusCode = getStructuredStatusCode(error);
+
+  if (
+    error !== null
+    && typeof error === "object"
+    && (
+      (error as { code?: unknown }).code === "provider_decode_failure"
+      || (error as { name?: unknown }).name === "ToolArgumentDecodeError"
+    )
+  ) {
+    return { code: "provider_decode_failure" };
+  }
+
+  if (
+    error !== null
+    && typeof error === "object"
+    && (
+      (error as { code?: unknown }).code === "PROVIDER_ENVELOPE_INVALID"
+      || (error as { name?: unknown }).name === "ProviderEnvelopeValidationError"
+    )
+  ) {
+    return { code: "provider_envelope_invalid" };
+  }
 
   if (error instanceof Error && error.name === "ProviderResponseParseError") {
     return { code: "llm_response_json_parse_failed" };

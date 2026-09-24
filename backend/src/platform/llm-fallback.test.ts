@@ -149,4 +149,45 @@ describe("FallbackChatModelInvoker", () => {
     await expect(model.invoke("ping")).rejects.toBe(refusal);
     expect(fallback).not.toHaveBeenCalled();
   });
+
+  it("does not fallback for a Tool argument decode failure", async () => {
+    const fallback = vi.fn(async () => new AIMessage("must not run"));
+    const decodeFailure = Object.assign(new Error("safe decode failure"), {
+      name: "ToolArgumentDecodeError",
+      code: "provider_decode_failure",
+      decodeKind: "incomplete",
+    });
+    const model = new FallbackChatModelInvoker(
+      [
+        { provider: "ccr", invoker: invoker(async () => Promise.reject(decodeFailure)) },
+        { provider: "qwen", invoker: invoker(fallback) },
+      ],
+      policy,
+      createObserver().observer
+    );
+
+    await expect(model.invoke("ping")).rejects.toBe(decodeFailure);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it("falls back for an invalid provider response envelope", async () => {
+    const invalidEnvelope = Object.assign(new Error("invalid envelope"), {
+      name: "ProviderEnvelopeValidationError",
+      code: "PROVIDER_ENVELOPE_INVALID",
+    });
+    const fallback = vi.fn(async () => new AIMessage("fallback success"));
+    const model = new FallbackChatModelInvoker(
+      [
+        { provider: "ccr", invoker: invoker(async () => Promise.reject(invalidEnvelope)) },
+        { provider: "qwen", invoker: invoker(fallback) },
+      ],
+      policy,
+      createObserver().observer
+    );
+
+    await expect(model.invoke("ping")).resolves.toMatchObject({
+      content: "fallback success",
+    });
+    expect(fallback).toHaveBeenCalledTimes(1);
+  });
 });
