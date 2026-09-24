@@ -22,6 +22,9 @@ export type AgentRuntimeConfig = {
   llmFallbackMaxAttempts: number;
   llmFallbackTimeoutMs: number;
   llmRepairStrategy: LlmRepairStrategy;
+  llmProviderResponseMaxBytes: number;
+  llmToolArgumentMaxBytes: number;
+  llmJsonMaxDepth: number;
   otelEnabled: boolean;
   otelServiceName: string;
   otelExporterEndpoint?: string;
@@ -45,6 +48,9 @@ export type AgentRuntimeConfig = {
 
 const DEFAULT_OPIK_HOST = "https://www.comet.com/opik/api";
 const DEFAULT_OPIK_PROJECT_NAME = "chat-gun";
+const DEFAULT_LLM_PROVIDER_RESPONSE_MAX_BYTES = 1_048_576;
+const DEFAULT_LLM_TOOL_ARGUMENT_MAX_BYTES = 65_536;
+const DEFAULT_LLM_JSON_MAX_DEPTH = 64;
 
 function readPositiveInt(name: string, fallback: number): number {
   const rawValue = getEnv(name);
@@ -145,6 +151,18 @@ export function getAgentRuntimeConfig(): AgentRuntimeConfig {
     llmFallbackMaxAttempts: readPositiveInt("LLM_FALLBACK_MAX_ATTEMPTS", 3),
     llmFallbackTimeoutMs: readPositiveInt("LLM_FALLBACK_TIMEOUT_MS", 30_000),
     llmRepairStrategy: readRepairStrategy(),
+    llmProviderResponseMaxBytes: readPositiveInt(
+      "LLM_PROVIDER_RESPONSE_MAX_BYTES",
+      DEFAULT_LLM_PROVIDER_RESPONSE_MAX_BYTES
+    ),
+    llmToolArgumentMaxBytes: readPositiveInt(
+      "LLM_TOOL_ARGUMENT_MAX_BYTES",
+      DEFAULT_LLM_TOOL_ARGUMENT_MAX_BYTES
+    ),
+    llmJsonMaxDepth: readPositiveInt(
+      "LLM_JSON_MAX_DEPTH",
+      DEFAULT_LLM_JSON_MAX_DEPTH
+    ),
     otelEnabled: readBoolean("OTEL_ENABLED", false),
     otelServiceName:
       getEnv("OTEL_SERVICE_NAME").trim() || "chat-gun",

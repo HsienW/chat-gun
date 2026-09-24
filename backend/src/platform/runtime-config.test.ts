@@ -116,6 +116,45 @@ describe("getAgentRuntimeConfig fallback", () => {
   });
 });
 
+describe("getAgentRuntimeConfig JSON decode limits", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("uses separate bounded defaults for provider responses and tool arguments", () => {
+    vi.stubEnv("LLM_PROVIDER_RESPONSE_MAX_BYTES", "");
+    vi.stubEnv("LLM_TOOL_ARGUMENT_MAX_BYTES", "");
+    vi.stubEnv("LLM_JSON_MAX_DEPTH", "");
+
+    const config = getAgentRuntimeConfig();
+    expect(config.llmProviderResponseMaxBytes).toBe(1_048_576);
+    expect(config.llmToolArgumentMaxBytes).toBe(65_536);
+    expect(config.llmJsonMaxDepth).toBe(64);
+  });
+
+  it("reads valid JSON decode limits", () => {
+    vi.stubEnv("LLM_PROVIDER_RESPONSE_MAX_BYTES", "2048");
+    vi.stubEnv("LLM_TOOL_ARGUMENT_MAX_BYTES", "1024");
+    vi.stubEnv("LLM_JSON_MAX_DEPTH", "32");
+
+    const config = getAgentRuntimeConfig();
+    expect(config.llmProviderResponseMaxBytes).toBe(2_048);
+    expect(config.llmToolArgumentMaxBytes).toBe(1_024);
+    expect(config.llmJsonMaxDepth).toBe(32);
+  });
+
+  it("falls back when JSON decode limits are invalid", () => {
+    vi.stubEnv("LLM_PROVIDER_RESPONSE_MAX_BYTES", "0");
+    vi.stubEnv("LLM_TOOL_ARGUMENT_MAX_BYTES", "not-a-number");
+    vi.stubEnv("LLM_JSON_MAX_DEPTH", "-1");
+
+    const config = getAgentRuntimeConfig();
+    expect(config.llmProviderResponseMaxBytes).toBe(1_048_576);
+    expect(config.llmToolArgumentMaxBytes).toBe(65_536);
+    expect(config.llmJsonMaxDepth).toBe(64);
+  });
+});
+
 describe("getAgentRuntimeConfig tracing", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
