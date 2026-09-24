@@ -78,6 +78,68 @@ const VERDICT_TRANSITIONS = {
   },
 };
 
+const STAGE_VERDICT_TRANSITIONS = {
+  "review-plan": {
+    APPROVE: {
+      currentPhase: "PLAN_APPROVED",
+      currentOwner: "CCR",
+      reviewPassed: true,
+      handoffStatus: "COMPLETED",
+    },
+    COMMENT_ONLY: {
+      currentPhase: "PLAN_APPROVED",
+      currentOwner: "CCR",
+      reviewPassed: true,
+      handoffStatus: "COMPLETED",
+    },
+    REQUEST_CHANGES: {
+      currentPhase: "PLAN_DRAFT",
+      currentOwner: "CCR",
+      reviewPassed: false,
+      handoffStatus: "COMPLETED",
+    },
+    INCOMPLETE: {
+      currentPhase: "INCOMPLETE",
+      currentOwner: "CCR",
+      reviewPassed: false,
+      handoffStatus: "FAILED",
+    },
+  },
+  "review-result": {
+    REQUEST_CHANGES: {
+      currentPhase: "CHANGES_REQUESTED",
+      currentOwner: "Codex",
+      reviewPassed: false,
+      handoffStatus: "COMPLETED",
+    },
+  },
+};
+
+function resolveTransition(verdict, stage) {
+  const stageOverride = STAGE_VERDICT_TRANSITIONS[stage]?.[verdict];
+  if (stageOverride) return stageOverride;
+  const fallback = VERDICT_TRANSITIONS[verdict];
+  if (!fallback) throw new Error(`Unknown verdict: ${verdict}`);
+  return fallback;
+}
+
+function buildStageHandoff(verdict, stage) {
+  if (stage === "review-plan") {
+    if (verdict === "REQUEST_CHANGES") {
+      return { stage: "plan-draft", from: "Qwen", to: "CCR", status: "PENDING" };
+    }
+    if (verdict === "APPROVE" || verdict === "COMMENT_ONLY") {
+      return { stage: "apply-change", from: "CCR", to: "Codex", status: "PENDING" };
+    }
+  }
+  if (stage === "review-result") {
+    if (verdict === "REQUEST_CHANGES") {
+      return { stage: "fix-from-review", from: "Qwen", to: "Codex", status: "PENDING" };
+    }
+  }
+  return null;
+}
+
 export function extractJsonObjectFromOutput(output) {
   if (typeof output !== "string" || output.trim().length === 0) {
     throw new Error("Qwen stdout is empty; no review_result JSON found.");
@@ -221,11 +283,9 @@ export async function captureQwenReviewResult({
 
 function applyVerdictTransition(currentState, reviewResult, { changeId, runId, relativePath, now }) {
   const verdict = reviewResult.payload.verdict;
-  const transition = VERDICT_TRANSITIONS[verdict];
-
-  if (!transition) {
-    throw new Error(`Unknown verdict: ${verdict}`);
-  }
+  const stage = reviewResult.stage;
+  const transition = resolveTransition(verdict, stage);
+  const stageHandoff = buildStageHandoff(verdict, stage);
 
   return {
     ...currentState,
@@ -242,10 +302,19 @@ function applyVerdictTransition(currentState, reviewResult, { changeId, runId, r
         relativePath,
       },
     },
-    latestHandoff: {
-      ...currentState.latestHandoff,
-      status: transition.handoffStatus,
-    },
+    latestHandoff: stageHandoff
+      ? {
+          handoffId: `handoff-${changeId}-${stageHandoff.from.toLowerCase()}-to-${stageHandoff.to.toLowerCase()}-${stageHandoff.stage}-${Date.now()}`,
+          stage: stageHandoff.stage,
+          from: stageHandoff.from,
+          to: stageHandoff.to,
+          reason: `Qwen ${stage} verdict=${verdict}; ${verdict === "REQUEST_CHANGES" ? "退回修訂" : "推進下一阶段"}`,
+          status: stageHandoff.status,
+        }
+      : {
+          ...currentState.latestHandoff,
+          status: transition.handoffStatus,
+        },
     gateStatus: {
       ...currentState.gateStatus,
       reviewPassed: transition.reviewPassed,
@@ -277,7 +346,7 @@ function buildBlockerEntries(reviewResult, changeId, runId, existingBlockers) {
 
   for (const finding of reviewResult.payload.findings.major) {
     entries.push({
-      severity: "Blocker",
+      severity: "Major",
       description: finding.description ?? finding.summary ?? JSON.stringify(finding),
       source: `${reviewResult.artifactId}:major:${finding.id ?? finding.title ?? ""}`,
       status: "unresolved",
@@ -288,17 +357,33 @@ function buildBlockerEntries(reviewResult, changeId, runId, existingBlockers) {
 }
 
 function buildNextActions(verdict, reviewResult) {
+  const stage = reviewResult.stage;
   const actions = [];
 
   if (verdict === "APPROVE" || verdict === "COMMENT_ONLY") {
-    actions.push("CCR 執行 readiness check");
-  } else if (verdict === "REQUEST_CHANGES") {
-    actions.push("Codex 修正 Blocker 和 Major findings 後重新提交");
-    for (const finding of reviewResult.payload.findings.blocker) {
-      actions.push(`修正 Blocker: ${finding.description ?? finding.summary ?? finding.title ?? "unnamed"}`);
+    if (stage === "review-plan") {
+      actions.push("CCR 推進 PLAN_APPROVED 並準備 apply-change 交接 Codex");
+    } else {
+      actions.push("CCR 執行 readiness check");
     }
-    for (const finding of reviewResult.payload.findings.major) {
-      actions.push(`修正 Major: ${finding.description ?? finding.summary ?? finding.title ?? "unnamed"}`);
+  } else if (verdict === "REQUEST_CHANGES") {
+    if (stage === "review-plan") {
+      actions.push("CCR 依 Qwen review-plan REQUEST_CHANGES 退回 PLAN_DRAFT，修訂 design 以解決 Major finding。");
+      for (const finding of reviewResult.payload.findings.blocker) {
+        actions.push(`修訂 Blocker: ${finding.description ?? finding.summary ?? finding.title ?? "unnamed"}`);
+      }
+      for (const finding of reviewResult.payload.findings.major) {
+        actions.push(`修訂 Major: ${finding.description ?? finding.summary ?? finding.title ?? "unnamed"}`);
+      }
+      actions.push("修訂完成後由 CCR 重新提交 plan，觸發下一輪 review-plan。");
+    } else {
+      actions.push("Codex 修正 Blocker 和 Major findings 後重新提交");
+      for (const finding of reviewResult.payload.findings.blocker) {
+        actions.push(`修正 Blocker: ${finding.description ?? finding.summary ?? finding.title ?? "unnamed"}`);
+      }
+      for (const finding of reviewResult.payload.findings.major) {
+        actions.push(`修正 Major: ${finding.description ?? finding.summary ?? finding.title ?? "unnamed"}`);
+      }
     }
   } else if (verdict === "INCOMPLETE") {
     actions.push("CCR 檢查 INCOMPLETE 原因並決定下一步");

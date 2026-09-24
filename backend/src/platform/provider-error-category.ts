@@ -5,6 +5,7 @@ export type ProviderErrorCategory =
   | "provider_rate_limited"
   | "provider_timeout"
   | "provider_response_invalid"
+  | "provider_decode_failure"
   | "structured_output_invalid"
   | "content_filter_refusal"
   | "unknown_error";
@@ -40,10 +41,19 @@ export function classifyProviderError(error: unknown): ProviderErrorCategory {
   if (REFUSAL_CODES.has(code) || name === "StructuredOutputRefusalError") {
     return "content_filter_refusal";
   }
+  if (code === "provider_decode_failure" || name === "ToolArgumentDecodeError") {
+    return "provider_decode_failure";
+  }
   if (error instanceof ZodError || name === "ZodError") {
     return "structured_output_invalid";
   }
-  if (name === "ProviderResponseParseError" || error instanceof SyntaxError) {
+  if (
+    name === "ProviderResponseParseError"
+    || name === "ProviderEnvelopeValidationError"
+    || code === "llm_response_json_parse_failed"
+    || code === "provider_envelope_invalid"
+    || error instanceof SyntaxError
+  ) {
     return "provider_response_invalid";
   }
   if (

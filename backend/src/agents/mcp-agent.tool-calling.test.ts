@@ -99,4 +99,48 @@ describe("Qwen tool-calling round trip", () => {
     expect(String(second.content)).toBe("Final answer: 4");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("stops malformed Tool arguments before ToolNode or physical dispatch", async () => {
+    vi.stubEnv("LLM_PROVIDER", "qwen");
+    vi.stubEnv("QWEN_API_KEY", "qwen-test-key");
+    vi.stubEnv("LLM_REPAIR_STRATEGY", "none");
+    vi.resetModules();
+
+    const physicalDispatch = vi.fn(async () => "must not run");
+    const calculator = tool(physicalDispatch, {
+      name: "calculator_tool",
+      description: "Evaluate a deterministic expression.",
+      schema: z.object({ expression: z.string() }),
+    });
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{
+        finish_reason: "length",
+        message: {
+          content: null,
+          tool_calls: [{
+            id: "call-malformed",
+            type: "function",
+            function: {
+              name: "calculator_tool",
+              arguments: '{"expression":"2+',
+            },
+          }],
+        },
+      }],
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { llmGateway } = await import("../platform/llm-gateway.js");
+    const model = llmGateway
+      .createChatModel({ purpose: "tool", temperature: 0, maxRetries: 2 })
+      .bindTools?.([calculator]);
+
+    await expect(model?.invoke([new HumanMessage("2+2")])).rejects.toMatchObject({
+      name: "ToolArgumentDecodeError",
+      code: "provider_decode_failure",
+      decodeKind: "incomplete",
+    });
+    expect(physicalDispatch).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
