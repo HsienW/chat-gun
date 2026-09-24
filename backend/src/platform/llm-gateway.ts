@@ -6,6 +6,11 @@ import { z } from "zod";
 
 import { getEnv } from "./env.js";
 import { createErrorEnvelope, formatErrorEnvelope } from "./errors.js";
+import {
+  decodeJsonText,
+  type JsonDecodeOptions,
+  type JsonDecodeResult,
+} from "./json-decode.js";
 import { configureNetwork } from "./network.js";
 import {
   FallbackChatModelInvoker,
@@ -14,7 +19,14 @@ import {
 import { getAgentRuntimeConfig } from "./runtime-config.js";
 import { getSpanManager } from "./tracing/span-manager.js";
 import { getOpikTracer } from "./tracing/opik/opik-tracer.js";
-import { recordMetric } from "./observability.js";
+import { auditLogger, recordMetric } from "./observability.js";
+import {
+  ProviderEnvelopeValidationError,
+  validateProviderEnvelope,
+  type AnthropicMessagesEnvelope,
+  type OpenAiChatCompletionEnvelope,
+  type ProviderEnvelopeKind,
+} from "./provider-envelope.js";
 import {
   repairStructuredOutput,
   StructuredOutputExhaustedError,
@@ -44,8 +56,10 @@ type ChatModelOutput = BaseMessage;
 
 export type ChatModelInvokeOptions = {
   signal?: AbortSignal;
+  runId?: string;
   taskId?: string;
   stepId?: string;
+  toolCallId?: string;
 };
 
 export interface ChatModelInvoker {
@@ -226,7 +240,7 @@ class StructuredOutputRepairChatModelInvoker implements ChatModelInvoker {
 }
 
 export type LlmProviderName = "ccr" | "openai-compatible" | "qwen";
-export type LlmEndpointKind = "anthropic-messages" | "openai-chat-completions";
+export type LlmEndpointKind = ProviderEnvelopeKind;
 
 export type LlmCapabilities = {
   supportsStructuredOutput: boolean;
@@ -241,6 +255,10 @@ type LlmResponseDiagnostics = {
   endpointKind: LlmEndpointKind;
   responseContentLength: number;
   jsonParseFailureCode?: "llm_response_json_parse_failed";
+  decodeKind?: Exclude<JsonDecodeResult<unknown>["status"], "valid">;
+  errorCode?: string;
+  byteLength?: number;
+  rawHash?: string;
 };
 
 type JsonSchema = {
@@ -289,22 +307,7 @@ type OpenAiChatMessage = {
   }>;
 };
 
-type OpenAiChatCompletionResponse = {
-  id?: unknown;
-  model?: unknown;
-  usage?: {
-    prompt_tokens?: unknown;
-    completion_tokens?: unknown;
-    total_tokens?: unknown;
-  };
-  choices?: Array<{
-    finish_reason?: unknown;
-    message?: {
-      content?: unknown;
-      tool_calls?: unknown;
-    };
-  }>;
-};
+type OpenAiChatCompletionResponse = OpenAiChatCompletionEnvelope;
 
 type AnthropicContentBlock = {
   type: "text";
@@ -316,12 +319,7 @@ type AnthropicMessage = {
   content: AnthropicContentBlock[];
 };
 
-type AnthropicMessagesResponse = {
-  content?: Array<{
-    type?: string;
-    text?: unknown;
-  }>;
-};
+type AnthropicMessagesResponse = AnthropicMessagesEnvelope;
 
 class ProviderHttpError extends Error {
   constructor(
@@ -336,12 +334,18 @@ class ProviderHttpError extends Error {
   }
 }
 
-class ProviderResponseParseError extends Error {
+export class ProviderResponseParseError extends Error {
+  readonly code = "llm_response_json_parse_failed";
+
   constructor(
     message: string,
     readonly provider: LlmProviderName,
     readonly endpointKind: LlmEndpointKind,
-    readonly responseContentLength: number
+    readonly responseContentLength: number,
+    readonly decodeKind: Exclude<JsonDecodeResult<unknown>["status"], "valid">,
+    readonly errorCode: string,
+    readonly byteLength: number,
+    readonly rawHash?: string
   ) {
     super(message);
     this.name = "ProviderResponseParseError";
@@ -352,13 +356,29 @@ function responseDiagnostics(
   provider: LlmProviderName,
   endpointKind: LlmEndpointKind,
   responseText: string,
-  jsonParseFailureCode?: LlmResponseDiagnostics["jsonParseFailureCode"]
+  jsonParseFailureCode?: LlmResponseDiagnostics["jsonParseFailureCode"],
+  decodeResult?: Exclude<JsonDecodeResult<unknown>, { status: "valid" }>
 ): LlmResponseDiagnostics {
   return {
     provider,
     endpointKind,
     responseContentLength: responseText.length,
     ...(jsonParseFailureCode ? { jsonParseFailureCode } : {}),
+    ...(decodeResult
+      ? {
+          decodeKind: decodeResult.status,
+          errorCode:
+            decodeResult.status === "aborted"
+              ? "JSON_DECODE_ABORTED"
+              : decodeResult.errorCode,
+          ...(decodeResult.status === "aborted"
+            ? {}
+            : { byteLength: decodeResult.byteLength }),
+          ...(decodeResult.status === "incomplete" || decodeResult.status === "invalid"
+            ? { rawHash: decodeResult.rawHash }
+            : {}),
+        }
+      : {}),
   };
 }
 
@@ -369,24 +389,33 @@ function formatResponseDiagnostics(diagnostics: LlmResponseDiagnostics): string 
 function parseJsonResponse<T>(
   responseText: string,
   provider: LlmProviderName,
-  endpointKind: LlmEndpointKind
+  endpointKind: LlmEndpointKind,
+  options: JsonDecodeOptions
 ): T {
-  try {
-    return JSON.parse(responseText) as T;
-  } catch {
-    const diagnostics = responseDiagnostics(
-      provider,
-      endpointKind,
-      responseText,
-      "llm_response_json_parse_failed"
-    );
-    throw new ProviderResponseParseError(
-      `LLM gateway response JSON parse failed: ${formatResponseDiagnostics(diagnostics)}`,
-      provider,
-      endpointKind,
-      responseText.length
-    );
+  const decoded = decodeJsonText<T>(responseText, options);
+  if (decoded.status === "valid") {
+    return decoded.value;
   }
+
+  const diagnostics = responseDiagnostics(
+    provider,
+    endpointKind,
+    responseText,
+    "llm_response_json_parse_failed",
+    decoded
+  );
+  throw new ProviderResponseParseError(
+    `LLM gateway response JSON parse failed: ${formatResponseDiagnostics(diagnostics)}`,
+    provider,
+    endpointKind,
+    responseText.length,
+    decoded.status,
+    decoded.status === "aborted" ? "JSON_DECODE_ABORTED" : decoded.errorCode,
+    decoded.status === "aborted" ? 0 : decoded.byteLength,
+    decoded.status === "incomplete" || decoded.status === "invalid"
+      ? decoded.rawHash
+      : undefined
+  );
 }
 
 function endpointKindForProvider(provider: LlmProviderName): LlmEndpointKind {
@@ -781,47 +810,344 @@ function usageMetadataFromResponse(
   };
 }
 
-function parseToolCallArgs(rawArgs: unknown): Record<string, unknown> {
-  if (!rawArgs) {
-    return {};
-  }
-  if (typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
-    return rawArgs as Record<string, unknown>;
-  }
+export type ToolCallDecodeKind =
+  | Exclude<JsonDecodeResult<unknown>["status"], "valid">
+  | "schema_invalid";
+
+export interface ToolCallDecodeDiagnostic {
+  index: number;
+  reason: "missing_name" | "arguments_decode_failed";
+  decodeKind?: ToolCallDecodeKind;
+  errorCode?: string;
+  byteLength?: number;
+  rawHash?: string;
+}
+
+export interface ToolCallsDecodeResult {
+  toolCalls: ToolCall[];
+  diagnostics: ToolCallDecodeDiagnostic[];
+}
+
+type ToolSchemaValidationResult =
+  | { success: true; data: unknown }
+  | { success: false; error: unknown };
+
+type ToolArgumentSchema = {
+  safeParse(value: unknown): ToolSchemaValidationResult;
+};
+
+type ToolArgumentDecodeResult =
+  | { ok: true; args: Record<string, unknown> }
+  | { ok: false; diagnostic: Omit<ToolCallDecodeDiagnostic, "index" | "reason"> };
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isToolArgumentSchema(value: unknown): value is ToolArgumentSchema {
+  return isPlainRecord(value) && typeof value.safeParse === "function";
+}
+
+function parseToolCallArgs(
+  rawArgs: unknown,
+  options: JsonDecodeOptions
+): ToolArgumentDecodeResult {
   if (typeof rawArgs !== "string") {
-    return {};
+    return {
+      ok: false,
+      diagnostic: {
+        decodeKind: "schema_invalid",
+        errorCode: "TOOL_ARGUMENT_TYPE_INVALID",
+      },
+    };
   }
-  try {
-    const parsed = JSON.parse(rawArgs) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {};
-  } catch {
-    return {};
+
+  const decoded = decodeJsonText<unknown>(rawArgs, options);
+  if (decoded.status === "aborted") {
+    return {
+      ok: false,
+      diagnostic: {
+        decodeKind: "aborted",
+        errorCode: "JSON_DECODE_ABORTED",
+      },
+    };
+  }
+  if (decoded.status !== "valid") {
+    return {
+      ok: false,
+      diagnostic: {
+        decodeKind: decoded.status,
+        errorCode: decoded.errorCode,
+        byteLength: decoded.byteLength,
+        ...(decoded.status === "incomplete" || decoded.status === "invalid"
+          ? { rawHash: decoded.rawHash }
+          : {}),
+      },
+    };
+  }
+  if (!isPlainRecord(decoded.value)) {
+    return {
+      ok: false,
+      diagnostic: {
+        decodeKind: "schema_invalid",
+        errorCode: "TOOL_ARGUMENT_NOT_OBJECT",
+        byteLength: Buffer.byteLength(rawArgs, "utf8"),
+      },
+    };
+  }
+
+  return { ok: true, args: decoded.value };
+}
+
+export function parseOpenAiToolCalls(
+  value: unknown,
+  options: JsonDecodeOptions,
+  toolSchemas?: ReadonlyMap<string, ToolArgumentSchema>
+): ToolCallsDecodeResult {
+  const toolCalls: ToolCall[] = [];
+  const diagnostics: ToolCallDecodeDiagnostic[] = [];
+  if (!Array.isArray(value)) {
+    return { toolCalls, diagnostics };
+  }
+
+  for (const [index, entry] of value.entries()) {
+    if (!isPlainRecord(entry)) {
+      diagnostics.push({ index, reason: "missing_name" });
+      continue;
+    }
+
+    const toolCall = entry as OpenAiToolCall;
+    const name = toolCall.function?.name;
+    if (typeof name !== "string" || !name.trim()) {
+      diagnostics.push({ index, reason: "missing_name" });
+      continue;
+    }
+
+    const decodedArguments = parseToolCallArgs(
+      toolCall.function?.arguments,
+      options
+    );
+    if (!decodedArguments.ok) {
+      diagnostics.push({
+        index,
+        reason: "arguments_decode_failed",
+        ...decodedArguments.diagnostic,
+      });
+      continue;
+    }
+
+    const toolSchema = toolSchemas?.get(name);
+    if (toolSchemas && !toolSchema) {
+      diagnostics.push({
+        index,
+        reason: "arguments_decode_failed",
+        decodeKind: "schema_invalid",
+        errorCode: "TOOL_ARGUMENT_SCHEMA_NOT_FOUND",
+        byteLength: typeof toolCall.function?.arguments === "string"
+          ? Buffer.byteLength(toolCall.function.arguments, "utf8")
+          : undefined,
+      });
+      continue;
+    }
+    const schemaValidation = toolSchema?.safeParse(decodedArguments.args);
+    if (schemaValidation && !schemaValidation.success) {
+      diagnostics.push({
+        index,
+        reason: "arguments_decode_failed",
+        decodeKind: "schema_invalid",
+        errorCode: "TOOL_ARGUMENT_SCHEMA_INVALID",
+        byteLength: typeof toolCall.function?.arguments === "string"
+          ? Buffer.byteLength(toolCall.function.arguments, "utf8")
+          : undefined,
+      });
+      continue;
+    }
+
+    const validatedArguments = schemaValidation?.success
+      ? schemaValidation.data
+      : decodedArguments.args;
+    if (!isPlainRecord(validatedArguments)) {
+      diagnostics.push({
+        index,
+        reason: "arguments_decode_failed",
+        decodeKind: "schema_invalid",
+        errorCode: "TOOL_ARGUMENT_SCHEMA_OUTPUT_INVALID",
+      });
+      continue;
+    }
+
+    toolCalls.push({
+      id: typeof toolCall.id === "string"
+        ? toolCall.id
+        : `tool-call-${name}-${index}`,
+      name,
+      args: validatedArguments,
+      type: "tool_call",
+    });
+  }
+
+  return { toolCalls, diagnostics };
+}
+
+export class ToolArgumentDecodeError extends Error {
+  readonly code = "provider_decode_failure";
+
+  constructor(
+    readonly decodeKind: ToolCallDecodeKind,
+    readonly errorCode: string,
+    readonly provider: LlmProviderName,
+    readonly endpointKind: LlmEndpointKind,
+    readonly byteLength?: number,
+    readonly rawHash?: string,
+    readonly finishReason?: string,
+    readonly runId?: string,
+    readonly taskId?: string,
+    readonly stepId?: string,
+    readonly toolCallId?: string
+  ) {
+    super(`Tool argument decoding failed (${decodeKind}/${errorCode}).`);
+    this.name = "ToolArgumentDecodeError";
   }
 }
 
-function parseOpenAiToolCalls(value: unknown): ToolCall[] {
-  if (!Array.isArray(value)) {
-    return [];
+function toolArgumentDecodeError(input: {
+  diagnostic: ToolCallDecodeDiagnostic;
+  provider: LlmProviderName;
+  endpointKind: LlmEndpointKind;
+  finishReason?: string;
+  invokeOptions?: ChatModelInvokeOptions;
+}): ToolArgumentDecodeError {
+  return new ToolArgumentDecodeError(
+    input.diagnostic.decodeKind ?? "schema_invalid",
+    input.diagnostic.errorCode ?? "TOOL_CALL_NAME_MISSING",
+    input.provider,
+    input.endpointKind,
+    input.diagnostic.byteLength,
+    input.diagnostic.rawHash,
+    input.finishReason,
+    input.invokeOptions?.runId,
+    input.invokeOptions?.taskId,
+    input.invokeOptions?.stepId,
+    input.invokeOptions?.toolCallId
+  );
+}
+
+function isToolArgumentRepairEligible(
+  diagnostic: ToolCallDecodeDiagnostic,
+  finishReason: string | undefined
+): boolean {
+  if (diagnostic.reason !== "arguments_decode_failed") return false;
+  if (diagnostic.decodeKind === "incomplete") return true;
+  if (diagnostic.decodeKind === "schema_invalid") return true;
+  return diagnostic.decodeKind === "invalid" && finishReason === "length";
+}
+
+function appendToolArgumentRepairHint(input: ChatModelInput): ChatModelInput {
+  const instruction = [
+    "The previous Tool call arguments were incomplete or failed schema validation.",
+    "Return the Tool call once with one complete strict JSON object matching the Tool schema.",
+    "Do not include markdown or explanatory text in the Tool arguments.",
+  ].join("\n");
+  return Array.isArray(input)
+    ? [...input, { role: "user", content: instruction }]
+    : typeof input === "string"
+      ? `${input}\n\n${instruction}`
+      : [input, { role: "user", content: instruction }];
+}
+
+type ToolCallDecodeTelemetryInput = {
+  provider: LlmProviderName;
+  endpointKind: LlmEndpointKind;
+  finishReason?: string;
+  invokeOptions?: ChatModelInvokeOptions;
+  diagnostics: ToolCallDecodeDiagnostic[];
+};
+
+export type ToolCallDecodeTelemetryPayload = {
+  provider: LlmProviderName;
+  endpointKind: LlmEndpointKind;
+  finishReason?: string;
+  runId?: string;
+  taskId?: string;
+  stepId?: string;
+  toolCallId?: string;
+  byteLength?: number;
+  rawHash?: string;
+  errorCode: string;
+};
+
+export function createToolCallDecodeTelemetryPayloads(
+  input: ToolCallDecodeTelemetryInput
+): ToolCallDecodeTelemetryPayload[] {
+  return input.diagnostics.map((diagnostic) => ({
+    provider: input.provider,
+    endpointKind: input.endpointKind,
+    ...(input.finishReason ? { finishReason: input.finishReason } : {}),
+    ...(input.invokeOptions?.runId ? { runId: input.invokeOptions.runId } : {}),
+    ...(input.invokeOptions?.taskId ? { taskId: input.invokeOptions.taskId } : {}),
+    ...(input.invokeOptions?.stepId ? { stepId: input.invokeOptions.stepId } : {}),
+    ...(input.invokeOptions?.toolCallId
+      ? { toolCallId: input.invokeOptions.toolCallId }
+      : {}),
+    ...(diagnostic.byteLength !== undefined
+      ? { byteLength: diagnostic.byteLength }
+      : {}),
+    ...(diagnostic.rawHash ? { rawHash: diagnostic.rawHash } : {}),
+    errorCode: diagnostic.errorCode ?? "TOOL_CALL_NAME_MISSING",
+  }));
+}
+
+async function recordToolCallDecodeDiagnostics(
+  input: ToolCallDecodeTelemetryInput
+): Promise<void> {
+  if (input.diagnostics.length === 0) return;
+
+  const payloads = createToolCallDecodeTelemetryPayloads(input);
+
+  try {
+    for (const payload of payloads) {
+      await auditLogger.record("llm.tool_call.decode_failed", { ...payload });
+    }
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "llm_tool_call_decode_audit_failed",
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    }));
   }
 
-  return value.flatMap((entry, index): ToolCall[] => {
-    if (!entry || typeof entry !== "object") {
-      return [];
+  try {
+    const manager = getSpanManager();
+    const span = manager.getActiveSpan();
+    if (span) {
+      for (const payload of payloads) {
+        manager.setAttributes(span, {
+          "tool_call.decode.provider": payload.provider,
+          "tool_call.decode.endpoint_kind": payload.endpointKind,
+          ...(payload.finishReason
+            ? { "tool_call.decode.finish_reason": payload.finishReason }
+            : {}),
+          ...(payload.runId ? { "tool_call.decode.run_id": payload.runId } : {}),
+          ...(payload.taskId ? { "tool_call.decode.task_id": payload.taskId } : {}),
+          ...(payload.stepId ? { "tool_call.decode.step_id": payload.stepId } : {}),
+          ...(payload.toolCallId
+            ? { "tool_call.decode.tool_call_id": payload.toolCallId }
+            : {}),
+          ...(payload.byteLength !== undefined
+            ? { "tool_call.decode.byte_length": payload.byteLength }
+            : {}),
+          ...(payload.rawHash
+            ? { "tool_call.decode.raw_hash": payload.rawHash }
+            : {}),
+          "tool_call.decode.error_code": payload.errorCode,
+        });
+      }
     }
-    const toolCall = entry as OpenAiToolCall;
-    const name = toolCall.function?.name;
-    if (!name) {
-      return [];
-    }
-    return [{
-      id: toolCall.id ?? `tool-call-${name}-${index}`,
-      name,
-      args: parseToolCallArgs(toolCall.function?.arguments),
-      type: "tool_call",
-    }];
-  });
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "llm_tool_call_decode_trace_failed",
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    }));
+  }
 }
 
 function jsonSchemaFromZod(schema: unknown): JsonSchema {
@@ -933,6 +1259,7 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
       purpose: ModelPurpose;
       responseFormat?: ChatResponseFormat;
       tools?: OpenAiToolDefinition[];
+      toolSchemas?: ReadonlyMap<string, ToolArgumentSchema>;
       toolChoice?: ChatModelOptions["toolChoice"];
     }
   ) {}
@@ -948,9 +1275,17 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
       "supportsToolCalling"
     );
 
+    const toolSchemas = new Map<string, ToolArgumentSchema>();
+    for (const tool of tools) {
+      if (isToolArgumentSchema(tool.schema)) {
+        toolSchemas.set(tool.name, tool.schema);
+      }
+    }
+
     return new OpenAiCompatibleChatModel({
       ...this.options,
       tools: tools.map(toOpenAiTool),
+      toolSchemas,
       toolChoice: kwargs?.toolChoice ?? this.options.toolChoice ?? "auto",
     });
   }
@@ -960,8 +1295,9 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
     invokeOptions?: ChatModelInvokeOptions
   ): Promise<ChatModelOutput> {
     const url = buildChatCompletionsUrl(this.options.baseUrl);
-    const endpointKind: LlmEndpointKind = "openai-chat-completions";
+    const endpointKind = "openai-chat-completions" as const;
     const capabilities = capabilitiesForProvider(this.options.provider, this.options.purpose);
+    const runtimeConfig = getAgentRuntimeConfig();
     const headers: Record<string, string> = {
       "content-type": "application/json",
     };
@@ -990,13 +1326,15 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
     }
 
     let lastError: Error | undefined;
-    const attempts = Math.max(1, this.options.maxRetries + 1);
-    for (let attempt = 1; attempt <= attempts; attempt++) {
+    let providerFailureCount = 0;
+    let requestInput = input;
+    let isRepairRequest = false;
+    while (true) {
       try {
         const body = {
           model: this.options.model,
           temperature: this.options.temperature,
-          messages: toOpenAiMessages(input),
+          messages: toOpenAiMessages(requestInput),
           ...(this.options.responseFormat ? { response_format: this.options.responseFormat } : {}),
           ...(this.options.tools?.length ? { tools: this.options.tools } : {}),
           ...(this.options.tools?.length
@@ -1021,14 +1359,64 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
           );
         }
 
-        const parsed = parseJsonResponse<OpenAiChatCompletionResponse>(
-          responseText,
-          this.options.provider,
+        const parsed = validateProviderEnvelope(
+          parseJsonResponse<unknown>(
+            responseText,
+            this.options.provider,
+            endpointKind,
+            {
+              maxBytes: runtimeConfig.llmProviderResponseMaxBytes,
+              maxDepth: runtimeConfig.llmJsonMaxDepth,
+              signal: invokeOptions?.signal,
+            }
+          ),
           endpointKind
         );
         const choice = parsed.choices?.[0];
         const message = choice?.message;
-        const toolCalls = parseOpenAiToolCalls(message?.tool_calls);
+        const finishReason = typeof choice?.finish_reason === "string"
+          ? choice.finish_reason
+          : undefined;
+        if (finishReason === "content_filter") {
+          throw new StructuredOutputRefusalError();
+        }
+        const { toolCalls, diagnostics } = parseOpenAiToolCalls(
+          message?.tool_calls,
+          {
+            maxBytes: runtimeConfig.llmToolArgumentMaxBytes,
+            maxDepth: runtimeConfig.llmJsonMaxDepth,
+            signal: invokeOptions?.signal,
+          },
+          this.options.toolSchemas
+        );
+        await recordToolCallDecodeDiagnostics({
+          provider: this.options.provider,
+          endpointKind,
+          finishReason,
+          invokeOptions,
+          diagnostics,
+        });
+        if (diagnostics.length > 0) {
+          const diagnostic = diagnostics[0];
+          if (
+            !isRepairRequest
+            && runtimeConfig.llmRepairStrategy !== "none"
+            && isToolArgumentRepairEligible(diagnostic, finishReason)
+          ) {
+            requestInput = runtimeConfig.llmRepairStrategy === "retry_with_hint"
+              ? appendToolArgumentRepairHint(input)
+              : input;
+            isRepairRequest = true;
+            continue;
+          }
+          throw toolArgumentDecodeError({
+            diagnostic,
+            provider: this.options.provider,
+            endpointKind,
+            finishReason,
+            invokeOptions,
+          });
+        }
         const content = contentToString(message?.content);
         return new AIMessage({
           content: toolCalls.length ? "" : content,
@@ -1040,6 +1428,7 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
             model: typeof parsed.model === "string" ? parsed.model : this.options.model,
             id: typeof parsed.id === "string" ? parsed.id : undefined,
             finish_reason: choice?.finish_reason,
+            tool_call_diagnostic_count: diagnostics.length,
             capabilities,
           },
         });
@@ -1048,13 +1437,17 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
         if (invokeOptions?.signal?.aborted) {
           throw lastError;
         }
-        if (attempt >= attempts) {
+        if (
+          lastError instanceof ToolArgumentDecodeError
+          || lastError instanceof StructuredOutputRefusalError
+          || isRepairRequest
+          || providerFailureCount >= this.options.maxRetries
+        ) {
           throw lastError;
         }
+        providerFailureCount += 1;
       }
     }
-
-    throw lastError ?? new Error("OpenAI-compatible chat completion failed.");
   }
 
   redactForDiagnostics(): Record<string, unknown> {
@@ -1121,7 +1514,7 @@ class CcrAnthropicChatModel implements ChatModelInvoker {
   ): Promise<ChatModelOutput> {
     const url = buildAnthropicMessagesUrl(this.options.baseUrl);
     const provider: LlmProviderName = "ccr";
-    const endpointKind: LlmEndpointKind = "anthropic-messages";
+    const endpointKind = "anthropic-messages" as const;
     const headers: Record<string, string> = {
       "content-type": "application/json",
       "anthropic-version": "2023-06-01",
@@ -1133,6 +1526,7 @@ class CcrAnthropicChatModel implements ChatModelInvoker {
     }
 
     const payload = toAnthropicPayload(input);
+    const runtimeConfig = getAgentRuntimeConfig();
     let lastError: Error | undefined;
     const attempts = Math.max(1, this.options.maxRetries + 1);
     for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -1161,9 +1555,17 @@ class CcrAnthropicChatModel implements ChatModelInvoker {
           );
         }
 
-        const parsed = parseJsonResponse<AnthropicMessagesResponse>(
-          responseText,
-          provider,
+        const parsed = validateProviderEnvelope(
+          parseJsonResponse<unknown>(
+            responseText,
+            provider,
+            endpointKind,
+            {
+              maxBytes: runtimeConfig.llmProviderResponseMaxBytes,
+              maxDepth: runtimeConfig.llmJsonMaxDepth,
+              signal: invokeOptions?.signal,
+            }
+          ),
           endpointKind
         );
         const content = parsed.content
@@ -1421,8 +1823,28 @@ export function formatLlmError(error: unknown): string {
             ? {
                 endpointKind: error.endpointKind,
                 responseContentLength: error.responseContentLength,
+                byteLength: error.byteLength,
+                rawHash: error.rawHash,
+                errorCode: error.errorCode,
               }
-            : undefined,
+            : error instanceof ProviderEnvelopeValidationError
+              ? {
+                  endpointKind: error.endpointKind,
+                  issueCount: error.issueCount,
+                }
+              : error instanceof ToolArgumentDecodeError
+                ? {
+                    endpointKind: error.endpointKind,
+                    finishReason: error.finishReason,
+                    runId: error.runId,
+                    taskId: error.taskId,
+                    stepId: error.stepId,
+                    toolCallId: error.toolCallId,
+                    byteLength: error.byteLength,
+                    rawHash: error.rawHash,
+                    errorCode: error.errorCode,
+                  }
+                : undefined,
     })
   );
 }

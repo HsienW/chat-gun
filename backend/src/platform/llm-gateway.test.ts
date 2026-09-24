@@ -336,6 +336,359 @@ describe("llm-gateway provider selection", () => {
     ]);
   });
 
+  it("distinguishes valid empty Tool arguments from malformed arguments", async () => {
+    vi.resetModules();
+    const { parseOpenAiToolCalls } = await import("./llm-gateway.js");
+    const options = { maxBytes: 1_024, maxDepth: 16 };
+
+    const validEmpty = parseOpenAiToolCalls([
+      {
+        id: "call-empty",
+        type: "function",
+        function: { name: "empty_tool", arguments: "{}" },
+      },
+    ], options);
+    expect(validEmpty).toEqual({
+      toolCalls: [{
+        id: "call-empty",
+        name: "empty_tool",
+        args: {},
+        type: "tool_call",
+      }],
+      diagnostics: [],
+    });
+
+    for (const argumentsText of [
+      "",
+      '{"value":"truncated"',
+      "null",
+      "[]",
+      "42",
+      "true",
+    ]) {
+      const decoded = parseOpenAiToolCalls([
+        {
+          id: "call-malformed",
+          type: "function",
+          function: { name: "unsafe_tool", arguments: argumentsText },
+        },
+      ], options);
+
+      expect(decoded.toolCalls).toEqual([]);
+      expect(decoded.diagnostics).toHaveLength(1);
+      expect(decoded.diagnostics[0]).toMatchObject({
+        index: 0,
+        reason: "arguments_decode_failed",
+      });
+      if (argumentsText) {
+        expect(JSON.stringify(decoded.diagnostics)).not.toContain(argumentsText);
+      }
+    }
+  });
+
+  it("returns bounded redacted diagnostics for malformed Tool calls", async () => {
+    vi.resetModules();
+    const { parseOpenAiToolCalls } = await import("./llm-gateway.js");
+
+    const decoded = parseOpenAiToolCalls([
+      { id: "missing-name", type: "function", function: { arguments: "{}" } },
+      {
+        id: "too-large",
+        type: "function",
+        function: { name: "large_tool", arguments: '{"secret":"sensitive"}' },
+      },
+    ], { maxBytes: 8, maxDepth: 16 });
+
+    expect(decoded.toolCalls).toEqual([]);
+    expect(decoded.diagnostics).toEqual([
+      { index: 0, reason: "missing_name" },
+      {
+        index: 1,
+        reason: "arguments_decode_failed",
+        decodeKind: "too_large",
+        errorCode: "JSON_DECODE_MAX_BYTES",
+        byteLength: 22,
+      },
+    ]);
+    expect(JSON.stringify(decoded.diagnostics)).not.toContain("sensitive");
+  });
+
+  it("fails closed when the provider envelope is missing required choices", async () => {
+    vi.stubEnv("LLM_PROVIDER", "qwen");
+    vi.stubEnv("QWEN_API_KEY", "qwen-test-key");
+    vi.resetModules();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ model: "qwen-test" }), {
+        status: 200,
+      }))
+    );
+
+    const { llmGateway } = await import("./llm-gateway.js");
+
+    await expect(
+      llmGateway.createChatModel({ maxRetries: 0 }).invoke("ping")
+    ).rejects.toMatchObject({
+      name: "ProviderEnvelopeValidationError",
+      code: "PROVIDER_ENVELOPE_INVALID",
+      endpointKind: "openai-chat-completions",
+    });
+  });
+
+  it("repairs incomplete Tool arguments at most once and validates the Tool schema", async () => {
+    vi.stubEnv("LLM_PROVIDER", "qwen");
+    vi.stubEnv("QWEN_API_KEY", "qwen-test-key");
+    vi.stubEnv("LLM_REPAIR_STRATEGY", "retry_with_hint");
+    vi.resetModules();
+
+    const calculator = tool(async () => "4", {
+      name: "calculator_tool",
+      description: "Evaluate a deterministic expression.",
+      schema: z.object({ expression: z.string() }),
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        choices: [{
+          finish_reason: "length",
+          message: {
+            content: null,
+            tool_calls: [{
+              id: "call-1",
+              type: "function",
+              function: {
+                name: "calculator_tool",
+                arguments: '{"expression":"2+',
+              },
+            }],
+          },
+        }],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        choices: [{
+          finish_reason: "tool_calls",
+          message: {
+            content: null,
+            tool_calls: [{
+              id: "call-1",
+              type: "function",
+              function: {
+                name: "calculator_tool",
+                arguments: '{"expression":"2+2"}',
+              },
+            }],
+          },
+        }],
+      }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { llmGateway } = await import("./llm-gateway.js");
+    const response = await llmGateway
+      .createChatModel({ purpose: "tool", maxRetries: 0 })
+      .bindTools?.([calculator])
+      .invoke("2+2");
+
+    expect((response as AIMessage).tool_calls).toEqual([{
+      id: "call-1",
+      name: "calculator_tool",
+      args: { expression: "2+2" },
+      type: "tool_call",
+    }]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const repairBody = JSON.parse(
+      String(fetchMock.mock.calls[1]?.[1]?.body)
+    ) as { messages?: Array<{ content?: unknown }> };
+    expect(repairBody.messages?.at(-1)?.content).toContain(
+      "The previous Tool call arguments were incomplete"
+    );
+  });
+
+  it("exhausts after one repair candidate fails the Tool schema", async () => {
+    vi.stubEnv("LLM_PROVIDER", "qwen");
+    vi.stubEnv("QWEN_API_KEY", "qwen-test-key");
+    vi.stubEnv("LLM_REPAIR_STRATEGY", "retry_once");
+    vi.resetModules();
+
+    const calculator = tool(async () => "4", {
+      name: "calculator_tool",
+      description: "Evaluate a deterministic expression.",
+      schema: z.object({ expression: z.string() }),
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        choices: [{
+          finish_reason: "length",
+          message: {
+            content: null,
+            tool_calls: [{
+              type: "function",
+              function: { name: "calculator_tool", arguments: '{"expression":' },
+            }],
+          },
+        }],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        choices: [{
+          finish_reason: "tool_calls",
+          message: {
+            content: null,
+            tool_calls: [{
+              type: "function",
+              function: { name: "calculator_tool", arguments: '{"expression":42}' },
+            }],
+          },
+        }],
+      }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { llmGateway } = await import("./llm-gateway.js");
+
+    await expect(
+      llmGateway
+        .createChatModel({ purpose: "tool", maxRetries: 0 })
+        .bindTools?.([calculator])
+        .invoke("2+2")
+    ).rejects.toMatchObject({
+      name: "ToolArgumentDecodeError",
+      code: "provider_decode_failure",
+      decodeKind: "schema_invalid",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const retryBody = JSON.parse(
+      String(fetchMock.mock.calls[1]?.[1]?.body)
+    ) as { messages?: Array<{ role?: string; content?: unknown }> };
+    expect(retryBody.messages).toEqual([{ role: "user", content: "2+2" }]);
+  });
+
+  it("does not repair a content-filter refusal", async () => {
+    vi.stubEnv("LLM_PROVIDER", "qwen");
+    vi.stubEnv("QWEN_API_KEY", "qwen-test-key");
+    vi.stubEnv("LLM_REPAIR_STRATEGY", "retry_once");
+    vi.resetModules();
+
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{
+        finish_reason: "content_filter",
+        message: { content: null },
+      }],
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { llmGateway } = await import("./llm-gateway.js");
+
+    await expect(
+      llmGateway.createChatModel({ purpose: "tool", maxRetries: 0 }).invoke("unsafe")
+    ).rejects.toMatchObject({
+      name: "StructuredOutputRefusalError",
+      code: "content_filter_refusal",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not repair after cancellation", async () => {
+    vi.stubEnv("LLM_PROVIDER", "qwen");
+    vi.stubEnv("QWEN_API_KEY", "qwen-test-key");
+    vi.stubEnv("LLM_REPAIR_STRATEGY", "retry_once");
+    vi.resetModules();
+
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async () => {
+      controller.abort();
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: null } }],
+      }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { llmGateway } = await import("./llm-gateway.js");
+
+    await expect(
+      llmGateway.createChatModel({ purpose: "tool" }).invoke("cancel", {
+        signal: controller.signal,
+      })
+    ).rejects.toMatchObject({
+      name: "ProviderResponseParseError",
+      decodeKind: "aborted",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not repair Tool arguments that exceed the byte limit", async () => {
+    vi.stubEnv("LLM_PROVIDER", "qwen");
+    vi.stubEnv("QWEN_API_KEY", "qwen-test-key");
+    vi.stubEnv("LLM_REPAIR_STRATEGY", "retry_once");
+    vi.stubEnv("LLM_TOOL_ARGUMENT_MAX_BYTES", "8");
+    vi.resetModules();
+
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{
+        finish_reason: "length",
+        message: {
+          content: null,
+          tool_calls: [{
+            type: "function",
+            function: { name: "large_tool", arguments: '{"payload":"too large"}' },
+          }],
+        },
+      }],
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { llmGateway } = await import("./llm-gateway.js");
+
+    await expect(
+      llmGateway.createChatModel({ purpose: "tool", maxRetries: 0 }).invoke("large")
+    ).rejects.toMatchObject({
+      name: "ToolArgumentDecodeError",
+      code: "provider_decode_failure",
+      decodeKind: "too_large",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not consume provider retries for a Tool argument decode failure", async () => {
+    vi.stubEnv("LLM_PROVIDER", "qwen");
+    vi.stubEnv("QWEN_API_KEY", "qwen-test-key");
+    vi.stubEnv("LLM_REPAIR_STRATEGY", "none");
+    vi.resetModules();
+
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{
+        finish_reason: "tool_calls",
+        message: {
+          content: null,
+          tool_calls: [{
+            type: "function",
+            function: { name: "broken_tool", arguments: '{"value":' },
+          }],
+        },
+      }],
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { llmGateway } = await import("./llm-gateway.js");
+
+    await expect(
+      llmGateway.createChatModel({ purpose: "tool", maxRetries: 2 }).invoke("decode", {
+        runId: "run-decode",
+        taskId: "task-decode",
+        stepId: "step-decode",
+        toolCallId: "call-decode",
+      })
+    ).rejects.toMatchObject({
+      name: "ToolArgumentDecodeError",
+      code: "provider_decode_failure",
+      decodeKind: "incomplete",
+      runId: "run-decode",
+      taskId: "task-decode",
+      stepId: "step-decode",
+      toolCallId: "call-decode",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves an explicit OpenAI-compatible tool_choice override", async () => {
     vi.stubEnv("LLM_PROVIDER", "qwen");
     vi.stubEnv("QWEN_API_KEY", "qwen-test-key");
@@ -510,6 +863,13 @@ describe("llm-gateway provider selection", () => {
     expect(message).toContain('"endpointKind":"openai-chat-completions"');
     expect(message).toContain('"responseContentLength":');
     expect(message).not.toContain("sk-secret-value");
+    expect(error).toMatchObject({
+      name: "ProviderResponseParseError",
+      decodeKind: "incomplete",
+      errorCode: "JSON_DECODE_INCOMPLETE",
+      byteLength: 27,
+    });
+    expect(error).toHaveProperty("rawHash");
   });
 
   it.each([
