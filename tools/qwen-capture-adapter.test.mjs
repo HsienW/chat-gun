@@ -510,10 +510,14 @@ test("captureQwenReviewResult transitions to CHANGES_REQUESTED on REQUEST_CHANGE
     assert.equal(updatedState.currentPhase, "CHANGES_REQUESTED");
     assert.equal(updatedState.currentOwner, "Codex");
     assert.equal(updatedState.gateStatus.reviewPassed, false);
-    assert.equal(updatedState.latestHandoff.status, "COMPLETED");
+    assert.equal(updatedState.latestHandoff.stage, "fix-from-review");
+    assert.equal(updatedState.latestHandoff.from, "Qwen");
+    assert.equal(updatedState.latestHandoff.to, "Codex");
+    assert.equal(updatedState.latestHandoff.status, "PENDING");
     assert.equal(updatedState.blockers.length, 2);
     assert.ok(updatedState.blockers.some((b) => b.description === "Cross-layer contract broken"));
     assert.ok(updatedState.blockers.some((b) => b.description === "Missing error handling"));
+    assert.ok(updatedState.blockers.every((b) => b.severity !== "Blocker" || b.source.includes(":blocker:")));
     assert.ok(updatedState.nextActions.some((a) => a.includes("Codex 修正")));
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
@@ -588,6 +592,167 @@ test("captureQwenReviewResult transitions to INCOMPLETE on INCOMPLETE verdict", 
     assert.equal(updatedState.gateStatus.reviewPassed, false);
     assert.equal(updatedState.latestHandoff.status, "FAILED");
     assert.ok(updatedState.nextActions.some((a) => a.includes("INCOMPLETE")));
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("captureQwenReviewResult review-plan REQUEST_CHANGES transitions to PLAN_DRAFT/CCR", async () => {
+  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "qwen-capture-"));
+  const changeId = "change-rp-rc";
+  const runId = "run-rp-rc";
+  const currentStatePath = path.join(workspaceRoot, ".agent-runtime", changeId, "current-state.json");
+  const currentState = {
+    schemaVersion: "1.0.0",
+    changeId,
+    runId,
+    currentPhase: "PLAN_REVIEW",
+    currentOwner: "Qwen",
+    attempt: 1,
+    latestArtifactRefs: {},
+    latestHandoff: {
+      handoffId: "hdo-rp-rc",
+      stage: "review-plan",
+      from: "CCR",
+      to: "Qwen",
+      status: "PENDING",
+    },
+    gateStatus: {
+      proposalApproved: false,
+      reviewPassed: false,
+      implementationVerified: false,
+      readinessConfirmed: false,
+    },
+    blockers: [],
+    nextActions: [],
+    updatedAt: "2026-09-24T05:00:00.000Z",
+    terminalStatus: "NON_TERMINAL",
+  };
+
+  await mkdir(path.dirname(currentStatePath), { recursive: true });
+  await writeFile(currentStatePath, JSON.stringify(currentState, null, 2), { encoding: "utf8" });
+
+  try {
+    const result = validReviewResult({
+      artifactId: "rr-rp-rc",
+      changeId,
+      runId,
+      stage: "review-plan",
+      payload: {
+        verdict: "REQUEST_CHANGES",
+        findings: {
+          blocker: [],
+          major: [{ id: "m1", title: "Fallback mechanism missing", description: "Fallback mechanism missing", severity: "Major" }],
+          minor: [],
+        },
+        crossLayerContractCheck: {},
+        residualRisks: [],
+        positiveNotes: [],
+      },
+    });
+
+    await captureQwenReviewResult({
+      workspaceRoot,
+      changeId,
+      runId,
+      stage: "review-plan",
+      processResult: {
+        exitCode: 0,
+        stdout: JSON.stringify(result),
+        stderr: "",
+      },
+      now: () => new Date("2026-09-24T06:00:00.000Z"),
+    });
+
+    const updatedState = JSON.parse(await readFile(currentStatePath, "utf8"));
+    assert.equal(updatedState.currentPhase, "PLAN_DRAFT");
+    assert.equal(updatedState.currentOwner, "CCR");
+    assert.equal(updatedState.gateStatus.reviewPassed, false);
+    assert.equal(updatedState.latestHandoff.stage, "plan-draft");
+    assert.equal(updatedState.latestHandoff.from, "Qwen");
+    assert.equal(updatedState.latestHandoff.to, "CCR");
+    assert.equal(updatedState.latestHandoff.status, "PENDING");
+    assert.equal(updatedState.blockers.length, 1);
+    assert.equal(updatedState.blockers[0].severity, "Major");
+    assert.ok(updatedState.nextActions.some((a) => a.includes("CCR")));
+    assert.ok(updatedState.nextActions.some((a) => a.includes("PLAN_DRAFT")));
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test("captureQwenReviewResult review-plan APPROVE transitions to PLAN_APPROVED/CCR", async () => {
+  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "qwen-capture-"));
+  const changeId = "change-rp-ap";
+  const runId = "run-rp-ap";
+  const currentStatePath = path.join(workspaceRoot, ".agent-runtime", changeId, "current-state.json");
+  const currentState = {
+    schemaVersion: "1.0.0",
+    changeId,
+    runId,
+    currentPhase: "PLAN_REVIEW",
+    currentOwner: "Qwen",
+    attempt: 1,
+    latestArtifactRefs: {},
+    latestHandoff: {
+      handoffId: "hdo-rp-ap",
+      stage: "review-plan",
+      from: "CCR",
+      to: "Qwen",
+      status: "PENDING",
+    },
+    gateStatus: {
+      proposalApproved: false,
+      reviewPassed: false,
+      implementationVerified: false,
+      readinessConfirmed: false,
+    },
+    blockers: [],
+    nextActions: [],
+    updatedAt: "2026-09-24T05:00:00.000Z",
+    terminalStatus: "NON_TERMINAL",
+  };
+
+  await mkdir(path.dirname(currentStatePath), { recursive: true });
+  await writeFile(currentStatePath, JSON.stringify(currentState, null, 2), { encoding: "utf8" });
+
+  try {
+    const result = validReviewResult({
+      artifactId: "rr-rp-ap",
+      changeId,
+      runId,
+      stage: "review-plan",
+      payload: {
+        verdict: "APPROVE",
+        findings: { blocker: [], major: [], minor: [] },
+        crossLayerContractCheck: {},
+        residualRisks: [],
+        positiveNotes: [],
+      },
+    });
+
+    await captureQwenReviewResult({
+      workspaceRoot,
+      changeId,
+      runId,
+      stage: "review-plan",
+      processResult: {
+        exitCode: 0,
+        stdout: JSON.stringify(result),
+        stderr: "",
+      },
+      now: () => new Date("2026-09-24T06:00:00.000Z"),
+    });
+
+    const updatedState = JSON.parse(await readFile(currentStatePath, "utf8"));
+    assert.equal(updatedState.currentPhase, "PLAN_APPROVED");
+    assert.equal(updatedState.currentOwner, "CCR");
+    assert.equal(updatedState.gateStatus.reviewPassed, true);
+    assert.equal(updatedState.latestHandoff.stage, "apply-change");
+    assert.equal(updatedState.latestHandoff.from, "CCR");
+    assert.equal(updatedState.latestHandoff.to, "Codex");
+    assert.equal(updatedState.latestHandoff.status, "PENDING");
+    assert.ok(updatedState.nextActions.some((a) => a.includes("apply-change")));
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
   }
