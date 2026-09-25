@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1.0",
+  "knownKinds": ["prompt", "clarification_resume", "cancel", "command"],
+  "prompt": {
+    "raw": { "kind": "prompt", "text": "  cafe\u0301\u0000  " },
+    "normalized": { "kind": "prompt", "text": "café", "attachments": [] }
+  },
+  "clarification": {
+    "interruptId": "clarification:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "requestedEvent": {
+      "type": "weather_clarification",
+      "eventType": "clarification_requested",
+      "interruptId": "clarification:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "resumeTransport": {
+      "input": null,
+      "config": {
+        "configurable": {
+          "clientInteractionMetadata": {
+            "inputKind": "clarification_resume",
+            "interruptId": "clarification:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        }
+      },
+      "command": { "resume": { "answer": "Taipei" } }
+    },
+    "normalized": {
+      "kind": "clarification_resume",
+      "interruptId": "clarification:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "value": { "answer": "Taipei" }
+    }
+  },
+  "cancel": {
+    "withoutTarget": { "kind": "cancel" },
+    "withTarget": { "kind": "cancel", "targetRunId": "run-1" }
+  },
+  "unknown": { "kind": "future_kind", "errorCode": "unsupported_input_kind" }
+}
