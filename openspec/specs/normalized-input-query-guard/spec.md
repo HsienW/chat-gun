@@ -1,11 +1,8 @@
 # normalized-input-query-guard Specification
 
 ## Purpose
-
-建立單一 `NormalizedAgentInput` 輸入契約與 generation-based 同步 Query 守衛，使 text、attachments、clarification reply、cancel、command 與 remote input 皆經一個 validated command lifecycle 進入 Runtime，並以既有 `InteractionPolicy` 與 `ActiveRunOwnership` 收斂 enqueue/reject/supersede/clarification-resume，同時以 request idempotency 阻止雙擊／重連／重複提交重複建立 Run 或副作用。
-
+TBD - created by archiving change establish-normalized-input-and-query-guard. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: NormalizedAgentInput 契約與 strict runtime schema
 
 Backend MUST 定義單一 domain 型別 `NormalizedAgentInput`，為 `prompt`／`clarification_resume`／`cancel`／`command` 的判別聯合，並以 strict runtime schema（Zod）驗證。每個輸入源 MUST 產出通過驗證的 `NormalizedAgentInput`；unknown `kind` MUST 回 stable `unsupported_input_kind`，MUST NOT 靜默當成 `prompt`。
@@ -284,3 +281,4 @@ GIVEN cancel 與 dispatch 同時抵達同一 Run
 WHEN Runtime 處理
 THEN MUST 收斂到恰一個 terminal ownership 決策
 AND MUST NOT 使 terminal state 回到 running
+
