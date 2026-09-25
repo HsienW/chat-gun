@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1.0",
+  "rateLimit": {
+    "policy": {
+      "maxRequestsPerWindow": 1,
+      "windowMs": 1000
+    },
+    "retryAfterMaxMs": 5000,
+    "decisions": {
+      "initial": { "type": "allow" },
+      "overflow": { "type": "defer", "retryAfterMs": 1000 }
+    }
+  },
+  "circuitBreaker": {
+    "policy": {
+      "failureThreshold": 2,
+      "successThreshold": 2,
+      "resetTimeoutMs": 1000,
+      "halfOpenMaxProbes": 2
+    },
+    "states": {
+      "initial": "closed",
+      "thresholdReached": "open",
+      "resetElapsed": "half_open",
+      "recovered": "closed"
+    }
+  },
+  "retryOutcomes": {
+    "definitiveRetryable": {
+      "errorCode": "TIMEOUT",
+      "category": "timeout"
+    },
+    "persistenceUncertain": {
+      "first": "SIDE_EFFECT_PERSISTENCE_UNCERTAIN",
+      "resume": "SIDE_EFFECT_RECONCILIATION_REQUIRED"
+    }
+  }
+}
