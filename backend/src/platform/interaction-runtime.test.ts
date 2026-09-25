@@ -86,6 +86,20 @@ function runConfig(runId = "run-2") {
   };
 }
 
+function trustedRunConfig(runId = "run-2") {
+  return {
+    runId,
+    configurable: {
+      thread_id: "thread-1",
+      scope_id: "scope-1",
+      task_id: `task-${runId}`,
+      "x-request-id": "request-2",
+      "x-idempotency-key": "a".repeat(64),
+      "x-bff-idempotency-ttl-ms": "60000",
+    },
+  };
+}
+
 function configuredDependencies(strategy: "reject" | "enqueue" | "supersede") {
   const active = ownership();
   const replacement = ownership({
@@ -261,7 +275,7 @@ describe("interaction runtime production wrapper", () => {
     expect(dependencies.ownershipRepository.supersede).not.toHaveBeenCalled();
     expect(dependencies.eventRecorder.record).toHaveBeenCalledWith(
       expect.objectContaining({
-        eventType: "interaction_decision",
+        eventType: "cancelled",
         payload: expect.objectContaining({
           decision: expect.objectContaining({ strategy: "reject" }),
         }),
@@ -288,10 +302,15 @@ describe("interaction runtime production wrapper", () => {
     expect(graph.invoke).not.toHaveBeenCalled();
     expect(dependencies.ownershipRepository.claim).not.toHaveBeenCalled();
     expect(dependencies.ownershipRepository.supersede).not.toHaveBeenCalled();
-    expect(dependencies.ownershipRepository.markTerminal).not.toHaveBeenCalled();
+    expect(dependencies.ownershipRepository.markTerminal).toHaveBeenCalledWith({
+      threadId: "thread-1",
+      scopeId: "scope-1",
+      runId: "run-2",
+      status: "cancelled",
+    });
     expect(dependencies.eventRecorder.record).toHaveBeenCalledWith(
       expect.objectContaining({
-        eventType: "interaction_decision",
+        eventType: "cancelled",
         payload: expect.objectContaining({
           priorRunId: "run-1",
           generation: 3,
@@ -353,7 +372,10 @@ describe("interaction runtime production wrapper", () => {
       createInteractionOrchestrator(dependencies.config)
     );
 
-    const stream = await governed.stream({}, runConfig());
+    const stream = await governed.stream(
+      { kind: "prompt", text: "new input" },
+      runConfig(),
+    );
     const chunks: unknown[] = [];
     for await (const chunk of stream) chunks.push(chunk);
 
@@ -388,7 +410,9 @@ describe("interaction runtime production wrapper", () => {
     );
 
     await expect(
-      consumeTestStream(governed.stream({}, runConfig()))
+      consumeTestStream(
+        governed.stream({ kind: "prompt", text: "new input" }, runConfig()),
+      )
     ).rejects.toThrow("stream setup failed");
     expect(dependencies.ownershipRepository.markTerminal).toHaveBeenCalledWith({
       threadId: "thread-1",
@@ -412,12 +436,398 @@ describe("interaction runtime production wrapper", () => {
       createInteractionOrchestrator(dependencies.config)
     );
 
-    await expect(governed.invoke({}, runConfig())).rejects.toMatchObject({
+    await expect(
+      governed.invoke({ kind: "prompt", text: "new input" }, runConfig()),
+    ).rejects.toMatchObject({
       reasonCode: "ACTIVE_RUN_REQUIRES_CORRECTIVE_OR_MANUAL_HANDLING",
     });
     expect(dependencies.ownershipRepository.supersede).not.toHaveBeenCalled();
     expect(dependencies.eventRecorder.record).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: "manual_intervention_required" })
+    );
+  });
+
+  it("returns a completed idempotent result after terminal cleanup without dispatch", async () => {
+    const dependencies = configuredDependencies("supersede");
+    const order: string[] = [];
+    dependencies.ownershipRepository.markTerminal.mockImplementation(async () => {
+      order.push("terminal");
+      return ownership({ taskId: "task-run-2", runId: "run-2", generation: 4 });
+    });
+    dependencies.eventRecorder.record.mockImplementation(async () => {
+      order.push("event");
+    });
+    const queryGuard = {
+      reserve: vi.fn(async () => ({
+        reserved: true as const,
+        ownership: ownership({
+          taskId: "task-run-2",
+          runId: "run-2",
+          generation: 4,
+        }),
+      })),
+      dispatch: vi.fn(async () => {
+        order.push("dispatch");
+      }),
+      release: vi.fn(async () => undefined),
+      adopt: vi.fn(),
+    };
+    const idempotencyGuard = {
+      acquire: vi.fn(async () => ({
+        acquired: false as const,
+        reason: "already_completed" as const,
+        existing: {
+          key: "interaction_input:key:v1",
+          status: "completed" as const,
+          result: { cached: true },
+          createdAt: "2026-09-26T00:00:00.000Z",
+          expiresAt: "2026-09-26T01:00:00.000Z",
+        },
+      })),
+      markCompleted: vi.fn(async () => undefined),
+      markFailed: vi.fn(async () => undefined),
+      getRecord: vi.fn(async () => null),
+    };
+    dependencies.config.queryGuard = queryGuard;
+    dependencies.config.idempotencyGuard = idempotencyGuard;
+    const graph = {
+      invoke: vi.fn(async (_input: unknown, _config?: unknown) => ({
+        sideEffect: true,
+      })),
+    };
+    const governed = applyInteractionGovernance(
+      graph,
+      createInteractionOrchestrator(dependencies.config),
+    );
+
+    await expect(
+      governed.invoke({ kind: "prompt", text: "hello" }, trustedRunConfig()),
+    ).resolves.toEqual({ cached: true });
+
+    expect(graph.invoke).not.toHaveBeenCalled();
+    expect(queryGuard.dispatch).not.toHaveBeenCalled();
+    expect(order.slice(0, 2)).toEqual(["terminal", "event"]);
+    expect(dependencies.eventRecorder.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: "cancelled",
+        payload: expect.objectContaining({
+          decision: expect.objectContaining({
+            classification: "duplicate_input",
+            reasonCode: "IDEMPOTENCY_KEY_COMPLETED",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("rejects a locked idempotency key after terminal cleanup without dispatch", async () => {
+    const dependencies = configuredDependencies("supersede");
+    const order: string[] = [];
+    dependencies.ownershipRepository.markTerminal.mockImplementation(async () => {
+      order.push("terminal");
+      return ownership({ taskId: "task-run-2", runId: "run-2", generation: 4 });
+    });
+    dependencies.eventRecorder.record.mockImplementation(async () => {
+      order.push("event");
+    });
+    const queryGuard = {
+      reserve: vi.fn(async () => ({
+        reserved: true as const,
+        ownership: ownership({
+          taskId: "task-run-2",
+          runId: "run-2",
+          generation: 4,
+        }),
+      })),
+      dispatch: vi.fn(async () => undefined),
+      release: vi.fn(async () => undefined),
+      adopt: vi.fn(),
+    };
+    const idempotencyGuard = {
+      acquire: vi.fn(async () => ({
+        acquired: false as const,
+        reason: "already_locked" as const,
+        existing: {
+          key: "interaction_input:key:v1",
+          status: "locked" as const,
+          createdAt: "2026-09-26T00:00:00.000Z",
+          expiresAt: "2026-09-26T01:00:00.000Z",
+        },
+      })),
+      markCompleted: vi.fn(async () => undefined),
+      markFailed: vi.fn(async () => undefined),
+      getRecord: vi.fn(async () => null),
+    };
+    dependencies.config.queryGuard = queryGuard;
+    dependencies.config.idempotencyGuard = idempotencyGuard;
+    const graph = {
+      invoke: vi.fn(async (_input: unknown, _config?: unknown) => ({
+        sideEffect: true,
+      })),
+    };
+
+    await expect(
+      applyInteractionGovernance(
+        graph,
+        createInteractionOrchestrator(dependencies.config),
+      ).invoke({ kind: "prompt", text: "hello" }, trustedRunConfig()),
+    ).rejects.toMatchObject({ reasonCode: "IDEMPOTENCY_KEY_LOCKED" });
+
+    expect(graph.invoke).not.toHaveBeenCalled();
+    expect(queryGuard.dispatch).not.toHaveBeenCalled();
+    expect(order.slice(0, 2)).toEqual(["terminal", "event"]);
+  });
+
+  it("cleans up the reservation when idempotency storage fails", async () => {
+    const dependencies = configuredDependencies("supersede");
+    const storageError = new Error("idempotency storage unavailable");
+    const queryGuard = {
+      reserve: vi.fn(async () => ({
+        reserved: true as const,
+        ownership: ownership({
+          taskId: "task-run-2",
+          runId: "run-2",
+          generation: 4,
+        }),
+      })),
+      dispatch: vi.fn(async () => undefined),
+      release: vi.fn(async () => undefined),
+      adopt: vi.fn(),
+    };
+    dependencies.config.queryGuard = queryGuard;
+    dependencies.config.idempotencyGuard = {
+      acquire: vi.fn(async () => {
+        throw storageError;
+      }),
+      markCompleted: vi.fn(async () => undefined),
+      markFailed: vi.fn(async () => undefined),
+    };
+    const graph = {
+      invoke: vi.fn(async (_input: unknown, _config?: unknown) => ({ ok: true })),
+    };
+
+    await expect(
+      applyInteractionGovernance(
+        graph,
+        createInteractionOrchestrator(dependencies.config),
+      ).invoke({ kind: "prompt", text: "hello" }, trustedRunConfig()),
+    ).rejects.toBe(storageError);
+
+    expect(dependencies.ownershipRepository.markTerminal).toHaveBeenCalledWith({
+      threadId: "thread-1",
+      scopeId: "scope-1",
+      runId: "run-2",
+      status: "cancelled",
+    });
+    expect(queryGuard.release).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-2" }),
+      4,
+    );
+    expect(queryGuard.dispatch).not.toHaveBeenCalled();
+    expect(graph.invoke).not.toHaveBeenCalled();
+  });
+
+  it("marks a newly acquired trusted key completed with the graph result", async () => {
+    const dependencies = configuredDependencies("supersede");
+    const queryGuard = {
+      reserve: vi.fn(async () => ({
+        reserved: true as const,
+        ownership: ownership({
+          taskId: "task-run-2",
+          runId: "run-2",
+          generation: 4,
+        }),
+      })),
+      dispatch: vi.fn(async () => undefined),
+      release: vi.fn(async () => undefined),
+      adopt: vi.fn(),
+    };
+    const idempotencyGuard = {
+      acquire: vi.fn(async () => ({
+        acquired: true as const,
+        record: {
+          key: "interaction_input:key:v1",
+          status: "locked" as const,
+          createdAt: "2026-09-26T00:00:00.000Z",
+          expiresAt: "2026-09-26T01:00:00.000Z",
+        },
+      })),
+      markCompleted: vi.fn(async () => undefined),
+      markFailed: vi.fn(async () => undefined),
+      getRecord: vi.fn(async () => null),
+    };
+    dependencies.config.queryGuard = queryGuard;
+    dependencies.config.idempotencyGuard = idempotencyGuard;
+    const graphResult = { ok: true };
+    const graph = {
+      invoke: vi.fn(async (_input: unknown, _config?: unknown) => graphResult),
+    };
+
+    await expect(
+      applyInteractionGovernance(
+        graph,
+        createInteractionOrchestrator(dependencies.config),
+      ).invoke({ kind: "prompt", text: "hello" }, trustedRunConfig()),
+    ).resolves.toEqual(graphResult);
+
+    expect(idempotencyGuard.markCompleted).toHaveBeenCalledWith(
+      {
+        namespace: "interaction_input",
+        resourceKey: "a".repeat(64),
+        version: "1",
+      },
+      graphResult,
+    );
+    expect(queryGuard.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-2" }),
+      4,
+    );
+  });
+
+  it("passes through without calling idempotency when no trusted key exists", async () => {
+    const dependencies = configuredDependencies("supersede");
+    const idempotencyGuard = {
+      acquire: vi.fn(),
+      markCompleted: vi.fn(),
+      markFailed: vi.fn(),
+      getRecord: vi.fn(),
+    };
+    dependencies.config.idempotencyGuard = idempotencyGuard;
+    const graph = {
+      invoke: vi.fn(async (_input: unknown, _config?: unknown) => ({ ok: true })),
+    };
+    const {
+      "x-idempotency-key": _ignoredIdempotencyKey,
+      ...configurable
+    } = runConfig().configurable;
+    const config = { runId: "run-2", configurable };
+
+    await applyInteractionGovernance(
+      graph,
+      createInteractionOrchestrator(dependencies.config),
+    ).invoke({ kind: "prompt", text: "hello" }, config);
+
+    expect(idempotencyGuard.acquire).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unsupported command after terminal cleanup and before dispatch", async () => {
+    const dependencies = configuredDependencies("supersede");
+    const order: string[] = [];
+    dependencies.ownershipRepository.markTerminal.mockImplementation(async () => {
+      order.push("terminal");
+      return ownership({ taskId: "task-run-2", runId: "run-2", generation: 4 });
+    });
+    dependencies.eventRecorder.record.mockImplementation(async () => {
+      order.push("event");
+    });
+    const queryGuard = {
+      reserve: vi.fn(async () => ({
+        reserved: true as const,
+        ownership: ownership({
+          taskId: "task-run-2",
+          runId: "run-2",
+          generation: 4,
+        }),
+      })),
+      dispatch: vi.fn(async () => {
+        order.push("dispatch");
+      }),
+      release: vi.fn(async () => undefined),
+      adopt: vi.fn(),
+    };
+    dependencies.config.queryGuard = queryGuard;
+    const graph = {
+      invoke: vi.fn(async (_input: unknown, _config?: unknown) => ({ ok: true })),
+    };
+
+    await expect(
+      applyInteractionGovernance(
+        graph,
+        createInteractionOrchestrator(dependencies.config),
+      ).invoke({ kind: "command", commandId: "refresh" }, runConfig()),
+    ).rejects.toMatchObject({ reasonCode: "unsupported_command" });
+
+    expect(graph.invoke).not.toHaveBeenCalled();
+    expect(queryGuard.dispatch).not.toHaveBeenCalled();
+    expect(order.slice(0, 2)).toEqual(["terminal", "event"]);
+  });
+
+  it("routes canonical cancel through deterministic cancellation governance", async () => {
+    const dependencies = configuredDependencies("supersede");
+    delete dependencies.config.classify;
+    const graph = {
+      invoke: vi.fn(async (_input: unknown, _config?: unknown) => ({
+        cancelled: true,
+      })),
+    };
+
+    await applyInteractionGovernance(
+      graph,
+      createInteractionOrchestrator(dependencies.config),
+    ).invoke({ kind: "cancel", targetRunId: "run-1" }, runConfig());
+
+    expect(dependencies.decideCancellation).toHaveBeenCalledOnce();
+    expect(dependencies.eventRecorder.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          decision: expect.objectContaining({
+            classification: "cancel_request",
+            reasonCode: "EXPLICIT_CANCEL_SIGNAL",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("resumes the waiting task and emits clarification_resumed with the same interrupt id", async () => {
+    const dependencies = configuredDependencies("supersede");
+    dependencies.config.rawPolicy = JSON.stringify({
+      strategy: "supersede",
+      clarificationReplyMode: "resume_same_task",
+      cancellationMode: "cancel_if_read_only",
+      allowIntentRevision: true,
+    });
+    delete dependencies.config.classify;
+    const baseConfig = runConfig();
+    const config = {
+      ...baseConfig,
+      configurable: {
+        ...baseConfig.configurable,
+        clientInteractionMetadata: {
+          inputKind: "clarification_resume",
+        },
+      },
+    };
+    const graph = {
+      invoke: vi.fn(async (_input: unknown, _config?: unknown) => ({
+        resumed: true,
+      })),
+    };
+    const interruptId = "clarification:" + "b".repeat(64);
+
+    await applyInteractionGovernance(
+      graph,
+      createInteractionOrchestrator(dependencies.config),
+    ).invoke(
+      {
+        command: { resume: { answer: "Taipei" } },
+        interruptId,
+      },
+      config,
+    );
+
+    expect(dependencies.ownershipRepository.supersede).toHaveBeenCalledWith({
+      threadId: "thread-1",
+      scopeId: "scope-1",
+      expectedGeneration: 3,
+      replacementTaskId: "task-1",
+      replacementRunId: "run-2",
+    });
+    expect(dependencies.eventRecorder.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: "clarification_resumed",
+        payload: expect.objectContaining({ interruptId }),
+      }),
     );
   });
 });

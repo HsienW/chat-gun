@@ -98,6 +98,25 @@ export class PgIdempotencyGuard implements IdempotencyGuard {
       throw new Error("Idempotency record disappeared during acquire");
     }
 
+    if (existing.status === "failed") {
+      const serialized = serializeKey(key);
+      const deletion = await this.db.query(
+        `DELETE FROM idempotency_records
+         WHERE key = $1 AND status = 'failed'`,
+        [serialized]
+      );
+
+      if ((deletion.rowCount ?? 0) > 0) {
+        const retried = await this.tryInsert(key, ttlMs);
+        if (retried) return { acquired: true, record: retried };
+      }
+
+      existing = await this.getRecord(key);
+      if (!existing) {
+        throw new Error("Idempotency record disappeared during failed retry");
+      }
+    }
+
     if (new Date(existing.expiresAt).getTime() < Date.now()) {
       const serialized = serializeKey(key);
       const deletion = await this.db.query(

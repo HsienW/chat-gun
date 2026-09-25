@@ -60,11 +60,14 @@ class FakeIdempotencyDb implements Queryable {
     }
 
     if (text.includes("DELETE FROM idempotency_records")) {
-      const isExpired = Boolean(
-        this.record && this.record.expires_at.getTime() < Date.now()
+      const canDelete = Boolean(
+        this.record &&
+          (text.includes("status = 'failed'")
+            ? this.record.status === "failed"
+            : this.record.expires_at.getTime() < Date.now())
       );
-      if (isExpired) this.record = null;
-      return { rows: [], rowCount: isExpired ? 1 : 0 };
+      if (canDelete) this.record = null;
+      return { rows: [], rowCount: canDelete ? 1 : 0 };
     }
 
     if (text.includes("status = 'completed'")) {
@@ -111,7 +114,6 @@ describe("PgIdempotencyGuard", () => {
   it.each([
     ["locked", "already_locked"],
     ["completed", "already_completed"],
-    ["failed", "already_failed"],
   ] as const)("returns the existing %s state", async (status, reason) => {
     const db = new FakeIdempotencyDb();
     db.seed(status, new Date(Date.now() + 60_000), { output: "cached" });
@@ -127,6 +129,19 @@ describe("PgIdempotencyGuard", () => {
     if (!acquired.acquired && status === "completed") {
       expect(acquired.existing.result).toEqual({ output: "cached" });
     }
+  });
+
+  it("reclaims a failed record for a new attempt", async () => {
+    const db = new FakeIdempotencyDb();
+    db.seed("failed", new Date(Date.now() + 60_000));
+    const guard = new PgIdempotencyGuard(db);
+
+    const acquired = await guard.acquire(key, 60_000);
+
+    expect(acquired).toMatchObject({
+      acquired: true,
+      record: { status: "locked" },
+    });
   });
 
   it("reclaims an expired lock with a fresh TTL", async () => {

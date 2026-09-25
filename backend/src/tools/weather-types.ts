@@ -289,6 +289,8 @@ export type WeatherClarificationCandidate = Pick<
 
 export type WeatherClarificationInterrupt = {
   type: "weather_clarification";
+  eventType: "clarification_requested";
+  interruptId: string;
   threadId: string;
   runId: string;
   candidates: Array<WeatherClarificationCandidate & { index: number }>;

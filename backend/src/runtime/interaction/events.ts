@@ -42,6 +42,7 @@ export interface InteractionEventPayload {
   replacementTaskId: string | null;
   replacementRunId: string | null;
   generation: number;
+  interruptId?: string;
   input: InteractionInputReference;
   sideEffectState: CancellationPhase;
   compensationResult: string | null;
@@ -85,6 +86,30 @@ function isStableMachineIdentifier(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(value);
 }
 
+function requireClarificationInterruptId(value: string): void {
+  if (!/^clarification:[a-f0-9]{64}$/.test(value)) {
+    throw new Error("Invalid clarification interruptId");
+  }
+}
+
+export function createClarificationInterruptId(input: {
+  threadId: string;
+  runId: string;
+  checkpointStep: number;
+}): string {
+  requireOpaqueId(input.threadId, "threadId");
+  requireOpaqueId(input.runId, "runId");
+  if (!Number.isSafeInteger(input.checkpointStep) || input.checkpointStep < 0) {
+    throw new Error("Invalid clarification checkpointStep");
+  }
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify([input.threadId, input.runId, input.checkpointStep]),
+    )
+    .digest("hex");
+  return `clarification:${digest}`;
+}
+
 export function createInteractionInputReference(
   payload: Uint8Array,
   classification?: InputClassification
@@ -113,6 +138,9 @@ export function createInteractionTaskEvent(
     requireOpaqueId(input.replacementRunId, "replacementRunId");
   }
   requireGeneration(input.generation);
+  if (input.interruptId) {
+    requireClarificationInterruptId(input.interruptId);
+  }
   if (!/^[a-f0-9]{64}$/.test(input.input.digest)) {
     throw new Error("Invalid interaction input digest");
   }
@@ -132,6 +160,7 @@ export function createInteractionTaskEvent(
       replacementTaskId: input.replacementTaskId,
       replacementRunId: input.replacementRunId,
       generation: input.generation,
+      ...(input.interruptId ? { interruptId: input.interruptId } : {}),
       input: input.input,
       sideEffectState: input.sideEffectState,
       compensationResult: input.compensationResult,
@@ -241,6 +270,7 @@ export class InteractionEventRecorder {
       replacementTaskId: payload.replacementTaskId,
       replacementRunId: payload.replacementRunId,
       generation: payload.generation,
+      ...(payload.interruptId ? { interruptId: payload.interruptId } : {}),
       eventType: event.eventType,
       reasonCode,
       sideEffectState: payload.sideEffectState,

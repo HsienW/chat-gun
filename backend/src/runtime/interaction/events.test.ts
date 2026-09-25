@@ -6,6 +6,7 @@ import type { EventRepository } from "../persistence/event-repository.js";
 import type { TaskEvent } from "../types.js";
 import {
   InteractionEventRecorder,
+  createClarificationInterruptId,
   createInteractionInputReference,
   createInteractionTaskEvent,
   createTentativeClassificationTaskEvents,
@@ -50,6 +51,49 @@ function createEvent(eventType: InteractionTaskEventType) {
 }
 
 describe("interaction task events", () => {
+  it("creates a stable opaque clarification interrupt id", () => {
+    const first = createClarificationInterruptId({
+      threadId: "thread-1",
+      runId: "run-1",
+      checkpointStep: 7,
+    });
+    const repeated = createClarificationInterruptId({
+      threadId: "thread-1",
+      runId: "run-1",
+      checkpointStep: 7,
+    });
+    const next = createClarificationInterruptId({
+      threadId: "thread-1",
+      runId: "run-1",
+      checkpointStep: 8,
+    });
+
+    expect(first).toMatch(/^clarification:[a-f0-9]{64}$/);
+    expect(repeated).toBe(first);
+    expect(next).not.toBe(first);
+  });
+
+  it("preserves interrupt identity on clarification events", () => {
+    const event = createInteractionTaskEvent({
+      eventType: "clarification_requested",
+      threadId: "thread-1",
+      priorTaskId: "task-1",
+      priorRunId: "run-1",
+      replacementTaskId: null,
+      replacementRunId: null,
+      generation: 1,
+      interruptId: "clarification:" + "a".repeat(64),
+      input: createInteractionInputReference(encodedInput),
+      sideEffectState: "read_only",
+      compensationResult: null,
+      reconciliationResult: null,
+    });
+
+    expect(event.payload.interruptId).toBe(
+      "clarification:" + "a".repeat(64),
+    );
+  });
+
   it.each(interactionEventTypes)("creates correlated %s events", (eventType) => {
     expect(createEvent(eventType)).toEqual({
       eventId: `event-${eventType}`,
