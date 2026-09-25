@@ -2,6 +2,82 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getAgentRuntimeConfig } from "./runtime-config.js";
 
+function readToolSchedulingConfig() {
+  const config = getAgentRuntimeConfig();
+  return {
+    toolDispatchMaxConcurrentReads: config.toolDispatchMaxConcurrentReads,
+    toolDispatchMaxConcurrentReadsPerRun:
+      config.toolDispatchMaxConcurrentReadsPerRun,
+    toolDispatchRateLimitMaxRequestsPerWindow:
+      config.toolDispatchRateLimitMaxRequestsPerWindow,
+    toolDispatchRateLimitWindowMs: config.toolDispatchRateLimitWindowMs,
+    toolDispatchCircuitResetTimeoutMs:
+      config.toolDispatchCircuitResetTimeoutMs,
+    toolRetryAfterMaxMs: config.toolRetryAfterMaxMs,
+    toolDispatchStepLockTtlMs: config.toolDispatchStepLockTtlMs,
+  };
+}
+
+describe("getAgentRuntimeConfig tool scheduling and resilience", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("uses bounded defaults", () => {
+    vi.stubEnv("TOOL_DISPATCH_MAX_CONCURRENT_READS", "");
+    vi.stubEnv("TOOL_DISPATCH_MAX_CONCURRENT_READS_PER_RUN", "");
+    vi.stubEnv("TOOL_DISPATCH_RATE_LIMIT_MAX_REQUESTS_PER_WINDOW", "");
+    vi.stubEnv("TOOL_DISPATCH_RATE_LIMIT_WINDOW_MS", "");
+    vi.stubEnv("TOOL_DISPATCH_CIRCUIT_RESET_TIMEOUT_MS", "");
+    vi.stubEnv("TOOL_RETRY_AFTER_MAX_MS", "");
+    vi.stubEnv("TOOL_DISPATCH_STEP_LOCK_TTL_MS", "");
+
+    expect(readToolSchedulingConfig()).toEqual({
+      toolDispatchMaxConcurrentReads: 4,
+      toolDispatchMaxConcurrentReadsPerRun: 2,
+      toolDispatchRateLimitMaxRequestsPerWindow: 100,
+      toolDispatchRateLimitWindowMs: 60_000,
+      toolDispatchCircuitResetTimeoutMs: 30_000,
+      toolRetryAfterMaxMs: 30_000,
+      toolDispatchStepLockTtlMs: 30_000,
+    });
+  });
+
+  it("reads explicit positive integer overrides", () => {
+    vi.stubEnv("TOOL_DISPATCH_MAX_CONCURRENT_READS", "8");
+    vi.stubEnv("TOOL_DISPATCH_MAX_CONCURRENT_READS_PER_RUN", "3");
+    vi.stubEnv("TOOL_DISPATCH_RATE_LIMIT_MAX_REQUESTS_PER_WINDOW", "25");
+    vi.stubEnv("TOOL_DISPATCH_RATE_LIMIT_WINDOW_MS", "1500");
+    vi.stubEnv("TOOL_DISPATCH_CIRCUIT_RESET_TIMEOUT_MS", "2500");
+    vi.stubEnv("TOOL_RETRY_AFTER_MAX_MS", "5000");
+    vi.stubEnv("TOOL_DISPATCH_STEP_LOCK_TTL_MS", "9000");
+
+    expect(readToolSchedulingConfig()).toEqual({
+      toolDispatchMaxConcurrentReads: 8,
+      toolDispatchMaxConcurrentReadsPerRun: 3,
+      toolDispatchRateLimitMaxRequestsPerWindow: 25,
+      toolDispatchRateLimitWindowMs: 1_500,
+      toolDispatchCircuitResetTimeoutMs: 2_500,
+      toolRetryAfterMaxMs: 5_000,
+      toolDispatchStepLockTtlMs: 9_000,
+    });
+  });
+
+  it.each([
+    ["TOOL_DISPATCH_MAX_CONCURRENT_READS", "0"],
+    ["TOOL_DISPATCH_MAX_CONCURRENT_READS_PER_RUN", "-1"],
+    ["TOOL_DISPATCH_RATE_LIMIT_MAX_REQUESTS_PER_WINDOW", "1.5"],
+    ["TOOL_DISPATCH_RATE_LIMIT_WINDOW_MS", "invalid"],
+    ["TOOL_DISPATCH_CIRCUIT_RESET_TIMEOUT_MS", "0"],
+    ["TOOL_RETRY_AFTER_MAX_MS", "-5"],
+    ["TOOL_DISPATCH_STEP_LOCK_TTL_MS", "0"],
+  ])("fails fast for invalid %s", (name, value) => {
+    vi.stubEnv(name, value);
+
+    expect(() => getAgentRuntimeConfig()).toThrow(`${name} must be a positive integer`);
+  });
+});
+
 describe("getAgentRuntimeConfig context budget", () => {
   afterEach(() => {
     vi.unstubAllEnvs();

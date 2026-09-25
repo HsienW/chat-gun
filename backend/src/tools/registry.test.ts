@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CompensationRegistry } from "../runtime/compensation/compensation-registry.js";
 import type { SagaOrchestrator } from "../runtime/compensation/saga-orchestrator.js";
 import type { ToolExecutionRunner } from "../runtime/side-effect/tool-execution-runner.js";
+import { NoopStepLock } from "../runtime/lock/step-lock.js";
 import { getGovernedToolExecutor } from "../platform/tool-governance.js";
 import {
   isToolDispatchPipelineEnabled,
@@ -85,6 +86,8 @@ describe("tool dispatch pipeline feature flags", () => {
           audit: vi.fn(async () => undefined),
           metric: vi.fn(async () => undefined),
         },
+        stepLock: new NoopStepLock(),
+        stepLockTtlMs: 30_000,
       },
     });
     const calculator = runtime.tools.find(
