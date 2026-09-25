@@ -32,7 +32,9 @@ export function computeBackoff(
       break;
     case "retry-after-header":
       delay =
-        options.retryAfterMs ?? exponentialDelay(attempt, baseMs, maxMs);
+        options.retryAfterMs === undefined
+          ? exponentialDelay(attempt, baseMs, maxMs)
+          : Math.min(options.retryAfterMs, maxMs);
       break;
     case "exponential":
       delay = exponentialDelay(attempt, baseMs, maxMs);
@@ -43,5 +45,8 @@ export function computeBackoff(
     return delay;
   }
 
-  return delay * (JITTER_MIN_FACTOR + Math.random() * JITTER_RANGE);
+  const jitteredDelay = delay * (JITTER_MIN_FACTOR + Math.random() * JITTER_RANGE);
+  return strategy === "retry-after-header"
+    ? Math.min(jitteredDelay, maxMs)
+    : jitteredDelay;
 }

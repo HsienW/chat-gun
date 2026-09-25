@@ -38,6 +38,17 @@ const contextFixture = JSON.parse(readFileSync(
   new URL("../../../../contracts/execution-context.fixture.json", import.meta.url),
   "utf8"
 )) as { validContext: unknown };
+const resilienceFixture = JSON.parse(readFileSync(
+  new URL(
+    "../../../../contracts/tool-scheduling-resilience.fixture.json",
+    import.meta.url
+  ),
+  "utf8"
+)) as {
+  retryOutcomes: {
+    persistenceUncertain: { first: string; resume: string };
+  };
+};
 const executionContext = executionContextSchema.parse(contextFixture.validContext);
 const identity = {
   runId: "run-1",
@@ -183,7 +194,10 @@ function createExecutor(
 function createRunner(
   ledger: BusinessEffectLedger,
   resultStore: ResultReferenceStore,
-  observability: Partial<ToolExecutionRunnerObservability> = {}
+  observability: Partial<ToolExecutionRunnerObservability> = {},
+  timing: {
+    wait(delayMs: number, signal?: AbortSignal): Promise<void>;
+  } = { wait: vi.fn(async () => undefined) }
 ) {
   const auditLogger: AuditLogger = { record: vi.fn(async () => undefined) };
   return new ToolExecutionRunner(ledger, resultStore, {
@@ -191,7 +205,7 @@ function createRunner(
     spanManager: createNoopSpanManager(),
     recordMetric: vi.fn(async () => undefined),
     ...observability,
-  });
+  }, timing);
 }
 
 function createBudget(maxAttempts = 2): RetryBudget {
@@ -214,6 +228,7 @@ function runInput(
     requestHash: "request-hash-1",
     scope,
     input: { resourceId: "resource-1" },
+    retryAfterMaxMs: 30_000,
     executor,
     ...(descriptor ? { descriptor } : {}),
     ...(retryBudget ? { retryBudget } : {}),
@@ -289,6 +304,136 @@ describe("ToolExecutionRunner", () => {
       result: { operationId: "read-only" },
     });
     expect(ledger.prepare).not.toHaveBeenCalled();
+  });
+
+  it("retries a timed-out read-only Tool within budget", async () => {
+    const ledger = createLedger();
+    const executor = createExecutor([
+      { type: "failed_not_committed", errorCode: "TIMEOUT" },
+      { type: "succeeded", result: { operationId: "read-retried" } },
+    ]);
+    const wait = vi.fn(async (_delayMs: number, _signal?: AbortSignal) => undefined);
+    const runner = createRunner(ledger, createResultStore(), {}, { wait });
+
+    await expect(
+      runner.execute({
+        ...runInput(executor, undefined, createBudget(2)),
+        retryPolicy: {
+          maxAttempts: 2,
+          maxElapsedMs: 60_000,
+          retryableCategories: ["timeout"],
+          backoffStrategy: "fixed",
+          jitter: false,
+        },
+        retryAfterMaxMs: 5_000,
+      })
+    ).resolves.toMatchObject({
+      type: "succeeded",
+      result: { operationId: "read-retried" },
+    });
+    expect(executor.executeTyped).toHaveBeenCalledTimes(2);
+    expect(wait).toHaveBeenCalledWith(1_000, undefined);
+    expect(ledger.prepare).not.toHaveBeenCalled();
+  });
+
+  it("returns the terminal read-only failure when retry budget is exhausted", async () => {
+    const executor = createExecutor([
+      { type: "failed_not_committed", errorCode: "TIMEOUT" },
+      { type: "failed_not_committed", errorCode: "TIMEOUT" },
+    ]);
+    const runner = createRunner(createLedger(), createResultStore());
+
+    await expect(
+      runner.execute({
+        ...runInput(executor, undefined, createBudget(2)),
+        retryPolicy: {
+          maxAttempts: 2,
+          maxElapsedMs: 60_000,
+          retryableCategories: ["timeout"],
+          backoffStrategy: "fixed",
+          jitter: false,
+        },
+        retryAfterMaxMs: 5_000,
+      })
+    ).resolves.toEqual({ type: "failed", errorCode: "TIMEOUT" });
+    expect(executor.executeTyped).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a non-retryable read-only failure", async () => {
+    const executor = createExecutor([
+      { type: "failed_not_committed", errorCode: "BUSINESS_REJECTED" },
+    ]);
+    const runner = createRunner(createLedger(), createResultStore());
+
+    await expect(
+      runner.execute({
+        ...runInput(executor, undefined, createBudget(3)),
+        retryPolicy: {
+          maxAttempts: 3,
+          maxElapsedMs: 60_000,
+          retryableCategories: ["timeout", "rate_limit", "server_error"],
+          backoffStrategy: "fixed",
+          jitter: false,
+        },
+        retryAfterMaxMs: 5_000,
+      })
+    ).resolves.toEqual({
+      type: "failed",
+      errorCode: "BUSINESS_REJECTED",
+    });
+    expect(executor.executeTyped).toHaveBeenCalledOnce();
+  });
+
+  it("stops read-only retry when backoff is aborted", async () => {
+    const controller = new AbortController();
+    const executor = createExecutor([
+      { type: "failed_not_committed", errorCode: "TIMEOUT" },
+      { type: "succeeded", result: { operationId: "unexpected" } },
+    ]);
+    const wait = vi.fn(async (_delayMs: number, signal?: AbortSignal) => {
+      controller.abort();
+      signal?.throwIfAborted();
+    });
+    const runner = createRunner(createLedger(), createResultStore(), {}, { wait });
+
+    await expect(
+      runner.execute({
+        ...runInput(executor, undefined, createBudget(3)),
+        retryPolicy: {
+          maxAttempts: 3,
+          maxElapsedMs: 60_000,
+          retryableCategories: ["timeout"],
+          backoffStrategy: "fixed",
+          jitter: false,
+        },
+        retryAfterMaxMs: 5_000,
+        signal: controller.signal,
+      })
+    ).resolves.toEqual({ type: "failed", errorCode: "USER_CANCELLED" });
+    expect(executor.executeTyped).toHaveBeenCalledOnce();
+  });
+
+  it("leaves read-only output validation to the pipeline without retrying", async () => {
+    const executor = createExecutor([
+      { type: "succeeded", result: { operationId: "invalid-output" } },
+    ]);
+    const runner = createRunner(createLedger(), createResultStore());
+
+    await expect(
+      runner.execute({
+        ...runInput(executor, undefined, createBudget(3)),
+        retryPolicy: {
+          maxAttempts: 3,
+          maxElapsedMs: 60_000,
+          retryableCategories: ["timeout"],
+          backoffStrategy: "fixed",
+          jitter: false,
+        },
+        retryAfterMaxMs: 5_000,
+        validateResult: () => false,
+      })
+    ).resolves.toMatchObject({ type: "succeeded" });
+    expect(executor.executeTyped).toHaveBeenCalledOnce();
   });
 
   it("reuses a committed result only when requestHash matches", async () => {
@@ -486,11 +631,17 @@ describe("ToolExecutionRunner", () => {
       ],
       []
     );
-    const runner = createRunner(ledger, createResultStore());
+    const recordMetric = vi.fn<ToolExecutionRunnerObservability["recordMetric"]>(
+      async () => undefined
+    );
+    const runner = createRunner(ledger, createResultStore(), { recordMetric });
 
     await expect(
       runner.execute(
-        runInput(executor, createDescriptor(), createBudget(3))
+        {
+          ...runInput(executor, createDescriptor(), createBudget(3)),
+          executionContext,
+        }
       )
     ).resolves.toEqual({
       type: "failed",
@@ -500,6 +651,14 @@ describe("ToolExecutionRunner", () => {
     });
     expect(ledger.recordAttempt).not.toHaveBeenCalled();
     expect(executor.executeAuthorizedTyped).not.toHaveBeenCalled();
+    expect(recordMetric).toHaveBeenCalledWith(
+      "tool.authorization.wait",
+      expect.objectContaining({
+        durationMs: expect.any(Number),
+        toolName: "side_effect_tool",
+      }),
+      executionContext
+    );
   });
 
   it("does not create or retry a physical attempt while confirmation is pending", async () => {
@@ -584,6 +743,86 @@ describe("ToolExecutionRunner", () => {
     expect(executor.authorizeTyped).toHaveBeenCalledTimes(2);
   });
 
+  it("applies increasing backoff before mutation retries", async () => {
+    const ledger = createLedger();
+    const executor = createExecutor([
+      { type: "failed_not_committed", errorCode: "TIMEOUT" },
+      { type: "failed_not_committed", errorCode: "TIMEOUT" },
+      { type: "succeeded", result: { operationId: "operation-3" } },
+    ]);
+    const wait = vi.fn(async (_delayMs: number, _signal?: AbortSignal) => undefined);
+    const recordMetric = vi.fn<ToolExecutionRunnerObservability["recordMetric"]>(
+      async () => undefined
+    );
+    const runner = createRunner(
+      ledger,
+      createResultStore(),
+      { recordMetric },
+      { wait }
+    );
+
+    await expect(
+      runner.execute({
+        ...runInput(executor, createDescriptor(), createBudget(3)),
+        retryPolicy: {
+          maxAttempts: 3,
+          maxElapsedMs: 60_000,
+          retryableCategories: ["timeout"],
+          backoffStrategy: "exponential",
+          jitter: false,
+        },
+        retryAfterMaxMs: 5_000,
+        executionContext,
+      })
+    ).resolves.toMatchObject({ type: "succeeded" });
+    expect(wait.mock.calls.map(([delayMs]) => delayMs)).toEqual([1_000, 2_000]);
+    expect(recordMetric).toHaveBeenCalledWith(
+      "tool.retry.backoff",
+      expect.objectContaining({
+        durationMs: expect.any(Number),
+        toolName: "side_effect_tool",
+      }),
+      executionContext
+    );
+    expect(recordMetric).toHaveBeenCalledWith(
+      "tool.execution",
+      expect.objectContaining({
+        durationMs: expect.any(Number),
+        toolName: "side_effect_tool",
+      }),
+      executionContext
+    );
+  });
+
+  it("bounds mutation Retry-After before retrying", async () => {
+    const ledger = createLedger();
+    const executor = createExecutor([
+      {
+        type: "failed_not_committed",
+        errorCode: "RATE_LIMITED",
+        retryAfterMs: 60_000,
+      },
+      { type: "succeeded", result: { operationId: "operation-2" } },
+    ]);
+    const wait = vi.fn(async (_delayMs: number, _signal?: AbortSignal) => undefined);
+    const runner = createRunner(ledger, createResultStore(), {}, { wait });
+
+    await expect(
+      runner.execute({
+        ...runInput(executor, createDescriptor(), createBudget(2)),
+        retryPolicy: {
+          maxAttempts: 2,
+          maxElapsedMs: 60_000,
+          retryableCategories: ["rate_limit"],
+          backoffStrategy: "retry-after-header",
+          jitter: false,
+        },
+        retryAfterMaxMs: 2_500,
+      })
+    ).resolves.toMatchObject({ type: "succeeded" });
+    expect(wait).toHaveBeenCalledWith(2_500, undefined);
+  });
+
   it("does not retry a business rejection even when budget remains", async () => {
     const ledger = createLedger();
     const executor = createPreflightExecutor(
@@ -635,16 +874,30 @@ describe("ToolExecutionRunner", () => {
       state: "committed" as const,
       result: { operationId: "reconciled" },
     }));
-    const runner = createRunner(ledger, createResultStore());
+    const recordMetric = vi.fn<ToolExecutionRunnerObservability["recordMetric"]>(
+      async () => undefined
+    );
+    const runner = createRunner(ledger, createResultStore(), { recordMetric });
 
     await expect(
-      runner.execute(runInput(executor, createDescriptor({ reconcile })))
+      runner.execute({
+        ...runInput(executor, createDescriptor({ reconcile })),
+        executionContext,
+      })
     ).resolves.toMatchObject({
       type: "succeeded",
       source: "reconciled",
       result: { operationId: "reconciled" },
     });
     expect(executor.executeTyped).toHaveBeenCalledOnce();
+    expect(recordMetric).toHaveBeenCalledWith(
+      "tool.reconcile",
+      expect.objectContaining({
+        durationMs: expect.any(Number),
+        toolName: "side_effect_tool",
+      }),
+      executionContext
+    );
   });
 
   it("persists manual defer when no reconciler can resolve ambiguity", async () => {
@@ -687,8 +940,11 @@ describe("ToolExecutionRunner", () => {
     expect(ledger.commitExecutionAndBusinessEffect).not.toHaveBeenCalled();
   });
 
-  it("does not redispatch when the atomic ledger commit fails after downstream success", async () => {
+  it("does not duplicate a side effect when resuming after an atomic commit response loss", async () => {
     const ledger = createLedger();
+    ledger.findExecutionByReplayKey
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ ...execution, status: "executing" });
     ledger.commitExecutionAndBusinessEffect.mockRejectedValueOnce(
       new Error("commit response lost")
     );
@@ -697,14 +953,26 @@ describe("ToolExecutionRunner", () => {
     ]);
     const runner = createRunner(ledger, createResultStore());
 
-    await expect(
-      runner.execute(runInput(executor, createDescriptor(), createBudget(3)))
-    ).resolves.toEqual({
+    const input = runInput(executor, createDescriptor(), createBudget(3));
+
+    await expect(runner.execute(input)).resolves.toEqual({
       type: "deferred",
-      errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN",
+      errorCode: resilienceFixture.retryOutcomes.persistenceUncertain.first,
       toolExecutionId: "execution-1",
     });
+    await expect(runner.execute(input)).resolves.toEqual({
+      type: "deferred",
+      errorCode: resilienceFixture.retryOutcomes.persistenceUncertain.resume,
+      toolExecutionId: "execution-1",
+    });
+
     expect(executor.executeTyped).toHaveBeenCalledOnce();
+    expect(ledger.prepare).toHaveBeenCalledOnce();
+    expect(ledger.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessEffectKey: hashBusinessEffectKey("resource-1"),
+      })
+    );
     expect(ledger.commitExecutionAndBusinessEffect).toHaveBeenCalledOnce();
   });
 

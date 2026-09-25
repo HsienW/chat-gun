@@ -16,6 +16,7 @@ import {
   recordAttempt as recordBudgetAttempt,
   type RetryBudget,
 } from "../retry/retry-budget.js";
+import { computeBackoff } from "../retry/backoff.js";
 import { classifyError } from "../retry/error-classification.js";
 import {
   DEFAULT_RETRY_POLICY,
@@ -84,6 +85,7 @@ export interface ToolExecutionRunInput<TInput, TResult> {
   descriptor?: SideEffectToolDescriptor<TInput, TResult>;
   retryBudget?: RetryBudget;
   retryPolicy?: RetryPolicy;
+  retryAfterMaxMs: number;
   validateResult?: (result: TResult) => boolean;
   signal?: AbortSignal;
   requestId?: string;
@@ -101,11 +103,44 @@ export interface ToolExecutionRunnerObservability {
   ): Promise<void> | void;
 }
 
+export interface ToolExecutionRunnerTiming {
+  wait(delayMs: number, signal?: AbortSignal): Promise<void>;
+}
+
 const defaultObservability: ToolExecutionRunnerObservability = {
   auditLogger: defaultAuditLogger,
   spanManager: getSpanManager(),
   recordMetric: defaultRecordMetric,
 };
+
+const defaultTiming: ToolExecutionRunnerTiming = {
+  wait: waitForBackoff,
+};
+
+async function waitForBackoff(
+  delayMs: number,
+  signal?: AbortSignal
+): Promise<void> {
+  if (signal?.aborted) {
+    throw new Error("USER_CANCELLED");
+  }
+  if (delayMs <= 0) {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      reject(new Error("USER_CANCELLED"));
+    };
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 function errorCodeOf<TResult>(
   outcome: Exclude<GovernedToolOutcome<TResult>, { type: "succeeded" | "cancelled" }>
@@ -180,7 +215,8 @@ export class ToolExecutionRunner {
   constructor(
     private readonly ledger: BusinessEffectLedger,
     private readonly resultStore: ResultReferenceStore,
-    observability: Partial<ToolExecutionRunnerObservability> = {}
+    observability: Partial<ToolExecutionRunnerObservability> = {},
+    private readonly timing: ToolExecutionRunnerTiming = defaultTiming
   ) {
     this.observability = { ...defaultObservability, ...observability };
   }
@@ -208,7 +244,7 @@ export class ToolExecutionRunner {
       };
     }
     if (!input.descriptor) {
-      return this.executeReadOnly(input.executor, input.input, input.signal);
+      return this.executeReadOnly(input);
     }
     const descriptor = input.descriptor;
     assertDescriptorMatchesIdentity(descriptor, input.identity);
@@ -232,18 +268,67 @@ export class ToolExecutionRunner {
   }
 
   private async executeReadOnly<TInput, TResult>(
-    executor: GovernedToolExecutor<TInput, TResult>,
-    toolInput: TInput,
-    signal?: AbortSignal
+    input: ToolExecutionRunInput<TInput, TResult>
   ): Promise<ToolExecutionRunResult<TResult>> {
-    const outcome = await executor.executeTyped(toolInput, { signal });
-    if (outcome.type === "succeeded") {
-      return { type: "succeeded", source: "live", result: outcome.result };
+    const retryPolicy = input.retryPolicy ?? DEFAULT_RETRY_POLICY;
+    let retryBudget = input.retryBudget;
+
+    while (true) {
+      if (input.signal?.aborted) {
+        return { type: "failed", errorCode: "USER_CANCELLED" };
+      }
+      const executionStartedAt = performance.now();
+      let outcome: GovernedToolOutcome<TResult>;
+      try {
+        outcome = await input.executor.executeTyped(input.input, {
+          signal: input.signal,
+        });
+      } finally {
+        await this.recordLatency(
+          "tool.execution",
+          executionStartedAt,
+          input
+        );
+      }
+      if (retryBudget) {
+        retryBudget = recordBudgetAttempt(retryBudget);
+      }
+      if (outcome.type === "succeeded") {
+        return { type: "succeeded", source: "live", result: outcome.result };
+      }
+      if (outcome.type === "cancelled") {
+        return { type: "cancelled", dispatchState: outcome.dispatchState };
+      }
+
+      const errorCode = errorCodeOf(outcome);
+      const classifiedError = classifyError({ code: errorCode, message: errorCode });
+      const budgetCheck = retryBudget
+        ? checkBudget(retryBudget, input.signal)
+        : undefined;
+      const canRetry =
+        classifiedError.retryable &&
+        retryPolicy.retryableCategories.includes(classifiedError.category) &&
+        budgetCheck?.canRetry === true;
+      if (!canRetry) {
+        return {
+          type: "failed",
+          errorCode:
+            budgetCheck?.reason === "cancelled" ? "USER_CANCELLED" : errorCode,
+        };
+      }
+
+      const didWait = await this.waitBeforeRetry(
+        input,
+        retryPolicy,
+        retryBudget?.attempts ?? 1,
+        outcome.type === "failed_not_committed"
+          ? normalizeRetryAfterMs(outcome.retryAfterMs)
+          : undefined
+      );
+      if (!didWait) {
+        return { type: "failed", errorCode: "USER_CANCELLED" };
+      }
     }
-    if (outcome.type === "cancelled") {
-      return { type: "cancelled", dispatchState: outcome.dispatchState };
-    }
-    return { type: "failed", errorCode: errorCodeOf(outcome) };
   }
 
   private async executeSideEffect<TInput, TResult>(
@@ -461,6 +546,7 @@ export class ToolExecutionRunner {
         }
 
         let authorizationOutcome;
+        const authorizationStartedAt = performance.now();
         try {
           authorizationOutcome = await input.executor.authorizeTyped(
             input.input,
@@ -473,6 +559,12 @@ export class ToolExecutionRunner {
             errorCode: "AUTHORIZATION_UNAVAILABLE",
             toolExecutionId,
           };
+        } finally {
+          await this.recordLatency(
+            "tool.authorization.wait",
+            authorizationStartedAt,
+            input
+          );
         }
 
         if (authorizationOutcome.decisionId === undefined) {
@@ -534,7 +626,17 @@ export class ToolExecutionRunner {
         };
       }
 
-      const outcome = await executeAttempt(input.input, executionConfig);
+      const executionStartedAt = performance.now();
+      let outcome: GovernedToolOutcome<TResult>;
+      try {
+        outcome = await executeAttempt(input.input, executionConfig);
+      } finally {
+        await this.recordLatency(
+          "tool.execution",
+          executionStartedAt,
+          input
+        );
+      }
       try {
         await this.ledger.completeAttempt({
           toolExecutionAttemptId: attemptIdentity.toolExecutionAttemptId,
@@ -612,7 +714,17 @@ export class ToolExecutionRunner {
           ? categoryAllowsRetry &&
             checkBudget(retryBudget, input.signal).canRetry
           : false;
-        if (canRetry) continue;
+        if (canRetry) {
+          const didWait = await this.waitBeforeRetry(
+            input,
+            retryPolicy,
+            retryBudget?.attempts ?? executionAttempt,
+            normalizeRetryAfterMs(outcome.retryAfterMs)
+          );
+          if (didWait) continue;
+          await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+          return { type: "failed", errorCode: "USER_CANCELLED", toolExecutionId };
+        }
         await this.transitionOrDefer(toolExecutionId, "executing", "failed");
         return { type: "failed", errorCode: outcome.errorCode, toolExecutionId };
       }
@@ -645,7 +757,14 @@ export class ToolExecutionRunner {
       );
       if (reconciled.type === "retry") {
         retryBudget = reconciled.retryBudget;
-        continue;
+        const didWait = await this.waitBeforeRetry(
+          input,
+          input.retryPolicy ?? DEFAULT_RETRY_POLICY,
+          retryBudget?.attempts ?? executionAttempt
+        );
+        if (didWait) continue;
+        await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+        return { type: "failed", errorCode: "USER_CANCELLED", toolExecutionId };
       }
       return reconciled.result;
     }
@@ -678,10 +797,20 @@ export class ToolExecutionRunner {
         },
       };
     }
-    const reconciliation = await input.descriptor.reconcile.reconcile({
-      toolExecutionId,
-      businessEffectKey,
-    });
+    const reconciliationStartedAt = performance.now();
+    let reconciliation;
+    try {
+      reconciliation = await input.descriptor.reconcile.reconcile({
+        toolExecutionId,
+        businessEffectKey,
+      });
+    } finally {
+      await this.recordLatency(
+        "tool.reconcile",
+        reconciliationStartedAt,
+        input
+      );
+    }
     const canRetry = retryBudget
       ? checkBudget(retryBudget, input.signal).canRetry
       : false;
@@ -886,4 +1015,61 @@ export class ToolExecutionRunner {
       return false;
     }
   }
+
+  private async waitBeforeRetry<TInput, TResult>(
+    input: ToolExecutionRunInput<TInput, TResult>,
+    retryPolicy: RetryPolicy,
+    attempt: number,
+    retryAfterMs?: number
+  ): Promise<boolean> {
+    const delayMs = computeBackoff(retryPolicy.backoffStrategy, attempt, {
+      retryAfterMs,
+      maxMs: input.retryAfterMaxMs,
+      jitter: retryPolicy.jitter,
+    });
+    const backoffStartedAt = performance.now();
+    try {
+      await this.timing.wait(delayMs, input.signal);
+      return input.signal?.aborted !== true;
+    } catch (error) {
+      if (input.signal?.aborted) {
+        return false;
+      }
+      throw error;
+    } finally {
+      await this.recordLatency(
+        "tool.retry.backoff",
+        backoffStartedAt,
+        input
+      );
+    }
+  }
+
+  private async recordLatency<TInput, TResult>(
+    metricName:
+      | "tool.authorization.wait"
+      | "tool.retry.backoff"
+      | "tool.execution"
+      | "tool.reconcile",
+    startedAt: number,
+    input: ToolExecutionRunInput<TInput, TResult>
+  ): Promise<void> {
+    const payload = {
+      durationMs: Math.max(0, performance.now() - startedAt),
+      toolName: input.identity.toolName,
+    };
+    await ignoreObservabilityFailure(() =>
+      input.executionContext
+        ? this.observability.recordMetric(
+            metricName,
+            payload,
+            input.executionContext
+          )
+        : this.observability.recordMetric(metricName, payload)
+    );
+  }
+}
+
+function normalizeRetryAfterMs(value: number | undefined): number | undefined {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? value : undefined;
 }
