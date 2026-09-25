@@ -1,7 +1,7 @@
 import {
   ContextPriority,
   type ContextBlock,
-} from "../../context/index.js";
+} from "../../context/context-budget.js";
 import type {
   PrincipalContext,
   RuntimeScope,

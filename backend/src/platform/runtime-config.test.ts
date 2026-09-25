@@ -100,6 +100,14 @@ describe("getAgentRuntimeConfig context budget", () => {
 
     expect(getAgentRuntimeConfig().contextBudgetTotal).toBe(128_000);
   });
+
+  it("uses and overrides the output reserve independently", () => {
+    vi.stubEnv("AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS", "");
+    expect(getAgentRuntimeConfig().contextOutputReserveTokens).toBe(4_096);
+
+    vi.stubEnv("AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS", "8192");
+    expect(getAgentRuntimeConfig().contextOutputReserveTokens).toBe(8_192);
+  });
 });
 
 describe("getAgentRuntimeConfig metrics", () => {

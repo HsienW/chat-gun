@@ -248,6 +248,8 @@ export type LlmCapabilities = {
   supportsVision: boolean;
   supportsStreaming: boolean;
   supportsUsageMetadata: boolean;
+  contextWindowTokens: number;
+  maxOutputTokens: number;
 };
 
 type LlmResponseDiagnostics = {
@@ -433,6 +435,8 @@ function capabilitiesForProvider(provider: LlmProviderName, purpose: ModelPurpos
       supportsVision: false,
       supportsStreaming: false,
       supportsUsageMetadata: false,
+      contextWindowTokens: 200_000,
+      maxOutputTokens: 8_192,
     };
   }
 
@@ -442,6 +446,8 @@ function capabilitiesForProvider(provider: LlmProviderName, purpose: ModelPurpos
     supportsVision: purpose === "vision",
     supportsStreaming: false,
     supportsUsageMetadata: true,
+    contextWindowTokens: 128_000,
+    maxOutputTokens: 8_192,
   };
 }
 
