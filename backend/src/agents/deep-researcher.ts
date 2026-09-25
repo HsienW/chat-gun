@@ -55,6 +55,12 @@ import { validateLocationInput } from "../tools/geocoding/location-normalizer.js
 import { loadAgentTools } from "../tools/registry.js";
 import { normalizeAiMessageForStream } from "./message-normalization.js";
 import {
+  assembleAgentContext,
+  contextHardLimitErrorMessage,
+  isContextAssemblyEnabled,
+} from "./context-integration.js";
+import { isContextHardLimitError } from "../context/context-errors.js";
+import {
   createExecutedToolCallArtifact,
   type ExecutedToolCall,
 } from "./executed-tool-call.js";
@@ -1393,7 +1399,7 @@ async function applyWeatherPlannerExtractionRetry(
 
 async function planResearch(
   state: typeof DeepResearchState.State,
-  _config: RunnableConfig
+  config: RunnableConfig
 ): Promise<Partial<typeof DeepResearchState.State>> {
   const question = getLatestUserMessage(state.messages).trim();
   if (!question) {
@@ -1414,7 +1420,7 @@ async function planResearch(
   const imageContext = state.imageObservations.length
     ? state.imageObservations.join("\n\n")
     : "No image attachments were provided.";
-  const prompt = [
+  const plannerPolicy = [
     "You are a research pipeline planner for a LangGraph agent.",
     "Return only one JSON object. Do not use markdown.",
     "Plan only the current user request.",
@@ -1439,15 +1445,33 @@ async function planResearch(
     "JSON schema:",
     '{"question":"string","answerMode":"direct|weather|calculation|research|clarify","rationale":"string","queries":["string"],"urls":["https://..."],"freshness":"pd|pw|pm|py optional","weather":{"location":"string","queryName":"string optional","country":"string optional","region":"string optional","weatherCapability":"current|hourly|daily optional","timeRange":{"kind":"now|today|tonight|tomorrow|weekend|date_range","startDate":"YYYY-MM-DD optional","endDate":"YYYY-MM-DD optional","timezone":"string optional","granularity":"hourly|daily optional"} optional","units":"metric optional","locale":"string optional"},"calculation":{"expression":"string"},"clarification":"string optional","requiredSourceCount":3}',
     `Today is ${today()}.`,
-    "IM Context Pack:",
-    JSON.stringify(contextPack, null, 2),
-    "Image recognition context:",
-    imageContext,
-    "Current user request:",
-    question,
   ].join("\n");
 
   try {
+    const prompt = isContextAssemblyEnabled("deep_researcher")
+      ? (await assembleAgentContext({
+          systemPolicy: plannerPolicy,
+          currentTaskLabel: "Current user request:",
+          messages: state.messages,
+          purpose: "research",
+          config,
+          activeState: [
+            {
+              content: JSON.stringify(contextPack, null, 2),
+              referenceId: "im-context-pack",
+            },
+            { content: imageContext, referenceId: "image-observations" },
+          ],
+        })).text
+      : [
+          plannerPolicy,
+          "IM Context Pack:",
+          JSON.stringify(contextPack, null, 2),
+          "Image recognition context:",
+          imageContext,
+          "Current user request:",
+          question,
+        ].join("\n");
     const llm = createResearchJsonChatModel(state);
     const response = await llm.invoke(prompt);
     const rawContent = messageContentToString(response);
@@ -1468,6 +1492,21 @@ async function planResearch(
     });
     return { plan };
   } catch (error) {
+    if (isContextHardLimitError(error)) {
+      const terminal = contextHardLimitErrorMessage(error, config);
+      return {
+        uploadError: String(terminal.content),
+        plan: {
+          question,
+          answerMode: "clarify",
+          rationale: "Context assembly failed.",
+          queries: [],
+          urls: [],
+          clarification: "Context assembly failed.",
+          requiredSourceCount: 1,
+        },
+      };
+    }
     const llmDiagnostics = describeLlmGatewayConfig();
     await recordMetric("planner.llm.failure.count", {
       count: 1,
@@ -2753,13 +2792,17 @@ function buildTargetedToolErrorAnswer(
 
 async function synthesizeAnswer(
   state: typeof DeepResearchState.State,
-  _config: RunnableConfig
+  config: RunnableConfig
 ): Promise<Partial<typeof DeepResearchState.State>> {
   const plan = state.plan ?? fallbackPlan(getResearchTopic(state.messages), state);
 
   if (state.uploadError) {
     const envelope = parseErrorEnvelope(state.uploadError);
-    const content = envelope ? formatErrorEnvelope(envelope) : state.uploadError;
+    const content = envelope?.error.stage === "context_assembly"
+      ? state.uploadError
+      : envelope
+        ? formatErrorEnvelope(envelope)
+        : state.uploadError;
     return {
       messages: [new AIMessage(content)],
     };
@@ -2791,7 +2834,7 @@ async function synthesizeAnswer(
   const targetedToolFallback = buildTargetedToolAnswer(plan, state);
 
   const evidence = formatEvidence(state);
-  const prompt = [
+  const synthesisPolicy = [
     "You are the final synthesis node in a production-style research graph.",
     "Answer the user in the same language as the user unless they requested otherwise.",
     "Use only the provided tool results and evidence for current or researched facts.",
@@ -2806,15 +2849,41 @@ async function synthesizeAnswer(
     "If current_weather reports 'Weather provider network request failed' or 'fetch failed', explain that the backend Node process could not connect to Open-Meteo. Do not imply the user's location is invalid or that Open-Meteo itself is down unless the evidence says so. Include a concise next step: check backend VPN/proxy/firewall/DNS or set HTTPS_PROXY/HTTP_PROXY before restarting the backend.",
     "Keep the answer concise but include exact numbers, dates, and source limitations when relevant.",
     `Today is ${today()}.`,
-    `Plan: ${JSON.stringify(plan, null, 2)}`,
-    `Verification: ${JSON.stringify(state.verification ?? {}, null, 2)}`,
-    "Evidence:",
-    evidence || "No external evidence was collected.",
-    "Conversation:",
-    getResearchTopic(state.messages),
   ].join("\n\n");
 
   try {
+    const prompt = isContextAssemblyEnabled("deep_researcher")
+      ? (await assembleAgentContext({
+          systemPolicy: synthesisPolicy,
+          currentTaskLabel: "Current user request:",
+          messages: state.messages,
+          purpose: "research",
+          config,
+          activeState: [
+            {
+              content: JSON.stringify({
+                plan,
+                verification: state.verification ?? {},
+              }, null, 2),
+              referenceId: "research-state",
+            },
+          ],
+          toolOutputs: [
+            {
+              content: evidence || "No external evidence was collected.",
+              referenceId: "research-evidence",
+            },
+          ],
+        })).text
+      : [
+          synthesisPolicy,
+          `Plan: ${JSON.stringify(plan, null, 2)}`,
+          `Verification: ${JSON.stringify(state.verification ?? {}, null, 2)}`,
+          "Evidence:",
+          evidence || "No external evidence was collected.",
+          "Conversation:",
+          getResearchTopic(state.messages),
+        ].join("\n\n");
     const model = state.reasoning_model.trim() || undefined;
     const llm = llmGateway.createChatModel({ purpose: "research", model, temperature: 0.1 });
     const response = await llm.invoke(prompt);
@@ -2823,6 +2892,9 @@ async function synthesizeAnswer(
       messages: [normalized],
     };
   } catch (error) {
+    if (isContextHardLimitError(error)) {
+      return { messages: [contextHardLimitErrorMessage(error, config)] };
+    }
     if (targetedToolFallback) {
       return {
         messages: [targetedToolFallback],

@@ -3,23 +3,23 @@ import { RunnableConfig } from "@langchain/core/runnables";
 import { END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph";
 
 import { getEnv } from "../platform/env.js";
+import { isContextHardLimitError } from "../context/context-errors.js";
 import { llmGateway } from "../platform/llm-gateway.js";
 import {
   applyInteractionGovernance,
   productionInteractionOrchestrator,
 } from "../platform/interaction-runtime.js";
-import { buildConversationContext, getLatestUserMessage } from "../state.js";
 import { chatbotInstructions } from "../prompts.js";
-
-function formatPrompt(template: string, values: Record<string, string>): string {
-  return Object.entries(values).reduce((prompt, [key, value]) => {
-    return prompt.replaceAll(`{${key}}`, value);
-  }, template);
-}
+import {
+  assembleAgentContext,
+  contextHardLimitErrorMessage,
+  isContextAssemblyEnabled,
+  legacyChatbotPrompt,
+} from "./context-integration.js";
 
 async function chatResponse(
   state: typeof MessagesAnnotation.State,
-  _config: RunnableConfig
+  config: RunnableConfig
 ): Promise<typeof MessagesAnnotation.Update> {
   if (!state.messages.length) {
     return {
@@ -27,21 +27,28 @@ async function chatResponse(
     };
   }
 
-  const llm = llmGateway.createChatModel({
-    purpose: "chat",
-    model: getEnv("CHAT_MODEL").trim() || undefined,
-    temperature: Number(process.env.CHAT_TEMPERATURE ?? 0.7),
-  });
-
-  const prompt = formatPrompt(chatbotInstructions, {
-    conversation_context: buildConversationContext(state.messages),
-    current_message: getLatestUserMessage(state.messages),
-  });
-
-  const response = await llm.invoke(prompt);
-  return {
-    messages: [response],
-  };
+  try {
+    const prompt = isContextAssemblyEnabled("chatbot")
+      ? (await assembleAgentContext({
+          systemPolicy: chatbotInstructions
+            .replaceAll("{conversation_context}", "")
+            .replaceAll("{current_message}", ""),
+          messages: state.messages,
+          purpose: "chat",
+          config,
+        })).text
+      : legacyChatbotPrompt(chatbotInstructions, state.messages);
+    const llm = llmGateway.createChatModel({
+      purpose: "chat",
+      model: getEnv("CHAT_MODEL").trim() || undefined,
+      temperature: Number(process.env.CHAT_TEMPERATURE ?? 0.7),
+    });
+    const response = await llm.invoke(prompt);
+    return { messages: [response] };
+  } catch (error) {
+    if (!isContextHardLimitError(error)) throw error;
+    return { messages: [contextHardLimitErrorMessage(error, config)] };
+  }
 }
 
 const builder = new StateGraph(MessagesAnnotation)

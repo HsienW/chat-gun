@@ -2,6 +2,7 @@ import { RunnableConfig } from "@langchain/core/runnables";
 import { Annotation, END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph";
 
 import { getEnv } from "../platform/env.js";
+import { isContextHardLimitError } from "../context/context-errors.js";
 import { llmGateway } from "../platform/llm-gateway.js";
 import {
   applyInteractionGovernance,
@@ -26,6 +27,12 @@ import {
 } from "../runtime/execution-context/read-execution-context.js";
 import { instrumentGraphWithExecutionContext } from "../runtime/execution-context/instrument-graph.js";
 import { normalizeAiMessageForStream } from "./message-normalization.js";
+import {
+  assembleMcpMessageContext,
+  contextHardLimitErrorMessage,
+  isContextAssemblyEnabled,
+  legacyMcpMessages,
+} from "./context-integration.js";
 
 const { tools, confirmationStore } = await loadAgentToolRuntime("mcp_agent", {
   includeMcp: true,
@@ -62,27 +69,30 @@ function shouldContinue(
 
 async function callModel(
   state: typeof McpAgentAnnotation.State,
-  _config: RunnableConfig
+  config: RunnableConfig
 ): Promise<typeof McpAgentAnnotation.Update> {
-  const llm = llmGateway.createChatModel({
-    purpose: "tool",
-    model: getEnv("MCP_AGENT_MODEL").trim() || undefined,
-    temperature: Number(process.env.MCP_AGENT_TEMPERATURE ?? 0.2),
-  });
-
-  if (!llm.bindTools) {
-    throw new Error("The selected model does not support bindTools.");
+  try {
+    const modelInput = isContextAssemblyEnabled("mcp")
+      ? (await assembleMcpMessageContext({
+          systemPolicy: mcpSystemMessage,
+          messages: state.messages,
+          config,
+        })).messages
+      : legacyMcpMessages(mcpSystemMessage, state.messages);
+    const llm = llmGateway.createChatModel({
+      purpose: "tool",
+      model: getEnv("MCP_AGENT_MODEL").trim() || undefined,
+      temperature: Number(process.env.MCP_AGENT_TEMPERATURE ?? 0.2),
+    });
+    if (!llm.bindTools) {
+      throw new Error("The selected model does not support bindTools.");
+    }
+    const response = await llm.bindTools(tools).invoke(modelInput);
+    return { messages: [normalizeAiMessageForStream(response)] };
+  } catch (error) {
+    if (!isContextHardLimitError(error)) throw error;
+    return { messages: [contextHardLimitErrorMessage(error, config)] };
   }
-
-  const modelWithTools = llm.bindTools(tools);
-  const response = await modelWithTools.invoke([
-    { role: "system", content: mcpSystemMessage },
-    ...state.messages,
-  ]);
-
-  return {
-    messages: [normalizeAiMessageForStream(response)],
-  };
 }
 
 const builder = new StateGraph(McpAgentAnnotation)
