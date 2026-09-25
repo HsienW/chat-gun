@@ -45,6 +45,84 @@ describe("RuntimeToolDescriptorRegistry", () => {
     expect(registry.list()).toEqual([descriptor]);
   });
 
+  it("registers valid rate-limit and circuit-breaker policies", () => {
+    const registry = new RuntimeToolDescriptorRegistry();
+    const descriptor = createReadOnlyDescriptor({
+      rateLimitPolicy: {
+        maxRequestsPerWindow: 10,
+        windowMs: 1_000,
+      },
+      circuitBreakerPolicy: {
+        failureThreshold: 3,
+        successThreshold: 2,
+        resetTimeoutMs: 30_000,
+        halfOpenMaxProbes: 2,
+      },
+    });
+
+    expect(() =>
+      registry.register(
+        { toolName: "read_tool", toolVersion: "1.0" },
+        descriptor
+      )
+    ).not.toThrow();
+    expect(registry.resolve("read_tool")).toBe(descriptor);
+  });
+
+  it("keeps existing descriptors valid when resilience policies are omitted", () => {
+    const registry = new RuntimeToolDescriptorRegistry();
+    const descriptor = createReadOnlyDescriptor();
+
+    registry.register(
+      { toolName: "read_tool", toolVersion: "1.0" },
+      descriptor
+    );
+
+    expect(registry.resolve("read_tool")).toMatchObject({
+      toolName: "read_tool",
+      toolVersion: "1.0",
+    });
+  });
+
+  it.each([
+    ["rateLimitPolicy.maxRequestsPerWindow", { rateLimitPolicy: { maxRequestsPerWindow: 0, windowMs: 1_000 } }],
+    ["rateLimitPolicy.windowMs", { rateLimitPolicy: { maxRequestsPerWindow: 1, windowMs: -1 } }],
+    ["circuitBreakerPolicy.failureThreshold", { circuitBreakerPolicy: { failureThreshold: 0, successThreshold: 1, resetTimeoutMs: 1_000, halfOpenMaxProbes: 1 } }],
+    ["circuitBreakerPolicy.successThreshold", { circuitBreakerPolicy: { failureThreshold: 1, successThreshold: 1.5, resetTimeoutMs: 1_000, halfOpenMaxProbes: 1 } }],
+    ["circuitBreakerPolicy.resetTimeoutMs", { circuitBreakerPolicy: { failureThreshold: 1, successThreshold: 1, resetTimeoutMs: 0, halfOpenMaxProbes: 1 } }],
+    ["circuitBreakerPolicy.halfOpenMaxProbes", { circuitBreakerPolicy: { failureThreshold: 1, successThreshold: 1, resetTimeoutMs: 1_000, halfOpenMaxProbes: -1 } }],
+  ])("fails closed for invalid %s", (fieldName, overrides) => {
+    const registry = new RuntimeToolDescriptorRegistry();
+    const descriptor = createReadOnlyDescriptor(
+      overrides as Partial<RuntimeToolDescriptor<{ value: string }, string>>
+    );
+
+    expect(() =>
+      registry.register(
+        { toolName: "read_tool", toolVersion: "1.0" },
+        descriptor
+      )
+    ).toThrow(fieldName);
+  });
+
+  it("fails closed for a malformed policy type received at runtime", () => {
+    const registry = new RuntimeToolDescriptorRegistry();
+    const descriptor = {
+      ...createReadOnlyDescriptor(),
+      rateLimitPolicy: {
+        maxRequestsPerWindow: "ten",
+        windowMs: 1_000,
+      },
+    } as unknown as RuntimeToolDescriptor<{ value: string }, string>;
+
+    expect(() =>
+      registry.register(
+        { toolName: "read_tool", toolVersion: "1.0" },
+        descriptor
+      )
+    ).toThrow("rateLimitPolicy.maxRequestsPerWindow");
+  });
+
   it("fails closed when descriptor identity does not match the registered tool", () => {
     const registry = new RuntimeToolDescriptorRegistry();
 

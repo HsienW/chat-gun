@@ -17,6 +17,13 @@ import {
 } from "../execution-context/read-execution-context.js";
 import type { ExecutionContext } from "../execution-context/execution-context.js";
 import { createBudget, type RetryBudget } from "../retry/retry-budget.js";
+import { classifyError } from "../retry/error-classification.js";
+import {
+  createStepLock,
+  NoopStepLock,
+  type StepLock,
+} from "../lock/step-lock.js";
+import { DefaultStepTransitionGuard } from "../lock/step-transition-guard.js";
 import type { RetryPolicy } from "../retry/retry-policy.js";
 import type {
   GovernedAuthorizationOutcome,
@@ -40,6 +47,7 @@ import {
   auditLogger,
   recordMetric,
 } from "../../platform/observability.js";
+import { getAgentRuntimeConfig } from "../../platform/runtime-config.js";
 import type { RuntimeToolDescriptorRegistry } from "./runtime-tool-descriptor.js";
 import type { RuntimeToolDescriptor } from "./runtime-tool-descriptor.js";
 import {
@@ -47,8 +55,19 @@ import {
   type StructuredToolResultEnvelope,
 } from "./structured-tool-result.js";
 import { PgToolDispatchTaskStepAdapter } from "./task-step-adapter.js";
+import { ToolDispatchStepLockLease } from "./step-lock-lease.js";
+import {
+  InMemoryToolCircuitBreaker,
+  type CircuitRecordOutcome,
+  type ToolCircuitBreaker,
+} from "./circuit-breaker.js";
+import {
+  FixedWindowToolRateLimiter,
+  type ToolRateLimiter,
+} from "./rate-limiter.js";
 import {
   BoundedToolDispatchScheduler,
+  ToolSchedulingError,
   type ToolDispatchScheduler,
 } from "./scheduler.js";
 
@@ -91,6 +110,11 @@ export interface RuntimeToolDispatchPipelineDependencies {
   sagaOrchestrator?: SagaOrchestrator;
   observability?: ToolDispatchObservability;
   scheduler?: ToolDispatchScheduler;
+  rateLimiter?: ToolRateLimiter;
+  circuitBreaker?: ToolCircuitBreaker;
+  waitForDelay?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  stepLock?: StepLock;
+  stepLockTtlMs?: number;
 }
 
 export interface RuntimeToolDispatchPipeline {
@@ -149,6 +173,11 @@ function hasMandatoryDependencies(
   sagaOrchestrator: SagaOrchestrator;
   observability: ToolDispatchObservability;
   scheduler: ToolDispatchScheduler;
+  rateLimiter: ToolRateLimiter;
+  circuitBreaker: ToolCircuitBreaker;
+  waitForDelay: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  stepLock: StepLock;
+  stepLockTtlMs: number;
 } {
   return (
     dependencies.toolExecutionRunner !== undefined &&
@@ -157,8 +186,54 @@ function hasMandatoryDependencies(
     dependencies.compensationRegistry !== undefined &&
     dependencies.sagaOrchestrator !== undefined &&
     dependencies.observability !== undefined &&
-    dependencies.scheduler !== undefined
+    dependencies.scheduler !== undefined &&
+    dependencies.rateLimiter !== undefined &&
+    dependencies.circuitBreaker !== undefined &&
+    dependencies.waitForDelay !== undefined &&
+    dependencies.stepLock !== undefined &&
+    dependencies.stepLockTtlMs !== undefined
   );
+}
+
+async function waitForAbortableDelay(
+  delayMs: number,
+  signal?: AbortSignal
+): Promise<void> {
+  if (signal?.aborted) {
+    throw new ToolSchedulingError("USER_CANCELLED");
+  }
+  if (delayMs <= 0) return;
+
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      reject(new ToolSchedulingError("USER_CANCELLED"));
+    };
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function toCircuitRecordOutcome(
+  outcome: GovernedToolOutcome<unknown>
+): CircuitRecordOutcome | undefined {
+  if (outcome.type === "succeeded") {
+    return "success";
+  }
+  if (outcome.type !== "failed_not_committed") {
+    return undefined;
+  }
+  const category = classifyError({
+    code: outcome.errorCode,
+    message: outcome.errorCode,
+  }).category;
+  return category === "permission_denied" || category === "user_cancelled"
+    ? undefined
+    : "definitive_failure";
 }
 
 function hasAuthorization(
@@ -261,6 +336,25 @@ async function ignoreObservabilityFailure(
   }
 }
 
+async function recordLatency(
+  observability: ToolDispatchObservability,
+  metricName: "tool.schedule.queue_wait" | "tool.dispatch.total",
+  startedAt: number,
+  toolName: string,
+  context: ExecutionContext
+): Promise<void> {
+  await ignoreObservabilityFailure(() =>
+    observability.metric(
+      metricName,
+      {
+        durationMs: Math.max(0, performance.now() - startedAt),
+        toolName,
+      },
+      context
+    )
+  );
+}
+
 function authorizationUnavailable(): GovernedAuthorizationOutcome {
   return {
     type: "denied_by_authorization",
@@ -270,7 +364,8 @@ function authorizationUnavailable(): GovernedAuthorizationOutcome {
 }
 
 function withProductionDefaults(
-  input: RuntimeToolDispatchPipelineDependencies
+  input: RuntimeToolDispatchPipelineDependencies,
+  runtimeConfig: ReturnType<typeof getAgentRuntimeConfig>
 ): RuntimeToolDispatchPipelineDependencies {
   const pool = input.pool === undefined ? getPool() : input.pool;
   const ledger = pool
@@ -293,11 +388,16 @@ function withProductionDefaults(
     retryBudgetFactory: input.retryBudgetFactory ?? createBudget,
     taskStepAdapter:
       input.taskStepAdapter ??
-      (taskRepository && stepRepository && eventRepository
+      (pool && taskRepository && stepRepository && eventRepository
         ? new PgToolDispatchTaskStepAdapter({
             taskRepository,
             stepRepository,
             eventRepository,
+            stepTransitionGuard: new DefaultStepTransitionGuard({
+              db: pool,
+              lock: new NoopStepLock(),
+              lockTtlMs: runtimeConfig.toolDispatchStepLockTtlMs,
+            }),
           })
         : undefined),
     compensationRegistry,
@@ -320,14 +420,29 @@ function withProductionDefaults(
         metric: (metricName, payload, context) =>
           recordMetric(metricName, payload, context),
       },
-    scheduler: input.scheduler ?? new BoundedToolDispatchScheduler(),
+    scheduler:
+      input.scheduler ??
+      new BoundedToolDispatchScheduler({
+        maxConcurrentReads: runtimeConfig.toolDispatchMaxConcurrentReads,
+        maxConcurrentReadsPerRun:
+          runtimeConfig.toolDispatchMaxConcurrentReadsPerRun,
+      }),
+    rateLimiter:
+      input.rateLimiter ??
+      new FixedWindowToolRateLimiter(runtimeConfig.toolRetryAfterMaxMs),
+    circuitBreaker: input.circuitBreaker ?? new InMemoryToolCircuitBreaker(),
+    waitForDelay: input.waitForDelay ?? waitForAbortableDelay,
+    stepLock: input.stepLock ?? createStepLock(),
+    stepLockTtlMs:
+      input.stepLockTtlMs ?? runtimeConfig.toolDispatchStepLockTtlMs,
   };
 }
 
 export function createRuntimeToolDispatchPipeline(
   input: RuntimeToolDispatchPipelineDependencies
 ): RuntimeToolDispatchPipeline {
-  const dependencies = withProductionDefaults(input);
+  const runtimeConfig = getAgentRuntimeConfig();
+  const dependencies = withProductionDefaults(input, runtimeConfig);
   async function dispatch(
     toolName: string,
     input: unknown,
@@ -388,96 +503,268 @@ export function createRuntimeToolDispatchPipeline(
     }
     const stepId = executionContext.stepId;
     const toolCallId = executionContext.toolCallId;
+    const signal = getAbortSignal(config);
+    const dispatchStartedAt = performance.now();
 
     try {
-      await dependencies.taskStepAdapter.start(
-        executionContext,
-        descriptor,
-        parsedInput.data
-      );
-    } catch {
-      return {
-        type: "rejected_before_dispatch",
-        errorCode: "TASK_STEP_UNAVAILABLE",
-      };
-    }
-
-    const runnerExecutor: GovernedToolExecutor<unknown, unknown> =
-      authorizationAlreadyEvaluated
-        ? {
-            executeTyped: sourceExecutor.executeAuthorizedTyped.bind(
-              sourceExecutor
-            ),
-          }
-        : sourceExecutor;
-    const retryPolicy =
-      authorizationAlreadyEvaluated && !descriptor.isReadOnly
-        ? { ...descriptor.retryPolicy, maxAttempts: 1 }
-        : descriptor.retryPolicy;
-    const runnerResult = await dependencies.scheduler.schedule(
-      isConcurrencySafe,
-      () =>
-        dependencies.toolExecutionRunner.execute({
-          executionContext,
-          identity: {
-            runId: executionContext.runId,
-            stepId,
-            logicalToolCallId: toolCallId,
-            callIndex: 0,
-            toolName: descriptor.toolName,
-            toolVersion: descriptor.toolVersion,
-            attempt: executionContext.attempt,
-          },
-          requestHash: createRequestHash(parsedInput.data),
-          scope: {
-            scopeId: executionContext.scope.scopeId,
-            tenantId: executionContext.scope.tenantId,
-            principalId: executionContext.principal.principalId,
-          },
-          input: parsedInput.data,
-          executor: runnerExecutor,
-          descriptor: descriptor.isReadOnly ? undefined : descriptor.sideEffect,
-          validateResult: (result) =>
-            descriptor.outputSchema.safeParse(result).success,
-          retryBudget: dependencies.retryBudgetFactory(
-            stepId,
-            retryPolicy
-          ),
-          retryPolicy,
-          signal: getAbortSignal(config),
-        })
-    );
-    const governedOutcome = mapRunnerResult(runnerResult, descriptor);
-    let envelope = createStructuredToolResultEnvelope({
-      executionContext,
-      descriptor,
-      outcome: governedOutcome,
-    });
-
-    try {
-      if (governedOutcome.type === "succeeded") {
-        await dependencies.taskStepAdapter.complete(executionContext, envelope);
-      } else {
-        await dependencies.taskStepAdapter.fail(executionContext, envelope);
+      let rateLimitDecision;
+      try {
+        rateLimitDecision = dependencies.rateLimiter.check(
+          descriptor.toolName,
+          descriptor.rateLimitPolicy,
+          signal
+        );
+      } catch {
+        return signal?.aborted
+          ? { type: "cancelled", dispatchState: "before" }
+          : {
+              type: "rejected_before_dispatch",
+              errorCode: "TOOL_RATE_LIMIT_EVALUATION_FAILED",
+            };
       }
-    } catch {
-      envelope = createStructuredToolResultEnvelope({
-        executionContext,
-        descriptor,
-        outcome: {
-          type: "ambiguous_after_dispatch",
-          errorCode: "TASK_STEP_PERSISTENCE_FAILED_AFTER_DISPATCH",
-        },
-      });
-      await Promise.allSettled([
-        dependencies.taskStepAdapter.fail(executionContext, envelope),
-        recordOutcome(dependencies.observability, envelope, executionContext),
-      ]);
-      return { type: "succeeded", result: envelope };
-    }
-    await recordOutcome(dependencies.observability, envelope, executionContext);
+      if (rateLimitDecision.type === "deny") {
+        return {
+          type: "rejected_before_dispatch",
+          errorCode: rateLimitDecision.errorCode,
+        };
+      }
+      if (rateLimitDecision.type === "defer") {
+        try {
+          await dependencies.waitForDelay(
+            rateLimitDecision.retryAfterMs,
+            signal
+          );
+        } catch {
+          return signal?.aborted
+            ? { type: "cancelled", dispatchState: "before" }
+            : {
+                type: "rejected_before_dispatch",
+                errorCode: "TOOL_RATE_LIMIT_WAIT_FAILED",
+              };
+        }
+      }
 
-    return { type: "succeeded", result: envelope };
+      let circuitState;
+      try {
+        circuitState = dependencies.circuitBreaker.beforeDispatch(
+          descriptor.toolName,
+          descriptor.circuitBreakerPolicy
+        );
+      } catch {
+        await ignoreObservabilityFailure(() =>
+          dependencies.observability.audit(
+            "tool.circuit.evaluation_failed",
+            {
+              toolName: descriptor.toolName,
+              errorCode: "TOOL_CIRCUIT_EVALUATION_FAILED",
+            },
+            executionContext
+          )
+        );
+        return {
+          type: "failed_not_committed",
+          errorCode: "TOOL_CIRCUIT_EVALUATION_FAILED",
+        };
+      }
+      if (circuitState === "open") {
+        return {
+          type: "failed_not_committed",
+          errorCode: "TOOL_CIRCUIT_OPEN",
+        };
+      }
+
+      const lockOwner = `${executionContext.runId}:${toolCallId}`;
+      let stepLockLease: ToolDispatchStepLockLease | null;
+      try {
+        stepLockLease = await ToolDispatchStepLockLease.acquire({
+          lock: dependencies.stepLock,
+          stepId,
+          owner: lockOwner,
+          ttlMs: dependencies.stepLockTtlMs,
+          signal,
+        });
+      } catch {
+        await ignoreObservabilityFailure(() =>
+          dependencies.observability.audit(
+            "tool.step_lock.acquire_failed",
+            {
+              toolName: descriptor.toolName,
+              errorCode: "TOOL_STEP_LOCK_UNAVAILABLE",
+            },
+            executionContext
+          )
+        );
+        stepLockLease = null;
+      }
+      if (stepLockLease === null) {
+        return {
+          type: "rejected_before_dispatch",
+          errorCode: "TOOL_STEP_LOCK_UNAVAILABLE",
+        };
+      }
+
+      try {
+        try {
+          await dependencies.taskStepAdapter.start(
+            executionContext,
+            descriptor,
+            parsedInput.data
+          );
+        } catch {
+          return {
+            type: "rejected_before_dispatch",
+            errorCode: "TASK_STEP_UNAVAILABLE",
+          };
+        }
+
+        const runnerExecutor: GovernedToolExecutor<unknown, unknown> =
+          authorizationAlreadyEvaluated
+            ? {
+                executeTyped: sourceExecutor.executeAuthorizedTyped.bind(
+                  sourceExecutor
+                ),
+              }
+            : sourceExecutor;
+        const retryPolicy =
+          authorizationAlreadyEvaluated && !descriptor.isReadOnly
+            ? { ...descriptor.retryPolicy, maxAttempts: 1 }
+            : descriptor.retryPolicy;
+        const queueStartedAt = dispatchStartedAt;
+        let queueWaitRecorded = false;
+        const recordQueueWait = async () => {
+          if (queueWaitRecorded) return;
+          queueWaitRecorded = true;
+          await recordLatency(
+            dependencies.observability,
+            "tool.schedule.queue_wait",
+            queueStartedAt,
+            descriptor.toolName,
+            executionContext
+          );
+        };
+        let governedOutcome: GovernedToolOutcome<unknown>;
+        try {
+          const runnerResult = await dependencies.scheduler.schedule(
+            isConcurrencySafe ? "concurrent_safe" : "serial",
+            async () => {
+              await recordQueueWait();
+              return dependencies.toolExecutionRunner.execute({
+                executionContext,
+                identity: {
+                  runId: executionContext.runId,
+                  stepId,
+                  logicalToolCallId: toolCallId,
+                  callIndex: 0,
+                  toolName: descriptor.toolName,
+                  toolVersion: descriptor.toolVersion,
+                  attempt: executionContext.attempt,
+                },
+                requestHash: createRequestHash(parsedInput.data),
+                scope: {
+                  scopeId: executionContext.scope.scopeId,
+                  tenantId: executionContext.scope.tenantId,
+                  principalId: executionContext.principal.principalId,
+                },
+                input: parsedInput.data,
+                executor: runnerExecutor,
+                descriptor: descriptor.isReadOnly
+                  ? undefined
+                  : descriptor.sideEffect,
+                validateResult: (result) =>
+                  descriptor.outputSchema.safeParse(result).success,
+                retryBudget: dependencies.retryBudgetFactory(
+                  stepId,
+                  retryPolicy
+                ),
+                retryPolicy,
+                retryAfterMaxMs: runtimeConfig.toolRetryAfterMaxMs,
+                signal: stepLockLease.signal,
+              });
+            },
+            { runId: executionContext.runId, signal: stepLockLease.signal }
+          );
+          governedOutcome = mapRunnerResult(runnerResult, descriptor);
+        } catch (error) {
+          await recordQueueWait();
+          if (error instanceof ToolSchedulingError) {
+            governedOutcome =
+              error.code === "USER_CANCELLED"
+                ? { type: "cancelled", dispatchState: "before" }
+                : {
+                    type: "rejected_before_dispatch",
+                    errorCode: error.code,
+                  };
+          } else {
+            throw error;
+          }
+        }
+        if (stepLockLease.hasExtendFailed()) {
+          governedOutcome = {
+            type: "ambiguous_after_dispatch",
+            errorCode: "TOOL_STEP_LOCK_EXTEND_FAILED",
+          };
+        }
+        const circuitRecordOutcome = toCircuitRecordOutcome(governedOutcome);
+        if (circuitRecordOutcome !== undefined) {
+          dependencies.circuitBreaker.record(
+            descriptor.toolName,
+            descriptor.circuitBreakerPolicy,
+            circuitRecordOutcome
+          );
+        }
+        let envelope = createStructuredToolResultEnvelope({
+          executionContext,
+          descriptor,
+          outcome: governedOutcome,
+        });
+
+        try {
+          if (governedOutcome.type === "succeeded") {
+            await dependencies.taskStepAdapter.complete(
+              executionContext,
+              envelope
+            );
+          } else {
+            await dependencies.taskStepAdapter.fail(executionContext, envelope);
+          }
+        } catch {
+          envelope = createStructuredToolResultEnvelope({
+            executionContext,
+            descriptor,
+            outcome: {
+              type: "ambiguous_after_dispatch",
+              errorCode: "TASK_STEP_PERSISTENCE_FAILED_AFTER_DISPATCH",
+            },
+          });
+          await Promise.allSettled([
+            dependencies.taskStepAdapter.fail(executionContext, envelope),
+            recordOutcome(
+              dependencies.observability,
+              envelope,
+              executionContext
+            ),
+          ]);
+          return { type: "succeeded", result: envelope };
+        }
+        await recordOutcome(
+          dependencies.observability,
+          envelope,
+          executionContext
+        );
+
+        return { type: "succeeded", result: envelope };
+      } finally {
+        await stepLockLease.release().catch(() => undefined);
+      }
+    } finally {
+      await recordLatency(
+        dependencies.observability,
+        "tool.dispatch.total",
+        dispatchStartedAt,
+        descriptor.toolName,
+        executionContext
+      );
+    }
   }
 
   return {

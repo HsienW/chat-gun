@@ -15,7 +15,11 @@ export type GovernedToolOutcome<TResult> =
       decisionId: string;
       descriptor: ConfirmationRequiredDescriptor;
     }
-  | { type: "failed_not_committed"; errorCode: string }
+  | {
+      type: "failed_not_committed";
+      errorCode: string;
+      retryAfterMs?: number;
+    }
   | { type: "ambiguous_after_dispatch"; errorCode: string }
   | { type: "cancelled"; dispatchState: DispatchState };
 

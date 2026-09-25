@@ -25,6 +25,18 @@ export interface TimeoutPolicy {
   timeoutMs: number;
 }
 
+export interface ToolRateLimitPolicy {
+  maxRequestsPerWindow: number;
+  windowMs: number;
+}
+
+export interface ToolCircuitBreakerPolicy {
+  failureThreshold: number;
+  successThreshold: number;
+  resetTimeoutMs: number;
+  halfOpenMaxProbes: number;
+}
+
 export type InterruptBehavior =
   | "cancel_safe"
   | "finish_current"
@@ -40,6 +52,8 @@ export interface RuntimeToolDescriptor<TInput = unknown, TOutput = unknown> {
   isConcurrencySafe(input: TInput): boolean;
   timeoutPolicy: TimeoutPolicy;
   retryPolicy: RetryPolicy;
+  rateLimitPolicy?: ToolRateLimitPolicy;
+  circuitBreakerPolicy?: ToolCircuitBreakerPolicy;
   interruptBehavior: InterruptBehavior;
   sideEffect?: SideEffectToolDescriptor<TInput, TOutput>;
 }
@@ -116,6 +130,35 @@ function validateDescriptor<TInput, TOutput>(
   }
   if (!INTERRUPT_BEHAVIORS.has(descriptor.interruptBehavior)) {
     throw new Error("Runtime tool descriptor interruptBehavior is invalid");
+  }
+
+  if (descriptor.rateLimitPolicy !== undefined) {
+    assertPositiveInteger(
+      descriptor.rateLimitPolicy.maxRequestsPerWindow,
+      "rateLimitPolicy.maxRequestsPerWindow"
+    );
+    assertPositiveInteger(
+      descriptor.rateLimitPolicy.windowMs,
+      "rateLimitPolicy.windowMs"
+    );
+  }
+  if (descriptor.circuitBreakerPolicy !== undefined) {
+    assertPositiveInteger(
+      descriptor.circuitBreakerPolicy.failureThreshold,
+      "circuitBreakerPolicy.failureThreshold"
+    );
+    assertPositiveInteger(
+      descriptor.circuitBreakerPolicy.successThreshold,
+      "circuitBreakerPolicy.successThreshold"
+    );
+    assertPositiveInteger(
+      descriptor.circuitBreakerPolicy.resetTimeoutMs,
+      "circuitBreakerPolicy.resetTimeoutMs"
+    );
+    assertPositiveInteger(
+      descriptor.circuitBreakerPolicy.halfOpenMaxProbes,
+      "circuitBreakerPolicy.halfOpenMaxProbes"
+    );
   }
 
   if (!descriptor.isReadOnly && descriptor.sideEffect === undefined) {

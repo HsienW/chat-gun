@@ -17,6 +17,13 @@ export type AgentRuntimeConfig = {
   metricsEnabled: boolean;
   metricsBufferSize: number;
   metricsBackendUrl: string;
+  toolDispatchMaxConcurrentReads: number;
+  toolDispatchMaxConcurrentReadsPerRun: number;
+  toolDispatchRateLimitMaxRequestsPerWindow: number;
+  toolDispatchRateLimitWindowMs: number;
+  toolDispatchCircuitResetTimeoutMs: number;
+  toolRetryAfterMaxMs: number;
+  toolDispatchStepLockTtlMs: number;
   llmFallbackEnabled: boolean;
   llmFallbackProviders: string[];
   llmFallbackMaxAttempts: number;
@@ -51,6 +58,13 @@ const DEFAULT_OPIK_PROJECT_NAME = "chat-gun";
 const DEFAULT_LLM_PROVIDER_RESPONSE_MAX_BYTES = 1_048_576;
 const DEFAULT_LLM_TOOL_ARGUMENT_MAX_BYTES = 65_536;
 const DEFAULT_LLM_JSON_MAX_DEPTH = 64;
+const DEFAULT_TOOL_DISPATCH_MAX_CONCURRENT_READS = 4;
+const DEFAULT_TOOL_DISPATCH_MAX_CONCURRENT_READS_PER_RUN = 2;
+const DEFAULT_TOOL_DISPATCH_RATE_LIMIT_MAX_REQUESTS_PER_WINDOW = 100;
+const DEFAULT_TOOL_DISPATCH_RATE_LIMIT_WINDOW_MS = 60_000;
+const DEFAULT_TOOL_DISPATCH_CIRCUIT_RESET_TIMEOUT_MS = 30_000;
+const DEFAULT_TOOL_RETRY_AFTER_MAX_MS = 30_000;
+const DEFAULT_TOOL_DISPATCH_STEP_LOCK_TTL_MS = 30_000;
 
 function readPositiveInt(name: string, fallback: number): number {
   const rawValue = getEnv(name);
@@ -60,6 +74,19 @@ function readPositiveInt(name: string, fallback: number): number {
 
   const parsed = Number(rawValue);
   return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : fallback;
+}
+
+function readStrictPositiveInt(name: string, fallback: number): number {
+  const rawValue = getEnv(name);
+  if (!rawValue) {
+    return fallback;
+  }
+
+  const parsed = Number(rawValue);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
 }
 
 function readLocale(): AgentLocale {
@@ -146,6 +173,34 @@ export function getAgentRuntimeConfig(): AgentRuntimeConfig {
     metricsEnabled: readBoolean("AGENT_METRICS_ENABLED", true),
     metricsBufferSize: readPositiveInt("AGENT_METRICS_BUFFER_SIZE", 10_000),
     metricsBackendUrl: readUrl("AGENT_METRICS_BACKEND_URL", "http://localhost:2024"),
+    toolDispatchMaxConcurrentReads: readStrictPositiveInt(
+      "TOOL_DISPATCH_MAX_CONCURRENT_READS",
+      DEFAULT_TOOL_DISPATCH_MAX_CONCURRENT_READS
+    ),
+    toolDispatchMaxConcurrentReadsPerRun: readStrictPositiveInt(
+      "TOOL_DISPATCH_MAX_CONCURRENT_READS_PER_RUN",
+      DEFAULT_TOOL_DISPATCH_MAX_CONCURRENT_READS_PER_RUN
+    ),
+    toolDispatchRateLimitMaxRequestsPerWindow: readStrictPositiveInt(
+      "TOOL_DISPATCH_RATE_LIMIT_MAX_REQUESTS_PER_WINDOW",
+      DEFAULT_TOOL_DISPATCH_RATE_LIMIT_MAX_REQUESTS_PER_WINDOW
+    ),
+    toolDispatchRateLimitWindowMs: readStrictPositiveInt(
+      "TOOL_DISPATCH_RATE_LIMIT_WINDOW_MS",
+      DEFAULT_TOOL_DISPATCH_RATE_LIMIT_WINDOW_MS
+    ),
+    toolDispatchCircuitResetTimeoutMs: readStrictPositiveInt(
+      "TOOL_DISPATCH_CIRCUIT_RESET_TIMEOUT_MS",
+      DEFAULT_TOOL_DISPATCH_CIRCUIT_RESET_TIMEOUT_MS
+    ),
+    toolRetryAfterMaxMs: readStrictPositiveInt(
+      "TOOL_RETRY_AFTER_MAX_MS",
+      DEFAULT_TOOL_RETRY_AFTER_MAX_MS
+    ),
+    toolDispatchStepLockTtlMs: readStrictPositiveInt(
+      "TOOL_DISPATCH_STEP_LOCK_TTL_MS",
+      DEFAULT_TOOL_DISPATCH_STEP_LOCK_TTL_MS
+    ),
     llmFallbackEnabled: readBoolean("LLM_FALLBACK_ENABLED", false),
     llmFallbackProviders: readCsv("LLM_FALLBACK_PROVIDERS"),
     llmFallbackMaxAttempts: readPositiveInt("LLM_FALLBACK_MAX_ATTEMPTS", 3),

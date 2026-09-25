@@ -112,6 +112,7 @@ function runnerInput(
       principalId: "principal-1",
     },
     input: { resourceId: `resource-${suffix}` },
+    retryAfterMaxMs: 30_000,
     executor: toolExecutor,
     descriptor: toolDescriptor,
     requestId: `request-${suffix}`,

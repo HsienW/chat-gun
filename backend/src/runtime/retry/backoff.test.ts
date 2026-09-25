@@ -44,6 +44,16 @@ describe("computeBackoff", () => {
     ).toBe(10_000);
   });
 
+  it("caps Retry-After at the configured maximum", () => {
+    expect(
+      computeBackoff("retry-after-header", 1, {
+        retryAfterMs: 60_000,
+        maxMs: 2_500,
+        jitter: false,
+      })
+    ).toBe(2_500);
+  });
+
   it("falls back to exponential when Retry-After is absent", () => {
     expect(
       computeBackoff("retry-after-header", 3, {
