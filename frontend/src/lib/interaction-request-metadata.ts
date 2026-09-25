@@ -3,10 +3,27 @@ export type InteractionActiveRunHint = {
   generation: number;
 };
 
+export const INTERACTION_INPUT_KINDS = [
+  'prompt',
+  'clarification_resume',
+  'cancel',
+  'command',
+] as const;
+
+export type InteractionInputKind = (typeof INTERACTION_INPUT_KINDS)[number];
+
 export type InteractionRequestMetadata = {
   requestId: string;
   idempotencyKey: string;
   activeRunHint?: InteractionActiveRunHint;
+  inputKind?: InteractionInputKind;
+  interruptId?: string;
+};
+
+export type InteractionRequestMetadataOptions = {
+  inputKind?: InteractionInputKind;
+  interruptId?: string;
+  idempotencyKey?: string;
 };
 
 type SubmitOptions = {
@@ -20,6 +37,14 @@ type SubmitOptions = {
 const UUID_V4_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RUN_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,256}$/;
+const INTERRUPT_ID_PATTERN = /^clarification:[a-f0-9]{64}$/;
+
+function isInteractionInputKind(value: unknown): value is InteractionInputKind {
+  return (
+    typeof value === 'string' &&
+    INTERACTION_INPUT_KINDS.some((kind) => kind === value)
+  );
+}
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -59,11 +84,33 @@ function parseInteractionRequestMetadata(
   if (hint !== undefined && !isInteractionActiveRunHint(hint)) {
     return undefined;
   }
+  const inputKind = record.inputKind;
+  if (inputKind !== undefined && !isInteractionInputKind(inputKind)) {
+    return undefined;
+  }
+  const interruptId = record.interruptId;
+  if (
+    interruptId !== undefined &&
+    (typeof interruptId !== 'string' || !INTERRUPT_ID_PATTERN.test(interruptId))
+  ) {
+    return undefined;
+  }
+  if (
+    inputKind === 'clarification_resume' &&
+    (typeof interruptId !== 'string' || !INTERRUPT_ID_PATTERN.test(interruptId))
+  ) {
+    return undefined;
+  }
+  if (inputKind !== 'clarification_resume' && interruptId !== undefined) {
+    return undefined;
+  }
 
   return {
     requestId: record.requestId,
     idempotencyKey: record.idempotencyKey,
     ...(hint && isInteractionActiveRunHint(hint) ? { activeRunHint: hint } : {}),
+    ...(inputKind ? { inputKind } : {}),
+    ...(typeof interruptId === 'string' ? { interruptId } : {}),
   };
 }
 
@@ -87,12 +134,20 @@ function extractBodyMetadata(body: BodyInit | null | undefined): {
 
 export function createInteractionRequestMetadata(
   activeRunHint?: InteractionActiveRunHint,
-  createUuid: () => string = () => crypto.randomUUID()
+  createUuid: () => string = () => crypto.randomUUID(),
+  options: InteractionRequestMetadataOptions = {}
 ): InteractionRequestMetadata {
   const requestId = createUuid();
-  const idempotencyKey = createUuid();
+  const idempotencyKey = options.idempotencyKey ?? createUuid();
   if (!UUID_V4_PATTERN.test(requestId) || !UUID_V4_PATTERN.test(idempotencyKey)) {
     throw new TypeError('Invalid generated interaction request metadata');
+  }
+  if (options.inputKind === 'clarification_resume') {
+    if (!options.interruptId || !INTERRUPT_ID_PATTERN.test(options.interruptId)) {
+      throw new TypeError('Invalid clarification interrupt metadata');
+    }
+  } else if (options.interruptId !== undefined) {
+    throw new TypeError('interruptId requires clarification_resume input kind');
   }
   return {
     requestId,
@@ -100,6 +155,8 @@ export function createInteractionRequestMetadata(
     ...(activeRunHint && isInteractionActiveRunHint(activeRunHint)
       ? { activeRunHint }
       : {}),
+    ...(options.inputKind ? { inputKind: options.inputKind } : {}),
+    ...(options.interruptId ? { interruptId: options.interruptId } : {}),
   };
 }
 

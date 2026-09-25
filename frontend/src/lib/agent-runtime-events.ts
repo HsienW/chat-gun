@@ -556,6 +556,21 @@ export function isLangGraphInterruptEvent(event: Record<string, unknown>): boole
   });
 }
 
+export function extractClarificationInterruptId(
+  event: Record<string, unknown>
+): string | undefined {
+  for (const payload of getInterruptPayloads(event)) {
+    if (
+      payload.eventType === 'clarification_requested' &&
+      typeof payload.interruptId === 'string' &&
+      /^clarification:[a-f0-9]{64}$/.test(payload.interruptId)
+    ) {
+      return payload.interruptId;
+    }
+  }
+  return undefined;
+}
+
 function getInterruptPayloads(value: unknown, depth = 0): Record<string, unknown>[] {
   if (depth > 4) return [];
 
