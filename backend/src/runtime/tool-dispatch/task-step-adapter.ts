@@ -5,6 +5,10 @@ import {
   createTaskCreatedEvent,
 } from "../events.js";
 import type { ExecutionContext } from "../execution-context/execution-context.js";
+import type {
+  StepTransitionGuard,
+  TransitionGuardResult,
+} from "../lock/step-transition-guard.js";
 import type { EventRepository } from "../persistence/event-repository.js";
 import type { StepRepository } from "../persistence/step-repository.js";
 import type { TaskRepository } from "../persistence/task-repository.js";
@@ -17,10 +21,22 @@ export interface PgToolDispatchTaskStepAdapterDependencies {
   taskRepository: TaskRepository;
   stepRepository: StepRepository;
   eventRepository: EventRepository;
+  stepTransitionGuard?: StepTransitionGuard;
 }
 
 function currentIso(): string {
   return new Date().toISOString();
+}
+
+function transitionOwner(context: ExecutionContext): string {
+  return `${context.runId}:${context.toolCallId ?? context.stepId ?? "unknown"}`;
+}
+
+function requireSuccessfulTransition(result: TransitionGuardResult): AgentStep {
+  if (result.outcome === "success") {
+    return result.step;
+  }
+  throw new Error(`Tool dispatch step transition failed: ${result.outcome}`);
 }
 
 function createTask(context: ExecutionContext, createdAt: string): AgentTask {
@@ -122,10 +138,19 @@ export class PgToolDispatchTaskStepAdapter
       if (existingStep.status !== "pending") {
         return;
       }
-      const runningStep = await this.dependencies.stepRepository.updateStatus(
-        context.stepId,
-        "running"
-      );
+      const runningStep = this.dependencies.stepTransitionGuard
+        ? requireSuccessfulTransition(
+            await this.dependencies.stepTransitionGuard.transition(
+              context.stepId,
+              "pending",
+              "running",
+              transitionOwner(context)
+            )
+          )
+        : await this.dependencies.stepRepository.updateStatus(
+            context.stepId,
+            "running"
+          );
       await this.dependencies.eventRepository.append(
         createStepStartedEvent(context.taskId, runningStep, context)
       );
@@ -156,11 +181,21 @@ export class PgToolDispatchTaskStepAdapter
     if (existingStep?.status !== "running") {
       throw new Error("Tool dispatch step is not running");
     }
-    const completedStep = await this.dependencies.stepRepository.updateStatus(
-      context.stepId,
-      "succeeded",
-      { output: envelope }
-    );
+    const completedStep = this.dependencies.stepTransitionGuard
+      ? requireSuccessfulTransition(
+          await this.dependencies.stepTransitionGuard.transition(
+            context.stepId,
+            "running",
+            "succeeded",
+            transitionOwner(context),
+            { output: envelope }
+          )
+        )
+      : await this.dependencies.stepRepository.updateStatus(
+          context.stepId,
+          "succeeded",
+          { output: envelope }
+        );
     await this.dependencies.eventRepository.append(
       createStepCompletedEvent(context.taskId, completedStep, context)
     );
@@ -183,11 +218,21 @@ export class PgToolDispatchTaskStepAdapter
       throw new Error("Tool dispatch step is not running");
     }
     const error = envelopeError(envelope);
-    const failedStep = await this.dependencies.stepRepository.updateStatus(
-      context.stepId,
-      "terminal_failed",
-      { error, output: envelope }
-    );
+    const failedStep = this.dependencies.stepTransitionGuard
+      ? requireSuccessfulTransition(
+          await this.dependencies.stepTransitionGuard.transition(
+            context.stepId,
+            "running",
+            "terminal_failed",
+            transitionOwner(context),
+            { error, output: envelope }
+          )
+        )
+      : await this.dependencies.stepRepository.updateStatus(
+          context.stepId,
+          "terminal_failed",
+          { error, output: envelope }
+        );
     await this.dependencies.eventRepository.append(
       createStepFailedEvent(context.taskId, failedStep, error, context)
     );

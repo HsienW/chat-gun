@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { EventRepository } from "../persistence/event-repository.js";
 import type { StepRepository } from "../persistence/step-repository.js";
 import type { TaskRepository } from "../persistence/task-repository.js";
+import type { StepTransitionGuard } from "../lock/step-transition-guard.js";
 import type { AgentStep, AgentTask } from "../types.js";
 import type { RuntimeToolDescriptor } from "./runtime-tool-descriptor.js";
 import type { StructuredToolResultEnvelope } from "./structured-tool-result.js";
@@ -149,6 +150,43 @@ describe("PgToolDispatchTaskStepAdapter", () => {
     expect(repositories.eventRepository.append).not.toHaveBeenCalled();
   });
 
+  it("uses the transition guard when advancing an existing pending step", async () => {
+    const pendingStep: AgentStep = {
+      stepId: "step-1",
+      stepName: "read_tool",
+      status: "pending",
+      attempt: 1,
+      maxAttempts: 2,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const runningStep = { ...pendingStep, status: "running" as const };
+    const repositories = createRepositories(null, pendingStep);
+    const transitionGuard: StepTransitionGuard = {
+      transition: vi.fn(async () => ({
+        outcome: "success" as const,
+        step: runningStep,
+      })),
+    };
+    const adapter = new PgToolDispatchTaskStepAdapter({
+      ...repositories,
+      stepTransitionGuard: transitionGuard,
+    });
+
+    await adapter.start(context, descriptor, { value: "x" });
+
+    expect(transitionGuard.transition).toHaveBeenCalledWith(
+      "step-1",
+      "pending",
+      "running",
+      "run-1:call-1"
+    );
+    expect(repositories.stepRepository.updateStatus).not.toHaveBeenCalled();
+    expect(repositories.eventRepository.append).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: "step_started", stepId: "step-1" })
+    );
+  });
+
   it("persists the structured envelope when completing a running step", async () => {
     const runningStep: AgentStep = {
       stepId: "step-1",
@@ -186,5 +224,49 @@ describe("PgToolDispatchTaskStepAdapter", () => {
     expect(repositories.eventRepository.append).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: "step_completed", stepId: "step-1" })
     );
+  });
+
+  it("does not emit a completion event when the guarded CAS transition loses", async () => {
+    const runningStep: AgentStep = {
+      stepId: "step-1",
+      stepName: "read_tool",
+      status: "running",
+      attempt: 1,
+      maxAttempts: 2,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const repositories = createRepositories(null, runningStep);
+    const transitionGuard: StepTransitionGuard = {
+      transition: vi.fn(async () => ({
+        outcome: "cas_mismatch" as const,
+        currentStatus: "terminal_failed" as const,
+      })),
+    };
+    const adapter = new PgToolDispatchTaskStepAdapter({
+      ...repositories,
+      stepTransitionGuard: transitionGuard,
+    });
+    const envelope = {
+      schemaVersion: "1.0",
+      kind: "tool_result",
+      correlation: {
+        requestId: "request-1",
+        threadId: "thread-1",
+        runId: "run-1",
+        toolCallId: "call-1",
+        stepId: "step-1",
+      },
+      tool: { name: "read_tool", version: "1.0", riskTier: "read", readOnly: true },
+      outcome: { type: "succeeded", result: "ok" },
+      emittedAt: now,
+    } satisfies StructuredToolResultEnvelope<string>;
+
+    await expect(adapter.complete(context, envelope)).rejects.toThrow(
+      "Tool dispatch step transition failed: cas_mismatch"
+    );
+
+    expect(repositories.stepRepository.updateStatus).not.toHaveBeenCalled();
+    expect(repositories.eventRepository.append).not.toHaveBeenCalled();
   });
 });
