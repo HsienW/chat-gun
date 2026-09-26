@@ -120,6 +120,10 @@ describe("llm-gateway provider selection", () => {
     expect(
       gatewayModule.getConfiguredLlmCapabilities("research").supportsStructuredOutput
     ).toBe(true);
+    expect(gatewayModule.getConfiguredLlmCapabilities("research")).toMatchObject({
+      contextWindowTokens: 128_000,
+      maxOutputTokens: 8_192,
+    });
   });
 
   it("routes OpenAI-compatible provider through chat completions endpoint", async () => {

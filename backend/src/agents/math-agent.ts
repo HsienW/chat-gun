@@ -4,6 +4,7 @@ import { END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph
 import { createHash } from "node:crypto";
 
 import { getEnv } from "../platform/env.js";
+import { isContextHardLimitError } from "../context/context-errors.js";
 import { llmGateway } from "../platform/llm-gateway.js";
 import {
   applyInteractionGovernance,
@@ -25,6 +26,12 @@ import { instrumentGraphWithExecutionContext } from "../runtime/execution-contex
 import {
   tryToLegacyToolResult,
 } from "../runtime/tool-dispatch/structured-tool-result.js";
+import {
+  assembleAgentContext,
+  contextHardLimitErrorMessage,
+  isContextAssemblyEnabled,
+  legacyMathMessages,
+} from "./context-integration.js";
 
 const mathDispatchPipelineEnabled =
   isToolDispatchPipelineEnabled("math_agent");
@@ -99,20 +106,26 @@ async function callModel(
     };
   }
 
-  const llm = llmGateway.createChatModel({
-    purpose: "math",
-    model: getEnv("MATH_MODEL").trim() || undefined,
-    temperature: Number(process.env.MATH_TEMPERATURE ?? 0.1),
-  });
-
-  const response = await llm.invoke([
-    { role: "system", content: mathSystemMessage },
-    { role: "human", content: latestUserText(state.messages) },
-  ]);
-
-  return {
-    messages: [response],
-  };
+  try {
+    const modelInput = isContextAssemblyEnabled("math")
+      ? (await assembleAgentContext({
+          systemPolicy: mathSystemMessage,
+          messages: state.messages,
+          purpose: "math",
+          config,
+        })).text
+      : legacyMathMessages(mathSystemMessage, latestUserText(state.messages));
+    const llm = llmGateway.createChatModel({
+      purpose: "math",
+      model: getEnv("MATH_MODEL").trim() || undefined,
+      temperature: Number(process.env.MATH_TEMPERATURE ?? 0.1),
+    });
+    const response = await llm.invoke(modelInput);
+    return { messages: [response] };
+  } catch (error) {
+    if (!isContextHardLimitError(error)) throw error;
+    return { messages: [contextHardLimitErrorMessage(error, config)] };
+  }
 }
 
 const builder = new StateGraph(MessagesAnnotation)

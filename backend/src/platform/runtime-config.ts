@@ -12,6 +12,7 @@ export type AgentRuntimeConfig = {
   locale: AgentLocale;
   timeZone: string;
   contextBudgetTotal: number;
+  contextOutputReserveTokens: number;
   contextTokensPerSource: number;
   fallbackRequiredSourceCount: number;
   metricsEnabled: boolean;
@@ -167,6 +168,10 @@ export function getAgentRuntimeConfig(): AgentRuntimeConfig {
     contextBudgetTotal: readPositiveInt(
       "AGENT_CONTEXT_BUDGET_TOTAL",
       DEFAULT_CONTEXT_TOKEN_BUDGET
+    ),
+    contextOutputReserveTokens: readPositiveInt(
+      "AGENT_CONTEXT_OUTPUT_RESERVE_TOKENS",
+      4_096
     ),
     contextTokensPerSource: readPositiveInt("AGENT_CONTEXT_TOKENS_PER_SOURCE", 2_000),
     fallbackRequiredSourceCount: readPositiveInt("AGENT_FALLBACK_REQUIRED_SOURCE_COUNT", 3),
