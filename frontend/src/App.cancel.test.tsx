@@ -118,6 +118,18 @@ describe('App cancel handling', () => {
 
     fireEvent.click(screen.getByText('cancel'));
     expect(mocks.thread.stop).toHaveBeenCalledTimes(1);
+    expect(mocks.thread.submit).toHaveBeenCalledWith(
+      { kind: 'cancel' },
+      expect.objectContaining({
+        config: {
+          configurable: {
+            clientInteractionMetadata: expect.objectContaining({
+              inputKind: 'cancel',
+            }),
+          },
+        },
+      })
+    );
 
     mocks.thread.isLoading = false;
     rerender(<App />);
@@ -143,6 +155,6 @@ describe('App cancel handling', () => {
     fireEvent.click(screen.getByText('submit-next'));
 
     expect(screen.queryByText('已取消本次回覆。')).not.toBeInTheDocument();
-    expect(mocks.thread.submit).toHaveBeenCalledTimes(1);
+    expect(mocks.thread.submit).toHaveBeenCalledTimes(2);
   });
 });

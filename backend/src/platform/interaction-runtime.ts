@@ -3,6 +3,20 @@ import type { Pool, PoolClient } from "pg";
 
 import type { CancellationDecision } from "../runtime/interaction/cancel-decision.js";
 import {
+  PgIdempotencyGuard,
+  type IdempotencyGuard,
+} from "../runtime/idempotency/idempotency-guard.js";
+import type { IdempotencyKey } from "../runtime/idempotency/idempotency-key.js";
+import {
+  readNormalizedAgentInput,
+  type ReadNormalizedAgentInputResult,
+} from "../runtime/input/read-normalized-agent-input.js";
+import type { NormalizedAgentInput } from "../runtime/input/normalized-agent-input.js";
+import {
+  GenerationQueryGuard,
+  type QueryGuard,
+} from "../runtime/input/query-guard.js";
+import {
   classifyInteractionInput,
   resolveClassificationDisposition,
   type InputClassificationResult,
@@ -57,14 +71,15 @@ export interface InteractionRunContext {
     runId: string;
     generation: number;
   };
+  normalizedInput?: Exclude<NormalizedAgentInput, { kind: "command" }>;
+  idempotencyRecordKey?: IdempotencyKey;
+  idempotencyTtlMs?: number;
   inputPayload: Uint8Array;
 }
 
-type ClassifyInteraction = (input: {
-  payload: Uint8Array;
-  idempotencyKey?: string;
-  classifier: SemanticInputClassifier;
-}) => Promise<InputClassificationResult>;
+type ClassifyInteraction = (
+  input: Parameters<typeof classifyInteractionInput>[0]
+) => Promise<InputClassificationResult>;
 
 type DecideRunCancellation = (input: {
   activeOwnership: ActiveRunOwnership;
@@ -79,6 +94,14 @@ export interface InteractionOrchestratorConfig {
   classify?: ClassifyInteraction;
   decideCancellation?: DecideRunCancellation;
   eventRecorder?: Pick<InteractionEventRecorder, "record">;
+  queryGuard?: QueryGuard;
+  idempotencyGuard?: Pick<
+    IdempotencyGuard,
+    "acquire" | "markCompleted" | "markFailed"
+  >;
+  loadPriorInput?: (
+    ownership: ActiveRunOwnership
+  ) => Promise<{ idempotencyKey: string; payload: Uint8Array } | undefined>;
   ensureTask?: (context: InteractionRunContext) => Promise<void>;
   recordMetric?: (name: string, payload: MetricPayload, context?: ExecutionContext) => void | Promise<void>;
 }
@@ -88,6 +111,8 @@ export type InteractionRunStart = {
   context?: InteractionRunContext;
   ownership?: ActiveRunOwnership;
   events: InteractionTaskEvent[];
+  outcome?: "run" | "reused";
+  reusedResult?: unknown;
 };
 
 export interface InteractionOrchestrator {
@@ -95,7 +120,9 @@ export interface InteractionOrchestrator {
   beforeRun(input: unknown, config: unknown): Promise<InteractionRunStart>;
   afterRun(
     start: InteractionRunStart | undefined,
-    terminalStatus: "completed" | "cancelled"
+    terminalStatus: "completed" | "cancelled",
+    result?: unknown,
+    failed?: boolean,
   ): Promise<void>;
 }
 
@@ -190,6 +217,7 @@ export function createProductionInteractionOrchestrator(
 
   return createInteractionOrchestrator({
     ownershipRepository: new PgActiveRunOwnershipRepository(ownershipDatabase),
+    idempotencyGuard: new PgIdempotencyGuard(pool),
     eventRecorder,
     ensureTask: (context) => ensureInteractionTask(pool, context),
     recordMetric,
@@ -241,6 +269,22 @@ function readPositiveGeneration(value: unknown): number | undefined {
     : undefined;
 }
 
+function readPositiveInteger(value: unknown): number | undefined {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^[1-9]\d*$/.test(value)
+        ? Number(value)
+        : undefined;
+  return parsed !== undefined && Number.isSafeInteger(parsed) && parsed > 0
+    ? parsed
+    : undefined;
+}
+
+function isTrustedDedupKey(value: string | undefined): value is string {
+  return value !== undefined && /^[a-f0-9]{64}$/.test(value);
+}
+
 function serializeInput(input: unknown): Uint8Array {
   try {
     return new TextEncoder().encode(JSON.stringify(input));
@@ -278,6 +322,9 @@ function readRunContext(input: unknown, config: unknown): InteractionRunContext 
   const hintedGeneration = readPositiveGeneration(
     configurable["x-active-run-generation"] ?? configurable.activeRunGeneration
   );
+  const idempotencyTtlMs = readPositiveInteger(
+    configurable["x-bff-idempotency-ttl-ms"]
+  );
 
   return {
     ...(executionContext ? { executionContext } : {}),
@@ -287,6 +334,7 @@ function readRunContext(input: unknown, config: unknown): InteractionRunContext 
     runId,
     ...(requestId ? { requestId } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(idempotencyTtlMs ? { idempotencyTtlMs } : {}),
     ...(hintedRunId && hintedGeneration
       ? { clientActiveRunHint: { runId: hintedRunId, generation: hintedGeneration } }
       : {}),
@@ -312,6 +360,7 @@ function createDecisionEvent(input: {
   disposition: string;
   reasonCode: string;
   classification?: InputClassificationResult["classification"];
+  interruptId?: string;
   sideEffectState?: CancellationDecision["phase"];
   cancellationPath?: string;
 }): InteractionTaskEvent {
@@ -328,6 +377,7 @@ function createDecisionEvent(input: {
     replacementTaskId: input.replacementOwnership?.taskId ?? null,
     replacementRunId: input.replacementOwnership?.runId ?? null,
     generation: authoritativeOwnership.generation,
+    ...(input.interruptId ? { interruptId: input.interruptId } : {}),
     input: createInteractionInputReference(
       input.context.inputPayload,
       input.classification
@@ -416,38 +466,210 @@ export function createInteractionOrchestrator(
   const classify =
     config.classify ??
     ((classificationInput) => classifyInteractionInput(classificationInput));
+  const queryGuard =
+    config.queryGuard ?? new GenerationQueryGuard(ownershipRepository);
+
+  async function cleanupBeforeDispatch(
+    context: InteractionRunContext,
+    ownership: ActiveRunOwnership,
+  ): Promise<void> {
+    await ownershipRepository.markTerminal({
+      threadId: context.threadId,
+      scopeId: context.scopeId,
+      runId: context.runId,
+      status: "cancelled",
+    });
+    await queryGuard.release(context, ownership.generation);
+    if (context.idempotencyRecordKey) {
+      await config.idempotencyGuard?.markFailed(context.idempotencyRecordKey);
+    }
+  }
+
+  async function rejectBeforeDispatch(input: {
+    context: InteractionRunContext;
+    ownership: ActiveRunOwnership;
+    reasonCode: string;
+    classification?: InputClassificationResult["classification"];
+    strategy?: string;
+    disposition?: string;
+  }): Promise<InteractionTaskEvent> {
+    await cleanupBeforeDispatch(input.context, input.ownership);
+    const event = createDecisionEvent({
+      context: input.context,
+      activeOwnership: input.ownership,
+      eventType: "cancelled",
+      strategy: input.strategy ?? "reject",
+      disposition: input.disposition ?? "reject",
+      ...(input.classification
+        ? { classification: input.classification }
+        : {}),
+      reasonCode: input.reasonCode,
+    });
+    await recordDecision(config, event, input.context);
+    return event;
+  }
 
   return {
     isConfigured: true,
     async beforeRun(input: unknown, runnableConfig: unknown) {
-      const context = readRunContext(input, runnableConfig);
-      await config.ensureTask?.(context);
-      const activeOwnership = await ownershipRepository.findActive(
-        context.threadId,
-        context.scopeId
-      );
+      let context = readRunContext(input, runnableConfig);
+      const normalizedResult: ReadNormalizedAgentInputResult =
+        readNormalizedAgentInput(input, runnableConfig);
+      if (normalizedResult.status === "invalid") {
+        throw new InteractionGovernanceRejectedError(
+          normalizedResult.errorCode
+        );
+      }
+      context = {
+        ...context,
+        ...(normalizedResult.status === "valid"
+          ? { normalizedInput: normalizedResult.input }
+          : {}),
+        inputPayload: serializeInput(normalizedResult.input),
+      };
 
-      if (!activeOwnership) {
-        const claimed = await ownershipRepository.claim({
-          threadId: context.threadId,
-          scopeId: context.scopeId,
-          taskId: context.taskId,
-          runId: context.runId,
+      const proposedGeneration =
+        context.clientActiveRunHint?.generation !== undefined &&
+        context.clientActiveRunHint.generation < Number.MAX_SAFE_INTEGER
+          ? context.clientActiveRunHint.generation + 1
+          : 1;
+      const reservation = await queryGuard.reserve(context, proposedGeneration);
+      const reservedOwnership = reservation.ownership;
+      if (!reservedOwnership) {
+        throw new InteractionGovernanceRejectedError(
+          "QUERY_DISPATCH_IN_PROGRESS"
+        );
+      }
+      let activeOwnership = reservedOwnership;
+      try {
+        await config.ensureTask?.(context);
+
+      if (
+        isTrustedDedupKey(context.idempotencyKey) &&
+        config.idempotencyGuard
+      ) {
+        const idempotencyRecordKey: IdempotencyKey = {
+          namespace: "interaction_input",
+          resourceKey: context.idempotencyKey,
+          version: "1",
+        };
+        const acquired = await config.idempotencyGuard.acquire(
+          idempotencyRecordKey,
+          context.idempotencyTtlMs ?? 60_000
+        );
+        if (!acquired.acquired && acquired.reason === "already_completed") {
+          const event = await rejectBeforeDispatch({
+            context,
+            ownership: activeOwnership,
+            reasonCode: "IDEMPOTENCY_KEY_COMPLETED",
+            classification: "duplicate_input",
+            disposition: "reuse_existing",
+          });
+          return {
+            configured: true,
+            context,
+            ownership: activeOwnership,
+            events: [event],
+            outcome: "reused",
+            reusedResult: acquired.existing.result,
+          };
+        }
+        if (!acquired.acquired) {
+          const reasonCode =
+            acquired.reason === "already_locked"
+              ? "IDEMPOTENCY_KEY_LOCKED"
+              : "IDEMPOTENCY_KEY_FAILED";
+          await rejectBeforeDispatch({
+            context,
+            ownership: activeOwnership,
+            reasonCode,
+            disposition: "reject",
+          });
+          throw new InteractionGovernanceRejectedError(reasonCode);
+        }
+        if (acquired.acquired) {
+          context = { ...context, idempotencyRecordKey };
+        }
+      }
+
+      if (normalizedResult.status === "unsupported") {
+        await rejectBeforeDispatch({
+          context,
+          ownership: activeOwnership,
+          reasonCode: normalizedResult.errorCode,
+          disposition: "unsupported",
         });
+        throw new InteractionGovernanceRejectedError(
+          normalizedResult.errorCode
+        );
+      }
+
+      if (
+        normalizedResult.input.kind === "cancel" &&
+        normalizedResult.input.targetRunId === undefined
+      ) {
+        const event = await rejectBeforeDispatch({
+          context,
+          ownership: activeOwnership,
+          reasonCode: "NOTHING_TO_CANCEL",
+          classification: "cancel_request",
+          disposition: "no_op",
+        });
+        return {
+          configured: true,
+          context,
+          ownership: activeOwnership,
+          events: [event],
+          outcome: "reused",
+          reusedResult: { status: "no_op", reason: "nothing_to_cancel" },
+        };
+      }
+
+      if (reservation.reserved) {
+        if (normalizedResult.input.kind === "clarification_resume") {
+          await rejectBeforeDispatch({
+            context,
+            ownership: activeOwnership,
+            reasonCode: "CLARIFICATION_TASK_NOT_FOUND",
+            classification: "clarification_answer",
+          });
+          throw new InteractionGovernanceRejectedError(
+            "CLARIFICATION_TASK_NOT_FOUND"
+          );
+        }
+        if (normalizedResult.input.kind === "cancel") {
+          const event = await rejectBeforeDispatch({
+            context,
+            ownership: activeOwnership,
+            reasonCode: "NOTHING_TO_CANCEL",
+            classification: "cancel_request",
+            disposition: "no_op",
+          });
+          return {
+            configured: true,
+            context,
+            ownership: activeOwnership,
+            events: [event],
+            outcome: "reused",
+            reusedResult: { status: "no_op", reason: "nothing_to_cancel" },
+          };
+        }
         const event = createDecisionEvent({
           context,
-          activeOwnership: claimed,
+          activeOwnership,
           eventType: "interaction_decision",
           strategy: loadedPolicy.policy.strategy,
           disposition: "initial_claim",
           reasonCode: "NO_ACTIVE_RUN",
         });
         await recordDecision(config, event, context);
+        await queryGuard.dispatch(context, activeOwnership.generation);
         return {
           configured: true,
           context,
-          ownership: claimed,
+          ownership: activeOwnership,
           events: [event],
+          outcome: "run",
         };
       }
 
@@ -457,36 +679,115 @@ export function createInteractionOrchestrator(
           context,
           ownership: activeOwnership,
           events: [],
+          outcome: "run",
         };
       }
 
+      const priorInput = !isTrustedDedupKey(context.idempotencyKey)
+        ? await config.loadPriorInput?.(activeOwnership)
+        : undefined;
+      const isClarificationResume =
+        normalizedResult.input.kind === "clarification_resume";
+      const clarificationInterruptId =
+        normalizedResult.input.kind === "clarification_resume"
+        ? normalizedResult.input.interruptId
+        : undefined;
       const classification = await classify({
         payload: context.inputPayload,
         ...(context.idempotencyKey
           ? { idempotencyKey: context.idempotencyKey }
+          : {}),
+        ...(priorInput ? { priorInput } : {}),
+        ...(normalizedResult.input.kind === "cancel"
+          ? {
+              cancelSignal: {
+                requested: true as const,
+                source: "business_cancel" as const,
+              },
+            }
+          : {}),
+        ...(isClarificationResume
+          ? {
+              waitingTask: {
+                taskId: activeOwnership.taskId,
+                runId: activeOwnership.runId,
+                confirmationType: "clarification",
+              },
+              replyToTaskId: activeOwnership.taskId,
+            }
           : {}),
         classifier,
       });
       const disposition = resolveClassificationDisposition({
         classification,
         policy: loadedPolicy.policy,
-        hasWaitingHitl: false,
+        hasWaitingHitl: isClarificationResume,
       });
 
       if (disposition.action === "await_confirmation") {
-        const event = createDecisionEvent({
+        await rejectBeforeDispatch({
           context,
-          activeOwnership,
-          eventType: "input_classification_tentative",
-          strategy: loadedPolicy.policy.strategy,
-          disposition: disposition.action,
+          ownership: activeOwnership,
+          reasonCode: "INPUT_CLASSIFICATION_CONFIRMATION_REQUIRED",
           classification: classification.classification,
-          reasonCode: classification.reasonCode,
+          disposition: disposition.action,
         });
-        await recordDecision(config, event, context);
         throw new InteractionGovernanceRejectedError(
           "INPUT_CLASSIFICATION_CONFIRMATION_REQUIRED"
         );
+      }
+
+      if (disposition.action === "reuse_existing") {
+        const event = await rejectBeforeDispatch({
+          context,
+          ownership: activeOwnership,
+          reasonCode: classification.reasonCode,
+          classification: classification.classification,
+          disposition: disposition.action,
+        });
+        return {
+          configured: true,
+          context,
+          ownership: activeOwnership,
+          events: [event],
+          outcome: "reused",
+          reusedResult: { status: "duplicate_input" },
+        };
+      }
+
+      if (disposition.action === "resume_same_task") {
+        const priorOwnership = activeOwnership;
+        const replacement = await ownershipRepository.supersede({
+          threadId: context.threadId,
+          scopeId: context.scopeId,
+          expectedGeneration: activeOwnership.generation,
+          replacementTaskId: disposition.taskId,
+          replacementRunId: context.runId,
+        });
+        queryGuard.adopt(replacement, "dispatching");
+        activeOwnership = replacement;
+        const event = createDecisionEvent({
+          context,
+          activeOwnership: priorOwnership,
+          replacementOwnership: replacement,
+          eventType: "clarification_resumed",
+          strategy: "resume_same_task",
+          disposition: disposition.action,
+          classification: classification.classification,
+          ...(clarificationInterruptId
+            ? { interruptId: clarificationInterruptId }
+            : {}),
+          reasonCode: classification.reasonCode,
+        });
+        await recordDecision(config, event, context);
+        await queryGuard.dispatch(context, replacement.generation);
+        return {
+          configured: true,
+          context,
+          ownership: replacement,
+          events: [event],
+          outcome: "run",
+        };
       }
 
       const effectiveStrategy =
@@ -497,30 +798,26 @@ export function createInteractionOrchestrator(
             : loadedPolicy.policy.strategy;
 
       if (effectiveStrategy === "reject") {
-        const event = createDecisionEvent({
+        await rejectBeforeDispatch({
           context,
-          activeOwnership,
-          eventType: "interaction_decision",
+          ownership: activeOwnership,
           strategy: effectiveStrategy,
           disposition: "reject",
           classification: classification.classification,
           reasonCode: classification.reasonCode,
         });
-        await recordDecision(config, event, context);
         throw new InteractionGovernanceRejectedError("POLICY_REJECTED");
       }
 
       if (effectiveStrategy === "enqueue") {
-        const event = createDecisionEvent({
+        await rejectBeforeDispatch({
           context,
-          activeOwnership,
-          eventType: "interaction_decision",
+          ownership: activeOwnership,
           strategy: effectiveStrategy,
           disposition: NATIVE_QUEUE_OWNERSHIP_REQUIRED_DISPOSITION,
           classification: classification.classification,
           reasonCode: NATIVE_QUEUE_OWNERSHIP_REQUIRED,
         });
-        await recordDecision(config, event, context);
         throw new InteractionGovernanceRejectedError(
           NATIVE_QUEUE_OWNERSHIP_REQUIRED
         );
@@ -546,6 +843,12 @@ export function createInteractionOrchestrator(
         cancellation.path !== "interrupt_or_supersede" &&
         cancellation.path !== "compensated_then_supersede"
       ) {
+        await ownershipRepository.markTerminal({
+          threadId: context.threadId,
+          scopeId: context.scopeId,
+          runId: context.runId,
+          status: "cancelled",
+        });
         const event = createDecisionEvent({
           context,
           activeOwnership,
@@ -561,10 +864,17 @@ export function createInteractionOrchestrator(
           cancellationPath: cancellation.path,
         });
         await recordDecision(config, event, context);
+        await queryGuard.release(context, activeOwnership.generation);
+        if (context.idempotencyRecordKey) {
+          await config.idempotencyGuard?.markFailed(
+            context.idempotencyRecordKey
+          );
+        }
         throw new InteractionGovernanceRejectedError(
           "ACTIVE_RUN_REQUIRES_CORRECTIVE_OR_MANUAL_HANDLING"
         );
       }
+      const priorOwnership = activeOwnership;
       const replacement = await ownershipRepository.supersede({
         threadId: context.threadId,
         scopeId: context.scopeId,
@@ -572,9 +882,11 @@ export function createInteractionOrchestrator(
         replacementTaskId: context.taskId,
         replacementRunId: context.runId,
       });
+      queryGuard.adopt(replacement, "dispatching");
+      activeOwnership = replacement;
       const event = createDecisionEvent({
         context,
-        activeOwnership,
+        activeOwnership: priorOwnership,
         replacementOwnership: replacement,
         eventType: eventTypeForStrategy(effectiveStrategy),
         strategy: effectiveStrategy,
@@ -585,14 +897,22 @@ export function createInteractionOrchestrator(
         cancellationPath: cancellation.path,
       });
       await recordDecision(config, event, context);
+      await queryGuard.dispatch(context, replacement.generation);
       return {
         configured: true,
         context,
         ownership: replacement,
         events: [event],
+        outcome: "run",
       };
+      } catch (error) {
+        if (!(error instanceof InteractionGovernanceRejectedError)) {
+          await cleanupBeforeDispatch(context, activeOwnership);
+        }
+        throw error;
+      }
     },
-    async afterRun(start, terminalStatus) {
+    async afterRun(start, terminalStatus, result, failed = false) {
       if (!start?.context || start.ownership?.runId !== start.context.runId) {
         return;
       }
@@ -602,6 +922,19 @@ export function createInteractionOrchestrator(
         runId: start.context.runId,
         status: terminalStatus,
       });
+      await queryGuard.release(start.context, start.ownership.generation);
+      if (start.context.idempotencyRecordKey) {
+        if (failed) {
+          await config.idempotencyGuard?.markFailed(
+            start.context.idempotencyRecordKey
+          );
+        } else {
+          await config.idempotencyGuard?.markCompleted(
+            start.context.idempotencyRecordKey,
+            result
+          );
+        }
+      }
     },
   };
 }
@@ -644,6 +977,15 @@ function createGovernedStream(
 ): AsyncIterable<unknown> {
   return (async function* generateGovernedStream() {
     const start = await orchestrator.beforeRun(input, config);
+    if (start.outcome === "reused") {
+      for (const event of start.events) {
+        yield { interaction_runtime: { taskEvent: event } };
+      }
+      if (start.reusedResult !== undefined) {
+        yield { interaction_runtime: { reusedResult: start.reusedResult } };
+      }
+      return;
+    }
     let source: unknown;
     try {
       source = await invokeGraphMethod(method, target, input, config);
@@ -655,12 +997,15 @@ function createGovernedStream(
     } catch (error) {
       await orchestrator.afterRun(
         start,
-        isCancelled(error, config) ? "cancelled" : "completed"
+        isCancelled(error, config) ? "cancelled" : "completed",
+        undefined,
+        true
       );
       throw error;
     }
 
     let completed = false;
+    let failed = false;
     let terminalStatus: "completed" | "cancelled" = "cancelled";
     try {
       for (const event of start.events) {
@@ -670,13 +1015,14 @@ function createGovernedStream(
       completed = true;
       terminalStatus = "completed";
     } catch (error) {
+      failed = true;
       terminalStatus = isCancelled(error, config) ? "cancelled" : "completed";
       throw error;
     } finally {
       if (!completed && terminalStatus !== "completed") {
         terminalStatus = "cancelled";
       }
-      await orchestrator.afterRun(start, terminalStatus);
+      await orchestrator.afterRun(start, terminalStatus, undefined, failed);
     }
   })();
 }
@@ -695,17 +1041,22 @@ export function applyInteractionGovernance<TGraph extends object>(
       if (property === "invoke") {
         return async (input: unknown, config?: RunnableConfig) => {
           const start = await orchestrator.beforeRun(input, config);
+          if (start.outcome === "reused") {
+            return start.reusedResult;
+          }
           let output: unknown;
           try {
             output = await invokeGraphMethod(member, target, input, config);
           } catch (error) {
             await orchestrator.afterRun(
               start,
-              isCancelled(error, config) ? "cancelled" : "completed"
+              isCancelled(error, config) ? "cancelled" : "completed",
+              undefined,
+              true
             );
             throw error;
           }
-          await orchestrator.afterRun(start, "completed");
+          await orchestrator.afterRun(start, "completed", output);
           return output;
         };
       }

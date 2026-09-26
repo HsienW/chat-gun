@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1.0",
+  "scope": {
+    "threadId": "thread-1",
+    "scopeId": "scope-1",
+    "taskId": "task-1",
+    "runId": "run-1"
+  },
+  "transitions": ["idle", "dispatching", "running"],
+  "currentGeneration": 2,
+  "staleGeneration": 1,
+  "rejectCleanupOrder": ["markTerminal", "terminalEvent"],
+  "staleReleaseOutcome": "no_op"
+}

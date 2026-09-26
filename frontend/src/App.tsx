@@ -6,6 +6,7 @@ import { WelcomeScreen } from '@/components/WelcomeScreen';
 import { ChatMessagesView } from '@/components/ChatMessagesView';
 import {
   extractAgentRuntimeEvents,
+  extractClarificationInterruptId,
   extractTaskEventActiveRunHint,
   extractTaskEventGeneration,
   extractWeatherClarificationInterruptToolResult,
@@ -17,7 +18,10 @@ import {
   createInteractionRequestMetadata,
   withInteractionRequestMetadata,
 } from '@/lib/interaction-request-metadata';
-import type { InteractionActiveRunHint } from '@/lib/interaction-request-metadata';
+import type {
+  InteractionActiveRunHint,
+  InteractionInputKind,
+} from '@/lib/interaction-request-metadata';
 import { getAgentRunConfig } from '@/lib/agent-run-config';
 import { FRONTEND_ERROR_MESSAGES } from '@/lib/error-messages';
 import {
@@ -142,16 +146,31 @@ export default function App() {
   const [cancelledMessage, setCancelledMessage] = useState<Message | null>(null);
   const [weatherClarificationMessages, setWeatherClarificationMessages] =
     useState<Message[] | null>(null);
+  const [isDispatching, setIsDispatching] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const selectedAgentIdRef = useRef(selectedAgentId);
   const messagesRef = useRef<Message[]>([]);
   const streamActivityStateRef = useRef(streamActivityState);
   const clarificationResumePendingRef = useRef(false);
+  const clarificationInterruptIdRef = useRef<string | undefined>(undefined);
+  const dispatchingRef = useRef(false);
   const activeRunHintRef = useRef<InteractionActiveRunHint | undefined>(undefined);
   const interactionMetadataFetch = useMemo(
     () => createInteractionMetadataFetch(),
     []
   );
+
+  const releaseDispatch = useCallback(() => {
+    dispatchingRef.current = false;
+    setIsDispatching(false);
+  }, []);
+
+  const beginDispatch = useCallback((): boolean => {
+    if (dispatchingRef.current) return false;
+    dispatchingRef.current = true;
+    setIsDispatching(true);
+    return true;
+  }, []);
 
   useEffect(() => {
     selectedAgentIdRef.current = selectedAgentId;
@@ -196,10 +215,12 @@ export default function App() {
         setCancelledMessage(null);
         setWeatherClarificationMessages(null);
         clarificationResumePendingRef.current = false;
+        clarificationInterruptIdRef.current = undefined;
+        releaseDispatch();
         activeRunHintRef.current = undefined;
       }
     },
-    [selectedAgentId, validateAgentId]
+    [releaseDispatch, selectedAgentId, validateAgentId]
   );
 
   const handleAgentChange = useCallback(
@@ -211,6 +232,7 @@ export default function App() {
   );
 
   const handleStreamError = useCallback((error: unknown) => {
+    releaseDispatch();
     if (clarificationResumePendingRef.current) {
       setWeatherClarificationMessages(null);
     }
@@ -242,10 +264,11 @@ export default function App() {
       archiveMessageId: STREAM_ERROR_MESSAGE_ID,
     });
     console.error('LangGraph stream error:', error);
-  }, []);
+  }, [releaseDispatch]);
 
   const handleStreamFinish = useCallback((event: unknown) => {
     void event;
+    releaseDispatch();
     if (clarificationResumePendingRef.current) {
       setWeatherClarificationMessages(null);
     }
@@ -255,9 +278,10 @@ export default function App() {
       messagesLengthAtTerminal: messagesRef.current.length,
       archiveMessageId: getCurrentFinalAssistantMessageId(messagesRef.current),
     });
-  }, []);
+  }, [releaseDispatch]);
 
   const handleStreamUpdate = useCallback((event: Record<string, unknown>) => {
+    releaseDispatch();
     const activeRunHint = extractTaskEventActiveRunHint(event);
     if (
       activeRunHint &&
@@ -270,6 +294,8 @@ export default function App() {
     const isInterruptEvent = isLangGraphInterruptEvent(event);
     if (isInterruptEvent) {
       clarificationResumePendingRef.current = false;
+      clarificationInterruptIdRef.current =
+        extractClarificationInterruptId(event);
       const toolResult = extractWeatherClarificationInterruptToolResult(event);
       if (toolResult) {
         setWeatherClarificationMessages(
@@ -300,10 +326,12 @@ export default function App() {
         generation: extractTaskEventGeneration(event),
       });
     }
-  }, []);
+  }, [releaseDispatch]);
 
   const thread = useStream<{
     messages: Message[];
+    kind?: InteractionInputKind;
+    targetRunId?: string;
     initial_search_query_count: number;
     max_research_loops: number;
     reasoning_model: string;
@@ -351,6 +379,7 @@ export default function App() {
 
       const validAgentId = validateAgentId(agentId);
       if (!submittedInputValue.trim() && attachments.length === 0) return;
+      if (!beginDispatch()) return;
 
       handleAgentSwitch(validAgentId);
       dispatchStreamActivity({ type: 'resetForAgentOrSubmit' });
@@ -390,36 +419,50 @@ export default function App() {
       ];
       const submitOptions = withInteractionRequestMetadata(
         {},
-        createInteractionRequestMetadata(activeRunHintRef.current)
+        createInteractionRequestMetadata(
+          activeRunHintRef.current,
+          undefined,
+          { inputKind: 'prompt' }
+        )
       );
 
-      if (validAgentId === AgentId.DEEP_RESEARCHER) {
-        const runConfig = getAgentRunConfig(validAgentId, effort);
+      try {
+        if (validAgentId === AgentId.DEEP_RESEARCHER) {
+          const runConfig = getAgentRunConfig(validAgentId, effort);
 
-        thread.submit(
-          {
-            messages: newMessages,
-            ...runConfig,
-            reasoning_model: model,
-          },
-          submitOptions
-        );
-      } else {
-        thread.submit({ messages: newMessages }, submitOptions);
+          thread.submit(
+            {
+              kind: 'prompt',
+              messages: newMessages,
+              ...runConfig,
+              reasoning_model: model,
+            },
+            submitOptions
+          );
+        } else {
+          thread.submit({ kind: 'prompt', messages: newMessages }, submitOptions);
+        }
+      } catch (error) {
+        releaseDispatch();
+        throw error;
       }
     },
     [
       validateAgentId,
+      beginDispatch,
       handleAgentSwitch,
       rateLimitRetryAfter,
       thread,
       weatherClarificationMessages,
+      releaseDispatch,
     ]
   );
 
   const handleClarificationResume = useCallback(
     (resumeValue: ClarificationResumeValue) => {
       if (rateLimitRetryAfter !== null) return;
+      const interruptId = clarificationInterruptIdRef.current;
+      if (!interruptId || !beginDispatch()) return;
       dispatchStreamActivity({ type: 'resetForAgentOrSubmit' });
       dispatchStreamActivity({ type: 'streamStarted' });
       setStreamErrorMessage(null);
@@ -427,19 +470,30 @@ export default function App() {
       setCancelledMessage(null);
       clarificationResumePendingRef.current = true;
 
-      thread.submit(
-        null,
-        withInteractionRequestMetadata(
-          { command: { resume: resumeValue } },
-          createInteractionRequestMetadata(activeRunHintRef.current)
-        )
-      );
+      try {
+        thread.submit(
+          null,
+          withInteractionRequestMetadata(
+            { command: { resume: resumeValue } },
+            createInteractionRequestMetadata(
+              activeRunHintRef.current,
+              undefined,
+              { inputKind: 'clarification_resume', interruptId }
+            )
+          )
+        );
+      } catch (error) {
+        releaseDispatch();
+        throw error;
+      }
     },
-    [rateLimitRetryAfter, thread]
+    [beginDispatch, rateLimitRetryAfter, releaseDispatch, thread]
   );
 
   const handleCancel = useCallback(() => {
+    releaseDispatch();
     clarificationResumePendingRef.current = false;
+    clarificationInterruptIdRef.current = undefined;
     setWeatherClarificationMessages(null);
     const localCancelledMessage = createCancelledAssistantMessage();
     dispatchStreamActivity({
@@ -448,8 +502,21 @@ export default function App() {
       archiveMessageId: localCancelledMessage.id,
     });
     thread.stop();
+    const activeRunHint = activeRunHintRef.current;
+    thread.submit(
+      {
+        kind: 'cancel',
+        ...(activeRunHint ? { targetRunId: activeRunHint.runId } : {}),
+      },
+      withInteractionRequestMetadata(
+        {},
+        createInteractionRequestMetadata(activeRunHint, undefined, {
+          inputKind: 'cancel',
+        })
+      )
+    );
     setCancelledMessage(localCancelledMessage);
-  }, [thread]);
+  }, [releaseDispatch, thread]);
 
   const activeStreamErrorMessage =
     rateLimitRetryAfter === null
@@ -484,7 +551,7 @@ export default function App() {
     [messagesWithWeatherClarification, cancelledMessage]
   );
   const isChatLoading =
-    thread.isLoading &&
+    (thread.isLoading || isDispatching) &&
     (!weatherClarificationMessages || clarificationResumePendingRef.current);
 
   useEffect(() => {
@@ -509,7 +576,7 @@ export default function App() {
           {displayMessages.length === 0 ? (
             <WelcomeScreen
               handleSubmit={handleSubmit}
-              isLoading={thread.isLoading}
+              isLoading={thread.isLoading || isDispatching}
               onCancel={handleCancel}
               selectedAgent={selectedAgentId}
               onAgentChange={handleAgentChange}

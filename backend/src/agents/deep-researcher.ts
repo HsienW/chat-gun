@@ -6,6 +6,7 @@ import { MemorySaver } from "@langchain/langgraph-checkpoint";
 import { readCanonicalExecutionContext, readExecutionCorrelation } from "../runtime/execution-context/read-execution-context.js";
 import { readDevelopmentExecutionContext } from "../runtime/execution-context/read-execution-context.js";
 import { instrumentGraphWithExecutionContext } from "../runtime/execution-context/instrument-graph.js";
+import { createClarificationInterruptId } from "../runtime/interaction/events.js";
 
 import { getBooleanEnv } from "../platform/env.js";
 import { GOVERNANCE_CANCELLED_PREFIX } from "../platform/tool-governance.js";
@@ -1787,10 +1788,19 @@ function buildClarificationInterrupt(
     return undefined;
   }
 
+  const threadId = readExecutionCorrelation(config).threadId ?? "";
+  const runId = getRunId(config);
+
   return {
     type: "weather_clarification",
-    threadId: readExecutionCorrelation(config).threadId ?? "",
-    runId: getRunId(config),
+    eventType: "clarification_requested",
+    interruptId: createClarificationInterruptId({
+      threadId,
+      runId,
+      checkpointStep: clarification.interruptCheckpointStep,
+    }),
+    threadId,
+    runId,
     candidates: clarification.candidates.map((candidate, index) => ({
       ...candidate,
       index: index + 1,

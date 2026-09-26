@@ -69,6 +69,13 @@ const FORWARDED_REQUEST_HEADERS = new Set([
   "x-api-key",
 ]);
 
+const SUPPORTED_INPUT_KINDS = new Set([
+  "prompt",
+  "clarification_resume",
+  "cancel",
+  "command",
+]);
+
 type RequestContext = {
   requestId: string;
   startedAt: number;
@@ -336,6 +343,64 @@ async function readRequestBody(
   }
 
   return chunks.length > 0 ? Buffer.concat(chunks) : undefined;
+}
+
+type InputKindValidation =
+  | { ok: true }
+  | { ok: false; errorCode: "unsupported_input_kind" };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validateInputKind(body: Buffer | undefined): InputKindValidation {
+  if (!body || body.byteLength === 0) return { ok: true };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body.toString("utf8"));
+  } catch {
+    return { ok: true };
+  }
+  if (!isRecord(parsed)) return { ok: true };
+
+  const input = isRecord(parsed.input) ? parsed.input : undefined;
+  const config = isRecord(parsed.config) ? parsed.config : undefined;
+  const configurable = isRecord(config?.configurable)
+    ? config.configurable
+    : undefined;
+  const metadata = isRecord(configurable?.clientInteractionMetadata)
+    ? configurable.clientInteractionMetadata
+    : undefined;
+  const directKind = readDiscriminator(input, "kind");
+  const metadataKind = readDiscriminator(metadata, "inputKind");
+
+  if (directKind.status === "invalid" || metadataKind.status === "invalid") {
+    return { ok: false, errorCode: "unsupported_input_kind" };
+  }
+  if (
+    directKind.status === "present" &&
+    metadataKind.status === "present" &&
+    directKind.value !== metadataKind.value
+  ) {
+    return { ok: false, errorCode: "unsupported_input_kind" };
+  }
+  return { ok: true };
+}
+
+function readDiscriminator(
+  record: Record<string, unknown> | undefined,
+  key: string
+):
+  | { status: "absent" }
+  | { status: "invalid" }
+  | { status: "present"; value: string } {
+  if (!record || !(key in record)) return { status: "absent" };
+  const value = record[key];
+  if (typeof value !== "string" || !SUPPORTED_INPUT_KINDS.has(value)) {
+    return { status: "invalid" };
+  }
+  return { status: "present", value };
 }
 
 function copyRequestHeaders(
@@ -929,6 +994,21 @@ async function proxyLangGraph(
 
   try {
     const body = await readRequestBody(req, config.maxBodyBytes, ctx);
+    const inputKindValidation = validateInputKind(body);
+    if (!inputKindValidation.ok) {
+      sendJson(
+        res,
+        400,
+        {
+          error: {
+            code: inputKindValidation.errorCode,
+            message: "Unsupported input kind",
+          },
+        },
+        ctx.requestId
+      );
+      return;
+    }
     const uploadValidationError = validateUploadPayload(body, {
       maxFiles: config.imageUploadMaxFiles,
       maxBytes: config.imageUploadMaxBytes,

@@ -736,6 +736,8 @@ describe("Deep Research weather structured result integration", () => {
       ? deepResearcherWeatherTestInternals.buildClarificationInterrupt(clarification, state, config)
       : undefined;
     expect(payload?.type).toBe("weather_clarification");
+    expect(payload?.eventType).toBe("clarification_requested");
+    expect(payload?.interruptId).toMatch(/^clarification:[a-f0-9]{64}$/);
     expect(payload?.threadId).toBe("thread-weather");
     expect(payload?.candidates[1].index).toBe(2);
     expect(payload?.candidates[1].providerId).toBe("geo-2");

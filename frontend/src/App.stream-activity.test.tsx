@@ -163,6 +163,8 @@ function emitWeatherClarificationInterrupt() {
         {
           value: {
             type: 'weather_clarification',
+            eventType: 'clarification_requested',
+            interruptId: 'clarification:' + 'b'.repeat(64),
             weatherCapability: 'current',
             weatherExecution: {
               status: 'needs_clarification',
@@ -246,7 +248,7 @@ describe('App stream activity state', () => {
 
     expect(mocks.options?.callerOptions?.fetch).toEqual(expect.any(Function));
     expect(mocks.thread.submit).toHaveBeenCalledWith(
-      expect.objectContaining({ messages: expect.any(Array) }),
+      expect.objectContaining({ kind: 'prompt', messages: expect.any(Array) }),
       expect.objectContaining({
         config: {
           configurable: {
@@ -258,6 +260,7 @@ describe('App stream activity state', () => {
                 /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
               ),
               activeRunHint: { runId: 'run-2', generation: 2 },
+              inputKind: 'prompt',
             },
           },
         },
@@ -312,6 +315,8 @@ describe('App stream activity state', () => {
             clientInteractionMetadata: expect.objectContaining({
               requestId: expect.any(String),
               idempotencyKey: expect.any(String),
+              inputKind: 'clarification_resume',
+              interruptId: 'clarification:' + 'b'.repeat(64),
             }),
           },
         },
@@ -334,6 +339,8 @@ describe('App stream activity state', () => {
             clientInteractionMetadata: expect.objectContaining({
               requestId: expect.any(String),
               idempotencyKey: expect.any(String),
+              inputKind: 'clarification_resume',
+              interruptId: 'clarification:' + 'b'.repeat(64),
             }),
           },
         },
@@ -470,5 +477,14 @@ describe('App stream activity state', () => {
     );
     expect(screen.getByTestId('historical-activity')).toHaveTextContent('Plan');
     expect(screen.getByTestId('historical-activity')).not.toHaveTextContent('Late');
+  });
+
+  it('blocks a same-tick double submit with a synchronous guard', () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByText('submit-next'));
+    fireEvent.click(screen.getByText('submit-next'));
+
+    expect(mocks.thread.submit).toHaveBeenCalledTimes(1);
   });
 });

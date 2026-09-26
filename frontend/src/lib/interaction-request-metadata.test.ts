@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import fixture from '../../../contracts/execution-context.fixture.json';
+import inputFixture from '../../../contracts/input-normalization.fixture.json';
 
 import {
   createInteractionMetadataFetch,
@@ -46,6 +47,34 @@ describe('interaction request metadata', () => {
     });
   });
 
+  it('carries typed input metadata and reuses a logical-submit idempotency key', () => {
+    const first = createInteractionRequestMetadata(
+      undefined,
+      () => '11111111-1111-4111-8111-111111111111',
+      { inputKind: 'prompt' }
+    );
+    const retried = createInteractionRequestMetadata(
+      undefined,
+      () => '22222222-2222-4222-8222-222222222222',
+      { inputKind: 'prompt', idempotencyKey: first.idempotencyKey }
+    );
+
+    expect(first.inputKind).toBe('prompt');
+    expect(retried.requestId).not.toBe(first.requestId);
+    expect(retried.idempotencyKey).toBe(first.idempotencyKey);
+  });
+
+  it('requires a stable interrupt id for clarification resume metadata', () => {
+    const interruptId = inputFixture.clarification.interruptId;
+    const metadata = createInteractionRequestMetadata(
+      undefined,
+      () => '11111111-1111-4111-8111-111111111111',
+      { inputKind: 'clarification_resume', interruptId }
+    );
+
+    expect(metadata).toMatchObject({ inputKind: 'clarification_resume', interruptId });
+  });
+
   it('stores metadata in per-submit configurable state without replacing existing config', () => {
     const metadata = createInteractionRequestMetadata(
       undefined,
@@ -80,6 +109,7 @@ describe('interaction request metadata', () => {
             requestId: '11111111-1111-4111-8111-111111111111',
             idempotencyKey: '22222222-2222-4222-8222-222222222222',
             activeRunHint: { runId: 'run-7', generation: 7 },
+            inputKind: 'prompt',
           },
         },
       },
