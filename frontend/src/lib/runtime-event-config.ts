@@ -1,4 +1,18 @@
 import type { AgentRuntimeEvent } from '@/types/agent-runtime-events';
+import type { RunStatus, RunTerminalStatus } from '@/lib/runtime-run-status';
+
+const RUN_STATUS_LABELS: Record<RunStatus, string> = {
+  running: '執行中',
+  needs_user: '等待使用者',
+  manual_intervention_required: '需要人工介入',
+  completed: '已完成',
+  failed: '失敗',
+  cancelled: '已取消',
+  timed_out: '逾時',
+  crashed: '執行崩潰',
+  budget_exhausted: '預算用盡',
+  superseded: '已被取代',
+};
 
 export const RUNTIME_EVENT_NODE_KEYS = {
   buildContextPack: 'build_context_pack',
@@ -27,6 +41,9 @@ export const RUNTIME_EVENT_LABELS = {
   finalAnswer: '最終回答',
   card: (cardType: string) => `卡片：${cardType}`,
   unknown: (eventType: string) => `未知流程事件：${eventType}`,
+  runStatus: (status: RunStatus) => `執行狀態：${RUN_STATUS_LABELS[status]}`,
+  runTerminal: (status: RunTerminalStatus) =>
+    `執行終止：${RUN_STATUS_LABELS[status]}`,
   contextSources: {
     message: (index: number, role: string) => `近期訊息 ${index}（${role}）`,
     asset: (index: number) => `附件 ${index}`,

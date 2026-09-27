@@ -1,3 +1,5 @@
+import type { RunStatus, RunTerminalStatus } from '@/lib/runtime-run-status';
+
 export type ContextSource = {
   sourceId: string;
   sourceType: 'message' | 'asset' | 'tool' | 'business_card' | 'profile';
@@ -30,6 +32,18 @@ export type AgentRuntimeEvent = (
     }
   | { type: 'agent.answer.stream'; delta: string; ts: number }
   | { type: 'agent.card.emit'; cardType: string; payload: unknown; ts: number }
+  | {
+      type: 'agent.run.status';
+      status: RunStatus;
+      reasonCode?: string;
+      ts: number;
+    }
+  | {
+      type: 'agent.run.terminal';
+      status: RunTerminalStatus;
+      reasonCode: string;
+      ts: number;
+    }
   | {
       type: 'agent.unknown';
       originalType: string;

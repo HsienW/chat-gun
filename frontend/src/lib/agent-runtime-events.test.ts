@@ -9,8 +9,10 @@ import {
   extractTaskEventGeneration,
   extractWeatherClarificationInterruptToolResult,
   isLangGraphInterruptEvent,
+  runtimeEnvelopeToAgentRuntimeEvent,
   runtimeEventToProcessedEvent,
 } from '@/lib/agent-runtime-events';
+import type { RuntimeEventEnvelope } from '@/lib/runtime-event-envelope';
 
 describe('extractTaskEventGeneration', () => {
   it('reads the standard task event payload generation without coercion', () => {
@@ -241,6 +243,55 @@ describe('agent runtime event extraction', () => {
     expect(JSON.parse(result?.content ?? '{}')).toMatchObject({
       tool: 'current_weather',
       status: 'needs_clarification',
+    });
+  });
+});
+
+describe('versioned runtime event presentation', () => {
+  const baseEnvelope: RuntimeEventEnvelope = {
+    schemaVersion: '1.0.0',
+    eventId: 'event-1',
+    sequence: 1,
+    type: 'run.terminal',
+    emittedAt: '2026-09-27T00:00:00.000Z',
+    context: {
+      requestId: 'request-1',
+      threadId: 'thread-1',
+      runId: 'run-1',
+      taskId: 'task-1',
+      attempt: 1,
+      principalId: 'principal-1',
+      tenantId: 'tenant-1',
+      scopeId: 'tenant-1',
+      scopeType: 'tenant',
+    },
+    payload: { status: 'timed_out', reasonCode: 'UPSTREAM_TIMEOUT' },
+  };
+
+  it.each([
+    ['timed_out', '逾時'],
+    ['crashed', '執行崩潰'],
+    ['budget_exhausted', '預算用盡'],
+    ['superseded', '已被取代'],
+  ] as const)('keeps terminal status %s visually distinct', (status, label) => {
+    const event = runtimeEnvelopeToAgentRuntimeEvent({
+      ...baseEnvelope,
+      payload: { status, reasonCode: 'TERMINAL_REASON' },
+    });
+
+    expect(runtimeEventToProcessedEvent(event).title).toContain(label);
+  });
+
+  it('maps invalid known payloads to a safe generic event', () => {
+    const event = runtimeEnvelopeToAgentRuntimeEvent({
+      ...baseEnvelope,
+      type: 'model.stream',
+      payload: { delta: 42 },
+    });
+
+    expect(event).toMatchObject({
+      type: 'agent.unknown',
+      originalType: 'model.stream',
     });
   });
 });
