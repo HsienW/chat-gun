@@ -34,6 +34,7 @@ import {
 } from "./redis-rate-limit.js";
 import { InMemoryRateLimiter } from "./rate-limit.js";
 import { validateUploadPayload } from "./upload-security.js";
+import { pipeWebResponseBody } from "./stream-passthrough.js";
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -119,11 +120,6 @@ type ValidatedActiveRunHint =
         | "incomplete_active_run_hint"
         | "invalid_active_run_hint";
     };
-
-type StreamPipeResult = {
-  completed: boolean;
-  clientDisconnected: boolean;
-};
 
 export type ServerDependencies = {
   redisClient?: RedisEvalClient | null;
@@ -470,67 +466,6 @@ function copyResponseHeaders(upstream: Response, res: ServerResponse): void {
       res.setHeader(name, value);
     }
   });
-}
-
-async function pipeWebResponseBody(
-  body: ReadableStream<Uint8Array>,
-  res: ServerResponse,
-  options: {
-    abortController: AbortController;
-    disconnectReason: BffAbortReason;
-  }
-): Promise<StreamPipeResult> {
-  const reader = body.getReader();
-  let completed = false;
-  let clientDisconnected = false;
-
-  const onClose = () => {
-    if (completed || res.writableEnded) return;
-    clientDisconnected = true;
-    if (!options.abortController.signal.aborted) {
-      options.abortController.abort(options.disconnectReason);
-    }
-    void reader.cancel(options.disconnectReason).catch(() => undefined);
-  };
-
-  res.on("close", onClose);
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (clientDisconnected || res.destroyed) break;
-      if (value && !res.write(value)) {
-        await new Promise<void>((resolve) => {
-          const onDrain = () => {
-            res.off("close", onClosed);
-            resolve();
-          };
-          const onClosed = () => {
-            res.off("drain", onDrain);
-            resolve();
-          };
-          res.once("drain", onDrain);
-          res.once("close", onClosed);
-        });
-      }
-    }
-    completed = !clientDisconnected;
-    if (completed && !res.writableEnded) res.end();
-    return { completed, clientDisconnected };
-  } catch (error) {
-    if (clientDisconnected) {
-      throw createBffAbortError(options.disconnectReason, error);
-    }
-    const abortReason = getAbortReason(options.abortController.signal);
-    if (abortReason) {
-      throw createBffAbortError(abortReason, error);
-    }
-    throw error;
-  } finally {
-    res.off("close", onClose);
-    reader.releaseLock();
-  }
 }
 
 function buildUpstreamUrl(reqUrl: URL, baseUrl: URL): URL {
