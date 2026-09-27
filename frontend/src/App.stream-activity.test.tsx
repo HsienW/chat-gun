@@ -152,6 +152,37 @@ function emitPlanEvent(title = 'Plan') {
   });
 }
 
+function createVersionedEvent(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    schemaVersion: '1.0.0',
+    eventId: 'event-1',
+    sequence: 1,
+    type: 'model.stream',
+    emittedAt: '2026-09-27T00:00:00.000Z',
+    context: {
+      requestId: 'request-1',
+      threadId: 'thread-1',
+      runId: 'run-1',
+      taskId: 'task-1',
+      attempt: 1,
+      principalId: 'principal-1',
+      tenantId: 'tenant-1',
+      scopeId: 'tenant-1',
+      scopeType: 'tenant',
+    },
+    payload: { delta: 'hello' },
+    ...overrides,
+  };
+}
+
+function emitVersionedEvent(event: Record<string, unknown>) {
+  act(() => {
+    mocks.options?.onUpdateEvent?.({ runtimeEvents: [event] });
+  });
+}
+
 function startStream() {
   fireEvent.click(screen.getByText('submit-next'));
 }
@@ -486,5 +517,68 @@ describe('App stream activity state', () => {
     fireEvent.click(screen.getByText('submit-next'));
 
     expect(mocks.thread.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('deduplicates versioned events and releases bounded out-of-order events', () => {
+    render(<App />);
+    startStream();
+    const second = createVersionedEvent({
+      eventId: 'event-2',
+      sequence: 2,
+      payload: { delta: 'second' },
+    });
+    const first = createVersionedEvent({
+      eventId: 'event-1',
+      sequence: 1,
+      payload: { delta: 'first' },
+    });
+
+    emitVersionedEvent(second);
+    expect(screen.getByTestId('live-activity')).toHaveTextContent('');
+    emitVersionedEvent(first);
+    const releasedText = screen.getByTestId('live-activity').textContent;
+    expect(releasedText?.split('|')).toHaveLength(2);
+    emitVersionedEvent(first);
+    expect(screen.getByTestId('live-activity').textContent).toBe(releasedText);
+  });
+
+  it('degrades unsupported major versions without crashing', () => {
+    const observation = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    render(<App />);
+    startStream();
+
+    emitVersionedEvent(createVersionedEvent({ schemaVersion: '2.0.0' }));
+
+    expect(screen.getByTestId('live-activity')).toHaveTextContent(
+      'runtime.unsupported_schema_version'
+    );
+    expect(observation).toHaveBeenCalledWith({
+      code: 'events.parse.degraded',
+      reason: 'unsupported_schema_version',
+    });
+    observation.mockRestore();
+  });
+
+  it('drops a versioned event from a stale run after supersession', () => {
+    render(<App />);
+    startStream();
+    act(() => {
+      mocks.options?.onUpdateEvent?.({
+        interaction_runtime: {
+          taskEvent: {
+            eventType: 'superseded',
+            payload: {
+              priorRunId: 'run-1',
+              replacementRunId: 'run-2',
+              generation: 2,
+            },
+          },
+        },
+      });
+    });
+
+    emitVersionedEvent(createVersionedEvent());
+
+    expect(screen.getByTestId('live-activity')).toHaveTextContent('');
   });
 });

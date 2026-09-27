@@ -137,6 +137,24 @@ describe('taskEventReducer', () => {
     expect(result?.status).toBe('running');
   });
 
+  it('allows manual intervention parking to resume', () => {
+    const result = taskEventReducer(
+      createTask({ status: 'manual_intervention_required' }),
+      createEvent('resumed')
+    );
+
+    expect(result?.status).toBe('running');
+  });
+
+  it.each(['step_started', 'resumed', 'clarification_requested'] as const)(
+    'ignores late %s after a hard terminal state',
+    (eventType) => {
+      const state = createTask({ status: 'completed' });
+
+      expect(taskEventReducer(state, createEvent(eventType))).toBe(state);
+    }
+  );
+
   it.each([
     ['cancelling', 'cancelling'],
     ['cancelled', 'cancelled'],

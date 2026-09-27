@@ -1,6 +1,7 @@
 import type { AgentStep, AgentTask, StepError, TaskEvent, TaskEventType } from "./types.js";
 import type { ExecutionContext } from "./execution-context/execution-context.js";
 import { executionCorrelation } from "./execution-context/read-execution-context.js";
+import { stableEventId } from "./event-sequence.js";
 
 function createEvent(
   eventType: TaskEventType,
@@ -8,7 +9,7 @@ function createEvent(
   options: { stepId?: string; payload?: unknown; executionContext?: ExecutionContext } = {}
 ): TaskEvent {
   return {
-    eventId: globalThis.crypto.randomUUID(),
+    eventId: stableEventId(),
     taskId,
     ...(options.stepId ? { stepId: options.stepId } : {}),
     eventType,

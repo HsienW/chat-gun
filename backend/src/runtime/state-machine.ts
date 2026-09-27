@@ -41,7 +41,10 @@ export const TASK_TRANSITIONS: ReadonlyMap<TaskStatus, ReadonlySet<TaskStatus>> 
       ]),
     ],
     ["rollback_requested", new Set(["compensating", "manual_intervention_required"])],
-    ["manual_intervention_required", new Set(["completed", "failed", "cancelled"])],
+    [
+      "manual_intervention_required",
+      new Set(["running", "completed", "failed", "cancelled"]),
+    ],
     ["completed", new Set()],
     ["failed", new Set()],
     ["cancelled", new Set()],

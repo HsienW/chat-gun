@@ -8,6 +8,10 @@ import {
   type TaskEventType,
   type TaskStatus,
 } from './task-types';
+import {
+  isRunTerminalStatus,
+  runStatusOfTaskStatus,
+} from './runtime-run-status';
 
 export type IncomingTaskEvent = TaskEvent | {
   eventId: string;
@@ -155,6 +159,15 @@ export function taskEventReducer<TStep extends string>(
   event: IncomingTaskEvent
 ): AgentTask<TStep> | null {
   if (!isTaskEventType(event.eventType)) {
+    return state;
+  }
+
+  if (state && isRunTerminalStatus(runStatusOfTaskStatus(state.status))) {
+    console.info({
+      code: 'task_event.terminal_late_ignored',
+      taskId: state.taskId,
+      eventType: event.eventType,
+    });
     return state;
   }
 

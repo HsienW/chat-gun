@@ -11,8 +11,12 @@ import {
   extractTaskEventGeneration,
   extractWeatherClarificationInterruptToolResult,
   isLangGraphInterruptEvent,
+  runtimeEnvelopeToAgentRuntimeEvent,
   runtimeEventToProcessedEvent,
+  runtimeParseFailureToAgentRuntimeEvent,
 } from '@/lib/agent-runtime-events';
+import { extractIncomingRuntimeEventResults } from '@/lib/legacy-event-adapter';
+import { BoundedRuntimeEventBuffer } from '@/lib/runtime-event-envelope';
 import {
   createInteractionMetadataFetch,
   createInteractionRequestMetadata,
@@ -155,6 +159,7 @@ export default function App() {
   const clarificationInterruptIdRef = useRef<string | undefined>(undefined);
   const dispatchingRef = useRef(false);
   const activeRunHintRef = useRef<InteractionActiveRunHint | undefined>(undefined);
+  const runtimeEventBufferRef = useRef(new BoundedRuntimeEventBuffer());
   const interactionMetadataFetch = useMemo(
     () => createInteractionMetadataFetch(),
     []
@@ -218,6 +223,7 @@ export default function App() {
         clarificationInterruptIdRef.current = undefined;
         releaseDispatch();
         activeRunHintRef.current = undefined;
+        runtimeEventBufferRef.current = new BoundedRuntimeEventBuffer();
       }
     },
     [releaseDispatch, selectedAgentId, validateAgentId]
@@ -315,9 +321,38 @@ export default function App() {
     const currentAgent = getAgentById(selectedAgentIdRef.current);
     if (!currentAgent?.showActivityTimeline) return;
 
-    const processedEvents = extractAgentRuntimeEvents(event).map(
-      runtimeEventToProcessedEvent
+    const versionedEvents = extractIncomingRuntimeEventResults(event).flatMap(
+      (result) => {
+        if (result.kind === 'legacy') return [];
+        if (result.kind === 'unknown') {
+          console.info({
+            code: 'events.parse.degraded',
+            reason: result.reason,
+            ...(result.originalType ? { originalType: result.originalType } : {}),
+          });
+          return [runtimeParseFailureToAgentRuntimeEvent(result)];
+        }
+        const authoritativeRun = activeRunHintRef.current?.runId;
+        if (
+          authoritativeRun &&
+          result.envelope.context.runId !== authoritativeRun
+        ) {
+          console.info({
+            code: 'events.run.stale',
+            runId: result.envelope.context.runId,
+            authoritativeRunId: authoritativeRun,
+          });
+          return [];
+        }
+        const buffered = runtimeEventBufferRef.current.push(result.envelope);
+        buffered.observations.forEach((observation) => console.info(observation));
+        return buffered.events.map(runtimeEnvelopeToAgentRuntimeEvent);
+      }
     );
+    const processedEvents = [
+      ...extractAgentRuntimeEvents(event),
+      ...versionedEvents,
+    ].map(runtimeEventToProcessedEvent);
 
     if (processedEvents.length > 0) {
       dispatchStreamActivity({

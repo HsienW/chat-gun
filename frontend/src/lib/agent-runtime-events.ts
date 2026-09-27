@@ -5,6 +5,14 @@ import {
 import { isInteractionActiveRunHint } from '@/lib/interaction-request-metadata';
 import type { InteractionActiveRunHint } from '@/lib/interaction-request-metadata';
 import type {
+  RuntimeEventEnvelope,
+  RuntimeEventParseResult,
+} from '@/lib/runtime-event-envelope';
+import {
+  isRunStatus,
+  isRunTerminalStatus,
+} from '@/lib/runtime-run-status';
+import type {
   AgentRuntimeEvent,
   ContextSource,
   ExecutionEventCorrelation,
@@ -37,6 +45,8 @@ const KNOWN_RUNTIME_EVENT_TYPES = new Set<AgentRuntimeEvent['type']>([
   'agent.context.build',
   'agent.answer.stream',
   'agent.card.emit',
+  'agent.run.status',
+  'agent.run.terminal',
   'agent.unknown',
 ]);
 
@@ -355,7 +365,154 @@ function normalizeAgentRuntimeEvent(value: unknown): AgentRuntimeEvent | undefin
             ...correlationFields,
           }
         : undefined;
+    case 'agent.run.status':
+      return typeof record.status === 'string' && isRunStatus(record.status)
+        ? {
+            type,
+            status: record.status,
+            reasonCode:
+              typeof record.reasonCode === 'string' ? record.reasonCode : undefined,
+            ts: record.ts,
+            ...correlationFields,
+          }
+        : undefined;
+    case 'agent.run.terminal':
+      return typeof record.status === 'string' &&
+        isRunTerminalStatus(record.status) &&
+        typeof record.reasonCode === 'string'
+        ? {
+            type,
+            status: record.status,
+            reasonCode: record.reasonCode,
+            ts: record.ts,
+            ...correlationFields,
+          }
+        : undefined;
   }
+}
+
+export function runtimeEnvelopeToAgentRuntimeEvent(
+  envelope: RuntimeEventEnvelope
+): AgentRuntimeEvent {
+  const payload = asRecord(envelope.payload);
+  const ts = Date.parse(envelope.emittedAt);
+  const correlation = {
+    requestId: envelope.context.requestId,
+    threadId: envelope.context.threadId,
+    runId: envelope.context.runId,
+  };
+
+  if (envelope.type === 'run.started' || envelope.type === 'run.status') {
+    const status = payload?.status;
+    if (typeof status === 'string' && isRunStatus(status)) {
+      return {
+        type: 'agent.run.status',
+        status,
+        reasonCode:
+          typeof payload?.reasonCode === 'string' ? payload.reasonCode : undefined,
+        ts,
+        correlation,
+      };
+    }
+  }
+  if (envelope.type === 'run.terminal') {
+    const status = payload?.status;
+    const reasonCode = payload?.reasonCode;
+    if (
+      typeof status === 'string' &&
+      isRunTerminalStatus(status) &&
+      typeof reasonCode === 'string'
+    ) {
+      return {
+        type: 'agent.run.terminal',
+        status,
+        reasonCode,
+        ts,
+        correlation,
+      };
+    }
+  }
+  if (envelope.type === 'model.stream' && typeof payload?.delta === 'string') {
+    return {
+      type: 'agent.answer.stream',
+      delta: payload.delta,
+      ts,
+      correlation,
+    };
+  }
+  if (envelope.type === 'tool.start' && typeof payload?.toolName === 'string') {
+    return {
+      type: 'agent.tool.start',
+      toolName: payload.toolName,
+      ts,
+      correlation,
+    };
+  }
+  if (
+    envelope.type === 'tool.success' &&
+    typeof payload?.toolName === 'string' &&
+    typeof payload?.durationMs === 'number'
+  ) {
+    return {
+      type: 'agent.tool.success',
+      toolName: payload.toolName,
+      costMs: payload.durationMs,
+      ts,
+      correlation,
+    };
+  }
+  if (
+    envelope.type === 'tool.error' &&
+    typeof payload?.toolName === 'string' &&
+    typeof payload?.errorCode === 'string'
+  ) {
+    return {
+      type: 'agent.tool.error',
+      toolName: payload.toolName,
+      error: payload.errorCode,
+      ts,
+      correlation,
+    };
+  }
+  if (
+    envelope.type === 'context.build' &&
+    typeof payload?.tokenEstimate === 'number'
+  ) {
+    return {
+      type: 'agent.context.build',
+      sources: [],
+      tokenEstimate: payload.tokenEstimate,
+      ts,
+      correlation,
+    };
+  }
+  if (envelope.type === 'card.emit' && typeof payload?.cardType === 'string') {
+    return {
+      type: 'agent.card.emit',
+      cardType: payload.cardType,
+      payload: payload.data,
+      ts,
+      correlation,
+    };
+  }
+  return {
+    type: 'agent.unknown',
+    originalType: envelope.type,
+    rawPayload: payload,
+    ts,
+    correlation,
+  };
+}
+
+export function runtimeParseFailureToAgentRuntimeEvent(
+  result: Extract<RuntimeEventParseResult, { kind: 'unknown' }>
+): AgentRuntimeEvent {
+  return {
+    type: 'agent.unknown',
+    originalType: result.originalType ?? `runtime.${result.reason}`,
+    rawPayload: { reason: result.reason },
+    ts: Date.now(),
+  };
 }
 
 function getNodeMessages(nodeValue: unknown): unknown[] {
@@ -656,9 +813,14 @@ export function extractNodeAdapterRuntimeEvents(
 ): AgentRuntimeEvent[] {
   return NODE_EVENT_RULES.flatMap((rule) => {
     if (!(rule.nodeKey in event)) return [];
-    if (getRuntimeEvents(event[rule.nodeKey]).length > 0) return [];
+    if (hasRuntimeEventValues(event[rule.nodeKey])) return [];
     return rule.toEvents(event[rule.nodeKey]);
   });
+}
+
+function hasRuntimeEventValues(value: unknown): boolean {
+  const runtimeEvents = asRecord(value)?.runtimeEvents;
+  return Array.isArray(runtimeEvents) && runtimeEvents.length > 0;
 }
 
 export function runtimeEventToProcessedEvent(
@@ -708,6 +870,18 @@ export function runtimeEventToProcessedEvent(
       return {
         title: RUNTIME_EVENT_LABELS.card(event.cardType),
         data: stringifyEventData(event.payload),
+        eventType: event.type,
+      };
+    case 'agent.run.status':
+      return {
+        title: RUNTIME_EVENT_LABELS.runStatus(event.status),
+        data: event.reasonCode ?? event.status,
+        eventType: event.type,
+      };
+    case 'agent.run.terminal':
+      return {
+        title: RUNTIME_EVENT_LABELS.runTerminal(event.status),
+        data: event.reasonCode,
         eventType: event.type,
       };
     case 'agent.unknown':

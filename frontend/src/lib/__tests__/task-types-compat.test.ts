@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { parseIncomingRuntimeEvent } from '../legacy-event-adapter';
 import {
   STEP_STATUSES,
   TASK_EVENT_TYPES,
@@ -92,5 +93,21 @@ describe('task type compatibility', () => {
     } satisfies AgentTask<WeatherSteps>;
 
     expect(task.steps[0].stepName).toBe('geocode');
+  });
+
+  it('preserves an additive legacy event during the versioned migration window', () => {
+    const event = {
+      eventId: 'event-1',
+      taskId: 'task-1',
+      eventType: 'task_created',
+      payload: { task: { taskId: 'task-1' } },
+      createdAt: '2026-09-27T00:00:00.000Z',
+      futureOptionalField: 'kept',
+    };
+
+    expect(parseIncomingRuntimeEvent(event, { enabled: true })).toEqual({
+      kind: 'legacy',
+      value: event,
+    });
   });
 });

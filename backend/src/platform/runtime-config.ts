@@ -11,6 +11,7 @@ export type OtelExporterProtocol = "grpc" | "http";
 export type AgentRuntimeConfig = {
   locale: AgentLocale;
   timeZone: string;
+  runtimeEventEnvelopeEnabled: boolean;
   contextBudgetTotal: number;
   contextOutputReserveTokens: number;
   contextTokensPerSource: number;
@@ -107,6 +108,14 @@ function readBoolean(name: string, fallback: boolean): boolean {
   return fallback;
 }
 
+function readStrictBoolean(name: string, fallback: boolean): boolean {
+  const rawValue = getEnv(name).trim().toLowerCase();
+  if (!rawValue) return fallback;
+  if (rawValue === "true") return true;
+  if (rawValue === "false") return false;
+  throw new Error(`${name} must be true or false`);
+}
+
 function readUrl(name: string, fallback: string): string {
   const rawValue = getEnv(name, fallback);
   try {
@@ -165,6 +174,10 @@ export function getAgentRuntimeConfig(): AgentRuntimeConfig {
   return {
     locale: readLocale(),
     timeZone: getEnv("AGENT_TIME_ZONE", "Asia/Taipei"),
+    runtimeEventEnvelopeEnabled: readStrictBoolean(
+      "RUNTIME_EVENT_ENVELOPE_ENABLED",
+      true
+    ),
     contextBudgetTotal: readPositiveInt(
       "AGENT_CONTEXT_BUDGET_TOTAL",
       DEFAULT_CONTEXT_TOKEN_BUDGET
