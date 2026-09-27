@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 
 import type { AuditLogger } from "../../platform/observability.js";
 import type { SpanManager } from "../../platform/tracing/span-manager.js";
@@ -7,6 +7,7 @@ import { executionCorrelation } from "../execution-context/read-execution-contex
 import { redact } from "../audit/redaction.js";
 import type { EventRepository } from "../persistence/event-repository.js";
 import type { TaskEvent, TaskEventType } from "../types.js";
+import { stableEventId } from "../event-sequence.js";
 import type { CancellationPhase } from "./cancel-decision.js";
 import type { InputClassification } from "./classify.js";
 
@@ -66,7 +67,7 @@ export interface InteractionEventFactoryDependencies {
 }
 
 const DEFAULT_FACTORY_DEPENDENCIES: InteractionEventFactoryDependencies = {
-  createEventId: randomUUID,
+  createEventId: () => stableEventId(),
   now: () => new Date(),
 };
 
