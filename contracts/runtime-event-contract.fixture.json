@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "1.0.0",
+  "eventTypes": [
+    "run.started",
+    "run.status",
+    "run.terminal",
+    "task.created",
+    "task.completed",
+    "task.failed",
+    "task.cancelled",
+    "step.started",
+    "step.completed",
+    "step.failed",
+    "step.retrying",
+    "model.stream",
+    "model.done",
+    "model.error",
+    "tool.start",
+    "tool.success",
+    "tool.error",
+    "permission.request",
+    "permission.decided",
+    "reconciliation.status",
+    "compensation.triggered",
+    "compensation.completed",
+    "context.build",
+    "card.emit"
+  ],
+  "terminalStatuses": [
+    "completed",
+    "failed",
+    "cancelled",
+    "timed_out",
+    "crashed",
+    "budget_exhausted",
+    "superseded"
+  ],
+  "waitingStatuses": [
+    "needs_user",
+    "manual_intervention_required"
+  ],
+  "legacyTypeMappings": {
+    "task_created": "task.created",
+    "task_completed": "task.completed",
+    "task_failed": "task.failed",
+    "task_cancelled": "task.cancelled",
+    "step_started": "step.started",
+    "step_completed": "step.completed",
+    "step_failed": "step.failed",
+    "step_retrying": "step.retrying",
+    "compensation_triggered": "compensation.triggered",
+    "compensation_completed": "compensation.completed",
+    "agent.plan.start": "run.started",
+    "agent.answer.stream": "model.stream",
+    "agent.tool.start": "tool.start",
+    "agent.tool.success": "tool.success",
+    "agent.tool.error": "tool.error",
+    "agent.context.build": "context.build",
+    "agent.card.emit": "card.emit"
+  }
+}

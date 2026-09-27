@@ -72,6 +72,7 @@ describe("transitionTask", () => {
     ["running", "manual_intervention_required"],
     ["manual_intervention_required", "cancelled"],
     ["manual_intervention_required", "failed"],
+    ["manual_intervention_required", "running"],
   ] satisfies [TaskStatus, TaskStatus][])("allows %s -> %s", (from, to) => {
     expect(transitionTask(createTask(from), to).valid).toBe(true);
   });
