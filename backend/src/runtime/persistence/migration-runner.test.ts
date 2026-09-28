@@ -22,6 +22,8 @@ const migrationNames = [
   "016_create_context_refs.sql",
   "017_add_audit_correlation.sql",
   "018_create_authorization_confirmations.sql",
+  "019_create_interrupt_manifests.sql",
+  "020_create_recovery_records.sql",
 ] as const;
 
 function expectedResults(
@@ -114,6 +116,10 @@ describe("runMigrations", () => {
     expect(executedSql).toContain("idx_context_refs_source");
     expect(executedSql).toContain("idx_context_refs_target");
     expect(executedSql).toContain("idx_audit_events_run_id");
+    expect(executedSql).toContain("CREATE TABLE IF NOT EXISTS interrupt_manifests");
+    expect(executedSql).toContain("idx_interrupt_manifests_waiting_expiry");
+    expect(executedSql).toContain("CREATE TABLE IF NOT EXISTS recovery_records");
+    expect(executedSql).toContain("transport_disconnect BOOLEAN NOT NULL");
   });
 
   it("runs down migrations in reverse order when applied", async () => {
