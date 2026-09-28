@@ -16,6 +16,30 @@
 
 Live canary 必須完成 create Task、Step、persist、memory-only safe mock tool、interrupt/checkpoint、resume、Audit／OTel 與 no-duplicate 驗證，並保存 cleanup trace。任何步驟失敗都將 deployment 標記為 unhealthy。
 
+## Canonical incident query
+
+事故調查一律先取得 X12 canonical `runId`，再以受 X13 identity／authorization 保護的 `GET /api/incidents/:runId` 查詢。同一份結構化、已遮罩投影會一次回傳：
+
+- `events`：versioned runtime event 的 ID、sequence、type、時間與 Task／Step／ToolCall correlation。
+- `audit`：可供後續查核的 redacted audit references。
+- `traces`：OTel trace references。
+- `toolExecutions`：Tool 名稱與結構化 outcome，不含輸入、輸出或 credential。
+- `terminalResult`：Run terminal status，不含 raw terminal output。
+
+查詢時必須使用完整 canonical `runId`，不得用顯示文字、prompt、使用者名稱或錯誤訊息反推 Run。`400` 表示 ID 不符合 canonical schema；`403` 表示 trusted principal／grant／tenant 不符；`404` 表示目前投影索引沒有該 Run。投影只用於定位 evidence，權威狀態仍以 durable Task／checkpoint／ledger／Audit 為準。
+
+`GET /api/incidents/:runId` 與 `GET /api/operations/metrics` 是不同邊界：前者回單一 Run 的 structured JSON 並受 incident-read authorization 保護；後者只透傳低基數 Prometheus/OpenMetrics text。不得把 `runId` 加入 metrics label，也不得把 incident projection 當 metrics exposition。
+
+### Manifest 與 parked 狀態處置
+
+| 狀態 | Operator 動作 | 禁止事項 |
+|---|---|---|
+| `migration_pending` | 等待或重跑 versioned deployment hook；確認 bounded migration window 與可信 ledger 齊全後再判定 | 不得 dispatch、resume 或以空 manifest 補值 |
+| `incompatible`／parked | 比對 `runtimeBuildId`、graph、prompt、model route、tool schema、policy version；能 pin 相容環境才 resume，否則保持 parked | 不得在新版 blind replay 或忽略 manifest 差異 |
+| `manual_intervention_required` | 以 incident projection 定位 checkpoint、Audit、trace、ToolExecution 與 effect ledger；mutation 先 reconcile，再依證據選擇 resume、retry 或維持 parked | 不得猜測 prompt／Tool output、重設一次性 confirmation，或讓 terminal Run 回到 running |
+
+任何人工處置都必須記錄 operator、reason code、使用的 `runId`、manifest/version evidence 與最終決策；ticket 或外部 exporter 只能保存 redacted references。
+
 ## Drill 1：graceful shutdown／drain
 
 - **Trigger**：對舊版 worker 發出 deployment drain，並在演練期間提交一筆新 work 與保留一筆 in-flight work。

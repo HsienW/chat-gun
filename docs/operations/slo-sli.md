@@ -47,6 +47,8 @@ Runtime SLO 使用外部注入、版本化的 **slo-policy/v1** 設定文件。P
 
 - Backend 透過唯讀 **GET /operations/metrics** 提供 OpenMetrics/Prometheus-compatible pull exposition。
 - BFF 僅透過受 identity／authorization 保護的 **GET /api/operations/metrics** 轉發；禁止 query、request body、credential forwarding 與未授權讀取。
+- Run outcome 以四個 additive family 分離：`chat_gun_run_outcome_success_total`、`chat_gun_run_outcome_recovered_attempt_error_total`、`chat_gun_run_outcome_terminal_failure_total`、`chat_gun_run_outcome_user_visible_failure_total`；不得合併或改變既有 X10.2 指標語意。
+- 單一 Run 調查使用受授權保護的 **GET /api/incidents/:runId** structured JSON；它不是 metrics proxy，且 canonical `runId` 只能作查詢 key，不得成為 exposition label。
 - Scraper／OTel collector 負責跨 process 聚合、histogram 與 derived-rate 計算；application 不建立第二套聚合器或 worker registry。
 - Label 僅可使用固定、低基數且已彙總的 operation/status/outcome。tenant、principal、Task、Run、ToolCall ID，以及 raw prompt、credential、PII、tool output 均不得輸出。
 - 既有 **GET /api/metrics** JSON snapshot 維持相容，不作為本 policy 的 scrape contract。
