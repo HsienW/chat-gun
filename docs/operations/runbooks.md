@@ -86,6 +86,30 @@ Live canary 必須完成 create Task、Step、persist、memory-only safe mock to
 - **Recovery**：優先 pin old compatible environment；無法 pin 時 park_manual 並附上 manifest 差異與 operator action。只有明確 migratable 且 migration 成功時才 migrate then resume。
 - **Success evidence**：resume decision、manifest differences 與 Audit 可查；不相容環境沒有 tool invocation 或新 side effect。
 
+## Durable HITL 與 conversation recovery 決策表
+
+| Recovery 證據 | 安全動作 | Operator 要求 |
+|---|---|---|
+| `not_started`／`executing` 且 history 為 `valid` 或可安全 `sanitized` | 由 checkpoint 繼續執行 | 確認 ExecutionManifest 相容與 budget 未耗盡 |
+| `waiting_user` 且 manifest 為 `waiting` | 驗證 response schema、scope 與 Run/Task correlation，完成一次性 consume 後 resume | 不得手動重設已消費的 manifest；重播請保留 Audit evidence |
+| `committed`／`unknown` mutation | 必須先執行 SideEffectReconciler，依 `commit`／`retry`／`defer` 決策 | `unknown` 不得 blind retry；無 reconciler 時一律 park |
+| sanitizer 回 `parked` | 轉 `manual_intervention_required` | 不得自行補寫或猜測 message；只依 redacted reason code 定位原始 checkpoint |
+| ExecutionManifest incompatible／migration required | pin 相容版本、執行核准 migration，否則 park | 記錄 graph/config/schema version 差異，禁止在新版直接 replay |
+| `terminal` | stop，不得回 `running` | 驗證 terminal event、Task 狀態與 checkpoint 收斂一致 |
+
+### Parked／manual intervention 操作步驟
+
+1. 以 `threadId`、`runId`、`taskId`、`interruptId` 與低基數 reason code 定位 Task、checkpoint、manifest、ledger 與 Audit；不得把 raw prompt、credential、PII 或 unrestricted tool output 複製到 ticket／外部 exporter。
+2. 確認 manifest correlation、expiry、status、ExecutionManifest compatibility，以及 checkpoint 是否仍有 native interrupt。任一權威資料缺失或互相矛盾時維持 parked。
+3. 若 mutation 為 `committed` 或 `unknown`，先執行對應 SideEffectReconciler。只有 `not_committed` 且 policy 明確允許 retry 時才可重試。
+4. 若 sanitizer 僅刪除 partial assistant message、orphaned block、unmatched/duplicate tool result 等可安全片段，保存 dropped reason summary 後才可續跑；`UNPROVABLE_HISTORY`、incomplete tool arguments、already-terminal tool result 或 incompatible manifest 不得人工猜值補齊。
+5. 只有在 response schema、trusted scope、原 Run/Task 與一次性消費均通過時才 resume。confirmation 以 X13 decision store 的 `approvalId` 為權威；clarification 以 manifest `waiting → resumed` 為權威，不建立第二個 token。
+6. 完成後核對沒有重複 side effect、terminal 沒有回到 running，並保存 lint/test/build、checkpoint integration 與 redacted Audit evidence。
+
+### Live restart 驗證狀態
+
+目前 deterministic integration 使用實際 LangGraph `MemorySaver` checkpoint 驗證 native interrupt、sanitizer、one-time resume、reconcile routing 與 terminal 收斂；跨 process 的 live restart checkpoint 存活尚未驗證。發布或宣稱 durable restart 前，必須在具 durable checkpointer 的環境執行 worker termination／restart drill，否則驗證結果標記為「未驗證」。
+
 ## 演練結案紀錄
 
 每次 drill 至少記錄 policy/version、runtimeBuildId、ExecutionManifest digest、開始與結束時間、預期與實際 terminal reason、相關低基數 metrics、已遮罩 evidence references、cleanup trace，以及未執行項目。任何 success evidence 缺失都視為演練未通過。

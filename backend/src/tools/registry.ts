@@ -8,6 +8,7 @@ import {
 import { createRuntimeToolAuthorizationComposition } from "./authorization/tool-authorization.js";
 import { loadMcpTools } from "./mcp-loader.js";
 import type { AuthorizationConfirmationStore } from "../runtime/authorization/confirmation.js";
+import type { InterruptManifestRepository } from "../runtime/recovery/interrupt-manifest-repository.js";
 import { createRuntimeToolDispatchPipeline } from "../runtime/tool-dispatch/pipeline.js";
 import type { RuntimeToolDispatchPipelineDependencies } from "../runtime/tool-dispatch/pipeline.js";
 import {
@@ -32,6 +33,7 @@ export interface LoadAgentToolsOptions {
 export interface AgentToolRuntime {
   tools: StructuredToolInterface[];
   confirmationStore: AuthorizationConfirmationStore;
+  interruptManifestRepository: InterruptManifestRepository;
 }
 
 export function isToolDispatchPipelineEnabled(source: string): boolean {
@@ -61,7 +63,12 @@ export async function loadAgentToolRuntime(
   source: string,
   options: LoadAgentToolsOptions = {}
 ): Promise<AgentToolRuntime> {
-  const { authorization, confirmationStore, mcpRiskDescriptors } =
+  const {
+    authorization,
+    confirmationStore,
+    interruptManifestRepository,
+    mcpRiskDescriptors,
+  } =
     createRuntimeToolAuthorizationComposition();
   const descriptorRegistry = createLocalRuntimeToolDescriptorRegistry();
   const dispatchPipeline = isToolDispatchPipelineEnabled(source)
@@ -89,7 +96,7 @@ export async function loadAgentToolRuntime(
   );
   const tools = [...localTools, ...mcpTools];
   await auditToolLoad(source, tools);
-  return { tools, confirmationStore };
+  return { tools, confirmationStore, interruptManifestRepository };
 }
 
 export async function loadAgentTools(

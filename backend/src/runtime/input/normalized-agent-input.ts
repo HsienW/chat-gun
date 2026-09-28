@@ -9,6 +9,8 @@ const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const INTERRUPT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const COMMAND_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
+export const NORMALIZED_AGENT_INPUT_SCHEMA_VERSION = "1.0" as const;
+
 export const NORMALIZED_AGENT_INPUT_KINDS = [
   "prompt",
   "clarification_resume",

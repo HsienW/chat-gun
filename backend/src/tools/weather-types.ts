@@ -323,6 +323,14 @@ export type WeatherClarificationState = {
   timeRange?: WeatherTimeRange;
   summary: string;
   interruptCheckpointStep: number;
+  interruptCorrelation?: {
+    interruptId: string;
+    threadId: string;
+    runId: string;
+    taskId: string;
+    scopeId?: string;
+    stepId?: string;
+  };
   rounds: number;
   userReply?: string;
   resolution?: WeatherClarificationResolution;

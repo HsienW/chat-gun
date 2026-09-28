@@ -21,6 +21,11 @@ import {
   type AuthorizationConfirmationStore,
 } from "../../runtime/authorization/confirmation.js";
 import {
+  PgInterruptManifestRepository,
+  UnavailableInterruptManifestRepository,
+  type InterruptManifestRepository,
+} from "../../runtime/recovery/interrupt-manifest-repository.js";
+import {
   MCP_TOOL_RISK_DESCRIPTOR_VERSION,
   parseMcpToolRiskDescriptors,
   toMcpToolRiskPolicy,
@@ -112,6 +117,7 @@ export interface CreateRuntimeToolAuthorizationCompositionInput {
 export interface ToolAuthorizationComposition {
   authorization: ToolAuthorizationGovernanceConfig;
   confirmationStore: AuthorizationConfirmationStore;
+  interruptManifestRepository: InterruptManifestRepository;
   mcpRiskDescriptors: readonly McpToolRiskDescriptorV1[];
 }
 
@@ -275,6 +281,9 @@ export function createRuntimeToolAuthorizationComposition(
     confirmationStore: new PgAuthorizationConfirmationStore(
       configuredDatabase ?? unavailableDatabase
     ),
+    interruptManifestRepository: configuredDatabase
+      ? new PgInterruptManifestRepository(configuredDatabase)
+      : new UnavailableInterruptManifestRepository(),
     mcpRiskDescriptors,
   };
 }
