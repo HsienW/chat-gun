@@ -1,6 +1,89 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getAgentRuntimeConfig } from "./runtime-config.js";
+import {
+  getAgentRuntimeConfig,
+  resolveRuntimeBoundaryPolicy,
+  RUNTIME_BOUNDARY_CONTRACTS,
+  RUNTIME_BOUNDARY_IDS,
+} from "./runtime-config.js";
+
+describe("runtime integration boundary switches", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("defaults all nine production boundaries to enabled", () => {
+    for (const contract of Object.values(RUNTIME_BOUNDARY_CONTRACTS)) {
+      vi.stubEnv(contract.environmentVariable, "");
+    }
+
+    const flags = getAgentRuntimeConfig().runtimeBoundaryFlags;
+
+    expect(RUNTIME_BOUNDARY_IDS).toHaveLength(9);
+    expect(Object.values(flags)).toEqual(Array(9).fill(true));
+  });
+
+  it("reads each boundary through its strict feature flag", () => {
+    vi.stubEnv("RUNTIME_X12_CONTEXT_ENABLED", "false");
+    vi.stubEnv("RUNTIME_X20_RECOVERY_ENABLED", "false");
+
+    expect(getAgentRuntimeConfig().runtimeBoundaryFlags).toMatchObject({
+      "x12.context": false,
+      "x13.authorization": true,
+      "x20.recovery": false,
+    });
+  });
+
+  it("fails fast instead of guessing an invalid switch value", () => {
+    vi.stubEnv("RUNTIME_X14_DISPATCH_ENABLED", "sometimes");
+
+    expect(() => getAgentRuntimeConfig()).toThrow(
+      "RUNTIME_X14_DISPATCH_ENABLED must be true or false"
+    );
+  });
+
+  it("makes authorization default-deny when X13 is disabled", () => {
+    vi.stubEnv("RUNTIME_X13_AUTHORIZATION_ENABLED", "false");
+    const flags = getAgentRuntimeConfig().runtimeBoundaryFlags;
+
+    expect(resolveRuntimeBoundaryPolicy(flags, "x13.authorization")).toMatchObject({
+      enabled: false,
+      disabledMode: "default_deny",
+      authorization: "default_deny",
+    });
+  });
+
+  it("keeps mutation ledger/reconciliation when X14 is disabled", () => {
+    vi.stubEnv("RUNTIME_X14_DISPATCH_ENABLED", "false");
+    const flags = getAgentRuntimeConfig().runtimeBoundaryFlags;
+
+    expect(resolveRuntimeBoundaryPolicy(flags, "x14.dispatch")).toMatchObject({
+      enabled: false,
+      disabledMode: "readonly_agent_dispatch_mutation_governed",
+      mutationSafety: "ledger_and_reconciliation",
+    });
+  });
+
+  it("never disables terminal monotonicity or reverts persistence history", () => {
+    for (const contract of Object.values(RUNTIME_BOUNDARY_CONTRACTS)) {
+      vi.stubEnv(contract.environmentVariable, "false");
+    }
+    const flags = getAgentRuntimeConfig().runtimeBoundaryFlags;
+    const policies = RUNTIME_BOUNDARY_IDS.map((boundary) =>
+      resolveRuntimeBoundaryPolicy(flags, boundary)
+    );
+
+    expect(policies.every((policy) => policy.terminalMonotonicity === "enforced")).toBe(
+      true
+    );
+    expect(policies.every((policy) => policy.persistenceHistory === "preserved")).toBe(
+      true
+    );
+    expect(
+      resolveRuntimeBoundaryPolicy(flags, "x20.recovery").disabledMode
+    ).toBe("park_manual_intervention");
+  });
+});
 
 function readToolSchedulingConfig() {
   const config = getAgentRuntimeConfig();

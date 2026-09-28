@@ -8,10 +8,155 @@ export type AgentLocale = (typeof SUPPORTED_LOCALES)[number];
 export type LlmRepairStrategy = "none" | "retry_once" | "retry_with_hint";
 export type OtelExporterProtocol = "grpc" | "http";
 
+export const RUNTIME_BOUNDARY_IDS = [
+  "x12.context",
+  "x13.authorization",
+  "x14.dispatch",
+  "x15.decode",
+  "x16.scheduling",
+  "x17.input",
+  "x18.context",
+  "x19.events",
+  "x20.recovery",
+] as const;
+
+export type RuntimeBoundaryId = (typeof RUNTIME_BOUNDARY_IDS)[number];
+export type RuntimeBoundaryFlags = Record<RuntimeBoundaryId, boolean>;
+
+export interface RuntimeBoundaryContract {
+  boundary: RuntimeBoundaryId;
+  configKey: `${RuntimeBoundaryId}.enabled`;
+  environmentVariable: string;
+  defaultEnabled: true;
+  disabledMode:
+    | "legacy_context_adapter_fail_closed"
+    | "default_deny"
+    | "readonly_agent_dispatch_mutation_governed"
+    | "strict_json_parse_typed_invalid"
+    | "serial_execution"
+    | "validated_raw_input"
+    | "bounded_agent_context"
+    | "legacy_event_adapter_terminal_monotonic"
+    | "park_manual_intervention";
+  authorization: "unchanged" | "default_deny";
+  mutationSafety: "unchanged" | "ledger_and_reconciliation";
+  terminalMonotonicity: "enforced";
+  persistenceHistory: "preserved";
+}
+
+export const RUNTIME_BOUNDARY_CONTRACTS: Readonly<
+  Record<RuntimeBoundaryId, RuntimeBoundaryContract>
+> = {
+  "x12.context": {
+    boundary: "x12.context",
+    configKey: "x12.context.enabled",
+    environmentVariable: "RUNTIME_X12_CONTEXT_ENABLED",
+    defaultEnabled: true,
+    disabledMode: "legacy_context_adapter_fail_closed",
+    authorization: "unchanged",
+    mutationSafety: "unchanged",
+    terminalMonotonicity: "enforced",
+    persistenceHistory: "preserved",
+  },
+  "x13.authorization": {
+    boundary: "x13.authorization",
+    configKey: "x13.authorization.enabled",
+    environmentVariable: "RUNTIME_X13_AUTHORIZATION_ENABLED",
+    defaultEnabled: true,
+    disabledMode: "default_deny",
+    authorization: "default_deny",
+    mutationSafety: "unchanged",
+    terminalMonotonicity: "enforced",
+    persistenceHistory: "preserved",
+  },
+  "x14.dispatch": {
+    boundary: "x14.dispatch",
+    configKey: "x14.dispatch.enabled",
+    environmentVariable: "RUNTIME_X14_DISPATCH_ENABLED",
+    defaultEnabled: true,
+    disabledMode: "readonly_agent_dispatch_mutation_governed",
+    authorization: "unchanged",
+    mutationSafety: "ledger_and_reconciliation",
+    terminalMonotonicity: "enforced",
+    persistenceHistory: "preserved",
+  },
+  "x15.decode": {
+    boundary: "x15.decode",
+    configKey: "x15.decode.enabled",
+    environmentVariable: "RUNTIME_X15_DECODE_ENABLED",
+    defaultEnabled: true,
+    disabledMode: "strict_json_parse_typed_invalid",
+    authorization: "unchanged",
+    mutationSafety: "unchanged",
+    terminalMonotonicity: "enforced",
+    persistenceHistory: "preserved",
+  },
+  "x16.scheduling": {
+    boundary: "x16.scheduling",
+    configKey: "x16.scheduling.enabled",
+    environmentVariable: "RUNTIME_X16_SCHEDULING_ENABLED",
+    defaultEnabled: true,
+    disabledMode: "serial_execution",
+    authorization: "unchanged",
+    mutationSafety: "unchanged",
+    terminalMonotonicity: "enforced",
+    persistenceHistory: "preserved",
+  },
+  "x17.input": {
+    boundary: "x17.input",
+    configKey: "x17.input.enabled",
+    environmentVariable: "RUNTIME_X17_INPUT_ENABLED",
+    defaultEnabled: true,
+    disabledMode: "validated_raw_input",
+    authorization: "unchanged",
+    mutationSafety: "unchanged",
+    terminalMonotonicity: "enforced",
+    persistenceHistory: "preserved",
+  },
+  "x18.context": {
+    boundary: "x18.context",
+    configKey: "x18.context.enabled",
+    environmentVariable: "RUNTIME_X18_CONTEXT_ENABLED",
+    defaultEnabled: true,
+    disabledMode: "bounded_agent_context",
+    authorization: "unchanged",
+    mutationSafety: "unchanged",
+    terminalMonotonicity: "enforced",
+    persistenceHistory: "preserved",
+  },
+  "x19.events": {
+    boundary: "x19.events",
+    configKey: "x19.events.enabled",
+    environmentVariable: "RUNTIME_X19_EVENTS_ENABLED",
+    defaultEnabled: true,
+    disabledMode: "legacy_event_adapter_terminal_monotonic",
+    authorization: "unchanged",
+    mutationSafety: "unchanged",
+    terminalMonotonicity: "enforced",
+    persistenceHistory: "preserved",
+  },
+  "x20.recovery": {
+    boundary: "x20.recovery",
+    configKey: "x20.recovery.enabled",
+    environmentVariable: "RUNTIME_X20_RECOVERY_ENABLED",
+    defaultEnabled: true,
+    disabledMode: "park_manual_intervention",
+    authorization: "unchanged",
+    mutationSafety: "unchanged",
+    terminalMonotonicity: "enforced",
+    persistenceHistory: "preserved",
+  },
+};
+
+export interface RuntimeBoundaryPolicy extends RuntimeBoundaryContract {
+  enabled: boolean;
+}
+
 export type AgentRuntimeConfig = {
   locale: AgentLocale;
   timeZone: string;
   runtimeEventEnvelopeEnabled: boolean;
+  runtimeBoundaryFlags: RuntimeBoundaryFlags;
   contextBudgetTotal: number;
   contextOutputReserveTokens: number;
   contextTokensPerSource: number;
@@ -116,6 +261,37 @@ function readStrictBoolean(name: string, fallback: boolean): boolean {
   throw new Error(`${name} must be true or false`);
 }
 
+function readRuntimeBoundaryFlags(): RuntimeBoundaryFlags {
+  const enabled = (boundary: RuntimeBoundaryId) => {
+    const contract = RUNTIME_BOUNDARY_CONTRACTS[boundary];
+    return readStrictBoolean(
+      contract.environmentVariable,
+      contract.defaultEnabled
+    );
+  };
+  return {
+    "x12.context": enabled("x12.context"),
+    "x13.authorization": enabled("x13.authorization"),
+    "x14.dispatch": enabled("x14.dispatch"),
+    "x15.decode": enabled("x15.decode"),
+    "x16.scheduling": enabled("x16.scheduling"),
+    "x17.input": enabled("x17.input"),
+    "x18.context": enabled("x18.context"),
+    "x19.events": enabled("x19.events"),
+    "x20.recovery": enabled("x20.recovery"),
+  };
+}
+
+export function resolveRuntimeBoundaryPolicy(
+  flags: RuntimeBoundaryFlags,
+  boundary: RuntimeBoundaryId
+): RuntimeBoundaryPolicy {
+  return {
+    ...RUNTIME_BOUNDARY_CONTRACTS[boundary],
+    enabled: flags[boundary],
+  };
+}
+
 function readUrl(name: string, fallback: string): string {
   const rawValue = getEnv(name, fallback);
   try {
@@ -178,6 +354,7 @@ export function getAgentRuntimeConfig(): AgentRuntimeConfig {
       "RUNTIME_EVENT_ENVELOPE_ENABLED",
       true
     ),
+    runtimeBoundaryFlags: readRuntimeBoundaryFlags(),
     contextBudgetTotal: readPositiveInt(
       "AGENT_CONTEXT_BUDGET_TOTAL",
       DEFAULT_CONTEXT_TOKEN_BUDGET

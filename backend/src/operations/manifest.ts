@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  executionManifestSchema,
   parseExecutionManifest,
   type ExecutionManifest,
 } from "./types.js";
@@ -70,6 +71,87 @@ export interface ManifestResumeDecision {
   authorizesReplay: boolean;
 }
 
+export const DEFAULT_MANIFEST_BACKFILL_MAX_DURATION_MS =
+  24 * 60 * 60 * 1_000;
+
+export type ManifestMigrationStatus =
+  | "not_started"
+  | "migration_pending"
+  | "completed";
+
+export type DurableManifestState =
+  | {
+      status: "ready";
+      compatibility: "compatible";
+      canDispatch: true;
+      canResume: true;
+    }
+  | {
+      status: "migration_pending";
+      compatibility?: "migratable";
+      canDispatch: false;
+      canResume: false;
+    }
+  | {
+      status: "parked";
+      compatibility: "incompatible";
+      canDispatch: false;
+      canResume: false;
+    }
+  | {
+      status: "invalid_policy";
+      reasonCode: "EXECUTION_MANIFEST_REQUIRED";
+      canDispatch: false;
+      canResume: false;
+    };
+
+export interface DurableManifestStateInput {
+  metadata: unknown;
+  migrationStatus: ManifestMigrationStatus;
+  runtimeManifest: unknown;
+  policy: unknown;
+}
+
+export interface MissingManifestEntity {
+  entityType: "run" | "task";
+  entityId: string;
+  trustedLedger: unknown;
+}
+
+export interface ExecutionManifestMigrationStore {
+  listMissingManifestEntities(): Promise<readonly MissingManifestEntity[]>;
+  markMigrationPending(entity: MissingManifestEntity): Promise<void>;
+  attachManifest(
+    entity: MissingManifestEntity,
+    manifest: ExecutionManifest
+  ): Promise<void>;
+  parkIncompatible(
+    entity: MissingManifestEntity,
+    reasonCode: "INSUFFICIENT_TRUSTED_LEDGER"
+  ): Promise<void>;
+}
+
+export interface ManifestDeploymentHookConfig {
+  policyVersion: string;
+  maxDurationMs?: number;
+  now?: () => number;
+}
+
+export type ManifestDeploymentHookResult =
+  | {
+      status: "completed";
+      policyVersion: string;
+      migrated: number;
+      parked: number;
+    }
+  | {
+      status: "timed_out";
+      policyVersion: string;
+      migrated: number;
+      parked: number;
+      remaining: number;
+    };
+
 export function compareExecutionManifests(
   checkpointManifestValue: unknown,
   runtimeManifestValue: unknown,
@@ -119,6 +201,116 @@ export function compareExecutionManifests(
     action,
     changedFields,
     notApplicableFields,
+  };
+}
+
+export function evaluateDurableManifestState(
+  input: DurableManifestStateInput
+): DurableManifestState {
+  if (input.migrationStatus === "migration_pending") {
+    return {
+      status: "migration_pending",
+      canDispatch: false,
+      canResume: false,
+    };
+  }
+
+  let persistedManifest: ExecutionManifest;
+  try {
+    persistedManifest = readExecutionManifest(input.metadata);
+  } catch {
+    return {
+      status: "invalid_policy",
+      reasonCode: "EXECUTION_MANIFEST_REQUIRED",
+      canDispatch: false,
+      canResume: false,
+    };
+  }
+
+  const comparison = compareExecutionManifests(
+    persistedManifest,
+    input.runtimeManifest,
+    input.policy
+  );
+  if (comparison.compatibility === "incompatible") {
+    return {
+      status: "parked",
+      compatibility: "incompatible",
+      canDispatch: false,
+      canResume: false,
+    };
+  }
+  if (comparison.compatibility === "migratable") {
+    return {
+      status: "migration_pending",
+      compatibility: "migratable",
+      canDispatch: false,
+      canResume: false,
+    };
+  }
+  return {
+    status: "ready",
+    compatibility: "compatible",
+    canDispatch: true,
+    canResume: true,
+  };
+}
+
+export async function runExecutionManifestDeploymentHook(
+  configValue: ManifestDeploymentHookConfig,
+  store: ExecutionManifestMigrationStore
+): Promise<ManifestDeploymentHookResult> {
+  const config = z
+    .object({
+      policyVersion: z.string().trim().min(1),
+      maxDurationMs: z
+        .number()
+        .int()
+        .positive()
+        .max(DEFAULT_MANIFEST_BACKFILL_MAX_DURATION_MS)
+        .default(DEFAULT_MANIFEST_BACKFILL_MAX_DURATION_MS),
+    })
+    .strict()
+    .parse({
+      policyVersion: configValue.policyVersion,
+      ...(configValue.maxDurationMs === undefined
+        ? {}
+        : { maxDurationMs: configValue.maxDurationMs }),
+    });
+  const now = configValue.now ?? Date.now;
+  const startedAt = now();
+  const entities = await store.listMissingManifestEntities();
+  let migrated = 0;
+  let parked = 0;
+
+  for (const [index, entity] of entities.entries()) {
+    if (now() - startedAt > config.maxDurationMs) {
+      return {
+        status: "timed_out",
+        policyVersion: config.policyVersion,
+        migrated,
+        parked,
+        remaining: entities.length - index,
+      };
+    }
+    await store.markMigrationPending(entity);
+    const reconstructed = executionManifestSchema.safeParse(
+      entity.trustedLedger
+    );
+    if (!reconstructed.success) {
+      await store.parkIncompatible(entity, "INSUFFICIENT_TRUSTED_LEDGER");
+      parked += 1;
+      continue;
+    }
+    await store.attachManifest(entity, reconstructed.data);
+    migrated += 1;
+  }
+
+  return {
+    status: "completed",
+    policyVersion: config.policyVersion,
+    migrated,
+    parked,
   };
 }
 
