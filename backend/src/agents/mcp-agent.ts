@@ -27,6 +27,7 @@ import {
 } from "../runtime/execution-context/read-execution-context.js";
 import { instrumentGraphWithExecutionContext } from "../runtime/execution-context/instrument-graph.js";
 import { normalizeAiMessageForStream } from "./message-normalization.js";
+import { createExecutionManifestRef } from "../runtime/recovery/execution-manifest.js";
 import {
   assembleMcpMessageContext,
   contextHardLimitErrorMessage,
@@ -34,12 +35,27 @@ import {
   legacyMcpMessages,
 } from "./context-integration.js";
 
-const { tools, confirmationStore } = await loadAgentToolRuntime("mcp_agent", {
+const { tools, confirmationStore, interruptManifestRepository } =
+  await loadAgentToolRuntime("mcp_agent", {
   includeMcp: true,
+});
+const mcpAgentExecutionManifest = createExecutionManifestRef({
+  graphId: "mcp_agent",
+  graphConfig: {
+    nodes: [
+      "call_model",
+      "authorization_gate",
+      "authorization_confirmation",
+      "physical_dispatch",
+    ],
+    checkpointer: "langgraph_managed",
+  },
 });
 const authorizationNodes = createToolAuthorizationGraphNodes({
   tools,
   confirmationStore,
+  interruptManifestRepository,
+  executionManifest: mcpAgentExecutionManifest,
 });
 
 const McpAgentAnnotation = Annotation.Root({

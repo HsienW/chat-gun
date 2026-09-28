@@ -55,17 +55,20 @@ describe("interaction task events", () => {
     const first = createClarificationInterruptId({
       threadId: "thread-1",
       runId: "run-1",
-      checkpointStep: 7,
+      taskId: "task-1",
+      round: 7,
     });
     const repeated = createClarificationInterruptId({
       threadId: "thread-1",
       runId: "run-1",
-      checkpointStep: 7,
+      taskId: "task-1",
+      round: 7,
     });
     const next = createClarificationInterruptId({
       threadId: "thread-1",
       runId: "run-1",
-      checkpointStep: 8,
+      taskId: "task-1",
+      round: 8,
     });
 
     expect(first).toMatch(/^clarification:[a-f0-9]{64}$/);

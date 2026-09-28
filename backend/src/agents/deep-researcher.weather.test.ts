@@ -733,7 +733,10 @@ describe("Deep Research weather structured result integration", () => {
     expect(clarification?.candidates).toHaveLength(2);
 
     const payload = clarification
-      ? deepResearcherWeatherTestInternals.buildClarificationInterrupt(clarification, state, config)
+      ? deepResearcherWeatherTestInternals.buildClarificationInterrupt(
+          clarification,
+          state,
+        )
       : undefined;
     expect(payload?.type).toBe("weather_clarification");
     expect(payload?.eventType).toBe("clarification_requested");
@@ -741,6 +744,13 @@ describe("Deep Research weather structured result integration", () => {
     expect(payload?.threadId).toBe("thread-weather");
     expect(payload?.candidates[1].index).toBe(2);
     expect(payload?.candidates[1].providerId).toBe("geo-2");
+    const replayPayload = clarification
+      ? deepResearcherWeatherTestInternals.buildClarificationInterrupt(
+          clarification,
+          state,
+        )
+      : undefined;
+    expect(replayPayload?.interruptId).toBe(payload?.interruptId);
   });
 
   it("does not interrupt legacy clarification candidates without coordinates", () => {

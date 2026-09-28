@@ -781,6 +781,8 @@ describe("interaction runtime production wrapper", () => {
 
   it("resumes the waiting task and emits clarification_resumed with the same interrupt id", async () => {
     const dependencies = configuredDependencies("supersede");
+    const authorizeClarificationResume = vi.fn(async () => ({ ok: true as const }));
+    dependencies.config.authorizeClarificationResume = authorizeClarificationResume;
     dependencies.config.rawPolicy = JSON.stringify({
       strategy: "supersede",
       clarificationReplyMode: "resume_same_task",
@@ -823,6 +825,18 @@ describe("interaction runtime production wrapper", () => {
       replacementTaskId: "task-1",
       replacementRunId: "run-2",
     });
+    expect(authorizeClarificationResume).toHaveBeenCalledWith(
+      expect.objectContaining({
+        interruptId,
+        response: { answer: "Taipei" },
+        threadId: "thread-1",
+        scopeId: "scope-1",
+        activeOwnership: expect.objectContaining({
+          taskId: "task-1",
+          runId: "run-1",
+        }),
+      })
+    );
     expect(dependencies.eventRecorder.record).toHaveBeenCalledWith(
       expect.objectContaining({
         eventType: "clarification_resumed",

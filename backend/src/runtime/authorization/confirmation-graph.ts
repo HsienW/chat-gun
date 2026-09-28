@@ -10,6 +10,13 @@ import {
 } from "../execution-context/read-execution-context.js";
 import type { GovernedToolOutcome } from "../side-effect/governed-outcome.js";
 import {
+  createConfirmationInterruptId,
+  createConfirmationInterruptManifest,
+} from "../recovery/confirmation-manifest.js";
+import { classifyExecutionManifestCompatibility } from "../recovery/execution-manifest.js";
+import type { ExecutionManifestRef } from "../recovery/interrupt-manifest.js";
+import type { InterruptManifestRepository } from "../recovery/interrupt-manifest-repository.js";
+import {
   confirmationRequiredDescriptorSchema,
   parseConfirmationResume,
   toConfirmationInterruptPayload,
@@ -33,6 +40,8 @@ export interface AuthorizationGraphState {
 export interface CreateToolAuthorizationGraphNodesInput {
   tools: readonly StructuredToolInterface[];
   confirmationStore: AuthorizationConfirmationStore;
+  interruptManifestRepository: InterruptManifestRepository;
+  executionManifest: ExecutionManifestRef;
 }
 
 function extractToolCalls(messages: readonly unknown[]): AuthorizationGraphToolCall[] {
@@ -128,6 +137,12 @@ export function createToolAuthorizationGraphNodes(
         outcome.descriptor
       );
       await input.confirmationStore.upsertPending(descriptor);
+      await input.interruptManifestRepository.create(
+        createConfirmationInterruptManifest({
+          descriptor,
+          executionManifest: input.executionManifest,
+        })
+      );
       return {
         toolQueue: remaining,
         activeToolCall: call,
@@ -159,6 +174,31 @@ export function createToolAuthorizationGraphNodes(
     const call = state.activeToolCall;
     if (!call) throw new Error("Confirmation state is missing its tool call");
 
+    const interruptId = createConfirmationInterruptId(descriptor);
+    const manifest = await input.interruptManifestRepository.findByInterruptId(
+      interruptId
+    );
+    if (
+      !manifest ||
+      manifest.kind !== "confirmation" ||
+      manifest.interruptId !== interruptId ||
+      manifest.threadId !== descriptor.threadId ||
+      manifest.runId !== descriptor.runId ||
+      manifest.taskId !== descriptor.taskId ||
+      manifest.stepId !== descriptor.stepId ||
+      manifest.scopeId !== descriptor.scope.scopeId ||
+      manifest.expectedResponseSchemaRef !==
+        "tool_authorization_confirmation@1.0" ||
+      manifest.decisionRef.decisionId !== descriptor.decisionId ||
+      manifest.decisionRef.approvalId !== descriptor.approvalId ||
+      classifyExecutionManifestCompatibility(
+        manifest.executionManifest,
+        input.executionManifest
+      ) !== "compatible"
+    ) {
+      throw new Error("Confirmation interrupt manifest is unavailable or incompatible");
+    }
+
     const resume = parseConfirmationResume(
       interrupt(toConfirmationInterruptPayload(descriptor))
     );
@@ -169,6 +209,19 @@ export function createToolAuthorizationGraphNodes(
       executionContext: { ...context, toolCallId: call.toolCallId },
     });
     if (!consumed.ok || consumed.status !== "approved") {
+      if (consumed.ok && consumed.status === "denied") {
+        await input.interruptManifestRepository.transitionStatus({
+          interruptId,
+          expectedStatus: "waiting",
+          nextStatus: "rejected",
+        });
+      } else if (!consumed.ok && consumed.reasonCode === "CONFIRMATION_TIMEOUT") {
+        await input.interruptManifestRepository.transitionStatus({
+          interruptId,
+          expectedStatus: "waiting",
+          nextStatus: "expired",
+        });
+      }
       return {
         messages: [
           toolMessage(call, {
@@ -181,6 +234,11 @@ export function createToolAuthorizationGraphNodes(
         pendingAuthorization: null,
       };
     }
+    await input.interruptManifestRepository.transitionStatus({
+      interruptId,
+      expectedStatus: "waiting",
+      nextStatus: "resumed",
+    });
     return { activeToolCall: call, pendingAuthorization: null };
   }
 

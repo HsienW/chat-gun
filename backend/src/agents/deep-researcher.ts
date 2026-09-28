@@ -7,6 +7,21 @@ import { readCanonicalExecutionContext, readExecutionCorrelation } from "../runt
 import { readDevelopmentExecutionContext } from "../runtime/execution-context/read-execution-context.js";
 import { instrumentGraphWithExecutionContext } from "../runtime/execution-context/instrument-graph.js";
 import { createClarificationInterruptId } from "../runtime/interaction/events.js";
+import { getPool } from "../runtime/persistence/connection.js";
+import {
+  createClarificationInterruptManifest,
+  persistClarificationInterruptManifest,
+  WEATHER_CLARIFICATION_RESPONSE_SCHEMA_REF,
+} from "../runtime/recovery/clarification-manifest.js";
+import {
+  PgInterruptManifestRepository,
+  UnavailableInterruptManifestRepository,
+} from "../runtime/recovery/interrupt-manifest-repository.js";
+import {
+  DEEP_RESEARCH_GRAPH_NODES,
+  DEEP_RESEARCH_GRAPH_ROUTES,
+  deepResearcherExecutionManifest,
+} from "./deep-researcher-graph-contract.js";
 
 import { getBooleanEnv } from "../platform/env.js";
 import { GOVERNANCE_CANCELLED_PREFIX } from "../platform/tool-governance.js";
@@ -81,34 +96,10 @@ const DEFAULT_SEARCH_QUERY_COUNT = 3;
 const DEFAULT_MAX_FETCHED_SOURCES = 5;
 const DEFAULT_WEATHER_CLARIFICATION_TIMEOUT_MS = 5 * 60 * 1000;
 
-const DEEP_RESEARCH_GRAPH_NODES = {
-  validateUploads: "validate_uploads",
-  buildContextPack: "build_context_pack",
-  analyzeImages: "analyze_images",
-  planResearch: "plan_research",
-  targetedTools: "targeted_tools",
-  clarifyInterrupt: "clarify_interrupt",
-  resumeClarify: "resume_clarify",
-  searchWeb: "search_web",
-  rankSources: "rank_sources",
-  fetchSources: "fetch_sources",
-  extractEvidence: "extract_evidence",
-  verifyCitations: "verify_citations",
-  synthesizeAnswer: "synthesize_answer",
-} as const;
-
-const DEEP_RESEARCH_GRAPH_ROUTES = {
-  buildContextPack: "build_context_pack",
-  analyzeImages: "analyze_images",
-  targetedTools: "targeted_tools",
-  clarifyInterrupt: "clarify_interrupt",
-  resumeClarify: "resume_clarify",
-  searchWeb: "search_web",
-  synthesize: "synthesize",
-  rank: "rank",
-  fetch: "fetch",
-  verify: "verify",
-} as const;
+const deepResearcherPool = getPool();
+const deepResearcherInterruptManifestRepository = deepResearcherPool
+  ? new PgInterruptManifestRepository(deepResearcherPool)
+  : new UnavailableInterruptManifestRepository();
 
 const DEEP_RESEARCH_TOOL_NAMES = {
   currentWeather: "current_weather",
@@ -1706,7 +1697,14 @@ async function targetedTools(
     );
   }
 
-  return { messages, weatherExecution };
+  const clarification = weatherExecution
+    ? buildClarificationState({ ...state, weatherExecution }, _config)
+    : undefined;
+  return {
+    messages,
+    weatherExecution,
+    ...(clarification ? { clarification } : {}),
+  };
 }
 
 /**
@@ -1805,6 +1803,37 @@ function buildClarificationState(
     return undefined;
   }
 
+  const executionContext = readCanonicalExecutionContext(config);
+  const persistedCorrelation = readExecutionCorrelation(config);
+  const threadId =
+    executionContext?.threadId ?? persistedCorrelation.threadId ?? "";
+  const runId = executionContext?.runId ?? getRunId(config);
+  const taskId =
+    executionContext?.taskId ?? persistedCorrelation.taskId ?? runId;
+  const rounds = state.clarification?.rounds ?? 0;
+  const interruptCorrelation =
+    threadId && runId && taskId
+      ? {
+          interruptId: createClarificationInterruptId({
+            threadId,
+            runId,
+            taskId,
+            round: rounds,
+          }),
+          threadId,
+          runId,
+          taskId,
+          ...(executionContext
+            ? {
+                scopeId: executionContext.scope.scopeId,
+                ...(executionContext.stepId
+                  ? { stepId: executionContext.stepId }
+                  : {}),
+              }
+            : {}),
+        }
+      : undefined;
+
   return {
     status: "awaiting_user_input",
     candidates,
@@ -1813,33 +1842,29 @@ function buildClarificationState(
     timeRange: state.plan?.weather?.timeRange,
     summary: exec.result.summary,
     interruptCheckpointStep: Number(Date.now()),
-    rounds: state.clarification?.rounds ?? 0,
+    ...(interruptCorrelation ? { interruptCorrelation } : {}),
+    rounds,
   };
 }
 
 function buildClarificationInterrupt(
   clarification: WeatherClarificationState,
-  state: typeof DeepResearchState.State,
-  config: RunnableConfig | undefined
+  state: typeof DeepResearchState.State
 ): WeatherClarificationInterrupt | undefined {
   const exec = state.weatherExecution;
   if (exec?.status !== "needs_clarification") {
     return undefined;
   }
 
-  const threadId = readExecutionCorrelation(config).threadId ?? "";
-  const runId = getRunId(config);
+  const correlation = clarification.interruptCorrelation;
+  if (!correlation) return undefined;
 
   return {
     type: "weather_clarification",
     eventType: "clarification_requested",
-    interruptId: createClarificationInterruptId({
-      threadId,
-      runId,
-      checkpointStep: clarification.interruptCheckpointStep,
-    }),
-    threadId,
-    runId,
+    interruptId: correlation.interruptId,
+    threadId: correlation.threadId,
+    runId: correlation.runId,
     candidates: clarification.candidates.map((candidate, index) => ({
       ...candidate,
       index: index + 1,
@@ -1881,15 +1906,42 @@ async function clarifyInterrupt(
   state: typeof DeepResearchState.State,
   config: RunnableConfig
 ) {
-  const clarification = buildClarificationState(state, config);
+  const clarification = state.clarification;
   if (!clarification) {
     return new Command({ goto: DEEP_RESEARCH_GRAPH_NODES.synthesizeAnswer });
   }
 
-  const payload = buildClarificationInterrupt(clarification, state, config);
+  const payload = buildClarificationInterrupt(clarification, state);
   if (!payload) {
     return new Command({ goto: DEEP_RESEARCH_GRAPH_NODES.synthesizeAnswer });
   }
+
+  const correlation = clarification.interruptCorrelation;
+  if (!correlation?.scopeId) {
+    throw new Error("Clarification interrupt requires durable correlation");
+  }
+  const expiryAt = new Date(
+    clarification.interruptCheckpointStep + getClarificationTimeoutMs(config)
+  ).toISOString();
+  const manifest = createClarificationInterruptManifest({
+    threadId: correlation.threadId,
+    runId: correlation.runId,
+    taskId: correlation.taskId,
+    ...(correlation.stepId ? { stepId: correlation.stepId } : {}),
+    scopeId: correlation.scopeId,
+    round: clarification.rounds,
+    expectedResponseSchemaRef: WEATHER_CLARIFICATION_RESPONSE_SCHEMA_REF,
+    expiryAt,
+    executionManifest: deepResearcherExecutionManifest,
+    now: new Date(clarification.interruptCheckpointStep),
+  });
+  if (manifest.interruptId !== payload.interruptId) {
+    throw new Error("Clarification interrupt correlation mismatch");
+  }
+  await persistClarificationInterruptManifest(
+    deepResearcherInterruptManifestRepository,
+    manifest
+  );
 
   const resumeValue = interrupt<WeatherClarificationInterrupt, unknown>(payload);
   const userReply = parseClarificationResumeInput(resumeValue);

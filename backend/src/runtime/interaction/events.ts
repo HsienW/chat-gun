@@ -96,16 +96,18 @@ function requireClarificationInterruptId(value: string): void {
 export function createClarificationInterruptId(input: {
   threadId: string;
   runId: string;
-  checkpointStep: number;
+  taskId: string;
+  round: number;
 }): string {
   requireOpaqueId(input.threadId, "threadId");
   requireOpaqueId(input.runId, "runId");
-  if (!Number.isSafeInteger(input.checkpointStep) || input.checkpointStep < 0) {
-    throw new Error("Invalid clarification checkpointStep");
+  requireOpaqueId(input.taskId, "taskId");
+  if (!Number.isSafeInteger(input.round) || input.round < 0) {
+    throw new Error("Invalid clarification round");
   }
   const digest = createHash("sha256")
     .update(
-      JSON.stringify([input.threadId, input.runId, input.checkpointStep]),
+      JSON.stringify([input.threadId, input.runId, input.taskId, input.round]),
     )
     .digest("hex");
   return `clarification:${digest}`;

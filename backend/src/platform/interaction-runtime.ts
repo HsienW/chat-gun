@@ -44,6 +44,13 @@ import { readCanonicalExecutionContext, readExecutionCorrelation } from "../runt
 import type { ExecutionContext } from "../runtime/execution-context/execution-context.js";
 import { getPool } from "../runtime/persistence/connection.js";
 import type { Queryable } from "../runtime/persistence/rows.js";
+import { deepResearcherExecutionManifest } from "../agents/deep-researcher-graph-contract.js";
+import {
+  createClarificationResumeAuthorizer,
+  type AuthorizeClarificationResume,
+} from "../runtime/recovery/clarification-resume-authorization.js";
+import { PgInterruptManifestRepository } from "../runtime/recovery/interrupt-manifest-repository.js";
+import { createResumeResponseSchemaRegistry } from "../runtime/recovery/resume-response-schema-registry.js";
 import { getEnv } from "./env.js";
 import { auditLogger, recordMetric } from "./observability.js";
 import { getSpanManager } from "./tracing/span-manager.js";
@@ -103,6 +110,7 @@ export interface InteractionOrchestratorConfig {
     ownership: ActiveRunOwnership
   ) => Promise<{ idempotencyKey: string; payload: Uint8Array } | undefined>;
   ensureTask?: (context: InteractionRunContext) => Promise<void>;
+  authorizeClarificationResume?: AuthorizeClarificationResume;
   recordMetric?: (name: string, payload: MetricPayload, context?: ExecutionContext) => void | Promise<void>;
 }
 
@@ -220,6 +228,14 @@ export function createProductionInteractionOrchestrator(
     idempotencyGuard: new PgIdempotencyGuard(pool),
     eventRecorder,
     ensureTask: (context) => ensureInteractionTask(pool, context),
+    authorizeClarificationResume: createClarificationResumeAuthorizer({
+      manifests: new PgInterruptManifestRepository(pool),
+      responseSchemas: createResumeResponseSchemaRegistry(),
+      resolveCurrentExecutionManifest: (graphId) =>
+        graphId === deepResearcherExecutionManifest.graphId
+          ? deepResearcherExecutionManifest
+          : undefined,
+    }),
     recordMetric,
     ...overrides,
     rawPolicy,
@@ -757,6 +773,38 @@ export function createInteractionOrchestrator(
 
       if (disposition.action === "resume_same_task") {
         const priorOwnership = activeOwnership;
+        if (normalizedResult.input.kind === "clarification_resume") {
+          if (!config.authorizeClarificationResume) {
+            const reasonCode = "CLARIFICATION_RESUME_AUTHORIZATION_UNAVAILABLE";
+            await rejectBeforeDispatch({
+              context,
+              ownership: priorOwnership,
+              reasonCode,
+              classification: classification.classification,
+              disposition: disposition.action,
+            });
+            throw new InteractionGovernanceRejectedError(reasonCode);
+          }
+          const authorization = await config.authorizeClarificationResume({
+            interruptId: normalizedResult.input.interruptId,
+            response: normalizedResult.input.value,
+            threadId: context.threadId,
+            scopeId: context.scopeId,
+            activeOwnership: priorOwnership,
+          });
+          if (!authorization.ok) {
+            await rejectBeforeDispatch({
+              context,
+              ownership: priorOwnership,
+              reasonCode: authorization.reasonCode,
+              classification: classification.classification,
+              disposition: disposition.action,
+            });
+            throw new InteractionGovernanceRejectedError(
+              authorization.reasonCode
+            );
+          }
+        }
         const replacement = await ownershipRepository.supersede({
           threadId: context.threadId,
           scopeId: context.scopeId,

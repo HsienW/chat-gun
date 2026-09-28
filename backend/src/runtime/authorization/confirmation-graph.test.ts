@@ -8,6 +8,7 @@ import { applyToolGovernance } from "../../platform/tool-governance.js";
 import type { AuthorizationConfirmationStore } from "./confirmation.js";
 import { createConfirmationRequiredDescriptor } from "./confirmation.js";
 import { ToolRiskRegistry } from "./tool-risk.js";
+import type { InterruptManifestRepository } from "../recovery/interrupt-manifest-repository.js";
 import {
   createToolAuthorizationGraphNodes,
   routeAfterAuthorizationConfirmation,
@@ -85,9 +86,47 @@ describe("tool authorization confirmation graph adapter", () => {
     const consume = vi.fn<AuthorizationConfirmationStore["consume"]>(
       async () => ({ ok: true, status: "approved" })
     );
+    let persistedManifest: Awaited<
+      ReturnType<InterruptManifestRepository["create"]>
+    > | null = null;
+    const createManifest = vi.fn<InterruptManifestRepository["create"]>(
+      async (manifest) => {
+        persistedManifest = manifest;
+        return manifest;
+      }
+    );
+    const findManifest = vi.fn<InterruptManifestRepository["findByInterruptId"]>(
+      async () => persistedManifest
+    );
+    const consumeManifest = vi.fn<InterruptManifestRepository["consume"]>(
+      async () =>
+        persistedManifest
+          ? { ...persistedManifest, status: "resumed" as const }
+          : null
+    );
+    const transitionStatus = vi.fn<InterruptManifestRepository["transitionStatus"]>(
+      async () => null
+    );
     const nodes = createToolAuthorizationGraphNodes({
       tools: [governed],
       confirmationStore: { upsertPending, consume },
+      interruptManifestRepository: {
+        create: createManifest,
+        findByInterruptId: findManifest,
+        consume: consumeManifest,
+        transitionStatus,
+      },
+      executionManifest: {
+        manifestVersion: "1.0.0",
+        graphId: "mcp_agent",
+        graphConfigHash: "a".repeat(64),
+        schemaVersions: {
+          runtimeEventEnvelope: "1.0.0",
+          toolDescriptor: "1.0",
+          authorizationPolicy: "1.0",
+          normalizedInput: "1.0",
+        },
+      },
     });
     const GraphState = Annotation.Root({
       messages: Annotation<unknown[]>({ reducer: (left, right) => [...left, ...right], default: () => [] }),
@@ -130,8 +169,18 @@ describe("tool authorization confirmation graph adapter", () => {
     };
     expect(interruptedWithPayload.__interrupt__).toHaveLength(1);
     expect(upsertPending).toHaveBeenCalledOnce();
-    expect(invoked).not.toHaveBeenCalled();
     const payload = interruptedWithPayload.__interrupt__[0].value;
+    expect(createManifest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "confirmation",
+        status: "waiting",
+        decisionRef: expect.objectContaining({
+          decisionId: payload.decisionId,
+          approvalId: payload.approvalId,
+        }),
+      })
+    );
+    expect(invoked).not.toHaveBeenCalled();
 
     const resumed = await graph.invoke(new Command({ resume: {
       type: "tool_authorization_confirmation",
@@ -143,6 +192,13 @@ describe("tool authorization confirmation graph adapter", () => {
     expect("__interrupt__" in resumed ? resumed.__interrupt__ : undefined).toBeUndefined();
     expect(upsertPending).toHaveBeenCalledOnce();
     expect(consume).toHaveBeenCalledOnce();
+    expect(consumeManifest).not.toHaveBeenCalled();
+    expect(transitionStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedStatus: "waiting",
+        nextStatus: "resumed",
+      })
+    );
     expect(invoked).toHaveBeenCalledOnce();
 
     upsertPending.mockRejectedValueOnce(new Error("confirmation store unavailable"));
