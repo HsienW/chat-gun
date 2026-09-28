@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { createMetricsCollector } from "../../platform/metrics/metrics-collector.js";
-import { renderOperationsMetrics } from "./export.js";
+import {
+  CORRELATED_SLI_DIMENSIONS,
+  createCorrelatedMetricsIndex,
+  classifyRunOutcome,
+  renderOperationsMetrics,
+} from "./export.js";
 
 describe("renderOperationsMetrics", () => {
   it("exports aggregate OpenMetrics without raw identifiers or sensitive event attributes", () => {
@@ -48,5 +53,83 @@ describe("renderOperationsMetrics", () => {
     expect(exposition).not.toContain("secret-value");
     expect(exposition).not.toContain("raw private prompt");
     expect(exposition).not.toContain("private-principal");
+  });
+
+  it("exports four additive outcome metric families without runId labels", () => {
+    const collector = createMetricsCollector();
+    for (const outcomeClass of [
+      "success",
+      "recovered_attempt_error",
+      "terminal_failure",
+      "user_visible_failure",
+    ] as const) {
+      collector.record({
+        kind: "event",
+        name: `run.outcome.${outcomeClass}`,
+        value: 1,
+        attributes: { runId: `private-${outcomeClass}` },
+        ts: 1,
+      });
+    }
+
+    const exposition = renderOperationsMetrics(collector, {
+      signalStatus: "available",
+      missingSignals: [],
+      isHeartbeatStale: false,
+    });
+
+    expect(exposition).toContain("chat_gun_run_outcome_success_total 1");
+    expect(exposition).toContain("chat_gun_run_outcome_recovered_attempt_error_total 1");
+    expect(exposition).toContain("chat_gun_run_outcome_terminal_failure_total 1");
+    expect(exposition).toContain("chat_gun_run_outcome_user_visible_failure_total 1");
+    expect(exposition).not.toContain("private-success");
+    expect(exposition).not.toMatch(/runId\s*=/);
+  });
+});
+
+describe("correlated SLI index", () => {
+  it("queries the complete execution chain by canonical runId", () => {
+    const index = createCorrelatedMetricsIndex();
+    for (const dimension of CORRELATED_SLI_DIMENSIONS) {
+      index.record({
+        runId: "run-1",
+        dimension,
+        referenceId: `${dimension}-1`,
+        projection: { status: "observed" },
+      });
+    }
+
+    const projection = index.query("run-1");
+
+    expect(Object.keys(projection.dimensions).sort()).toEqual(
+      [...CORRELATED_SLI_DIMENSIONS].sort()
+    );
+    expect(projection.runId).toBe("run-1");
+  });
+
+  it("rejects sensitive or unbounded projection fields", () => {
+    const index = createCorrelatedMetricsIndex();
+
+    expect(() =>
+      index.record({
+        runId: "run-1",
+        dimension: "tool",
+        referenceId: "tool-1",
+        projection: { credential: "must-not-index" },
+      })
+    ).toThrow("CORRELATED_METRIC_PROJECTION_FIELD_DENIED");
+  });
+});
+
+describe("run outcome classification", () => {
+  it("separates recovered, terminal, user-visible, and successful outcomes", () => {
+    expect(
+      classifyRunOutcome({ terminal: "completed", hasRecoveredAttemptError: true })
+    ).toBe("recovered_attempt_error");
+    expect(classifyRunOutcome({ terminal: "failed" })).toBe("terminal_failure");
+    expect(
+      classifyRunOutcome({ terminal: "completed", hasUserVisibleFailure: true })
+    ).toBe("user_visible_failure");
+    expect(classifyRunOutcome({ terminal: "completed" })).toBe("success");
   });
 });

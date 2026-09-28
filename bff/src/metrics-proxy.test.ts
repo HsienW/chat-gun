@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { BffConfig } from "./config.js";
 import type { OperationsMetricsAuthorizer } from "./metrics-proxy.js";
+import type { OperationsIncidentAuthorizer } from "./incident-proxy.js";
 import { createServer } from "./server.js";
 
 interface StartedServer {
@@ -32,7 +33,7 @@ function createConfig(upstreamUrl: string): BffConfig {
           principalType: "service",
           tenantId: "tenant-1",
           roles: ["operations-reader"],
-          scopes: ["operations:metrics:read"],
+          scopes: ["operations:metrics:read", "operations:incidents:read"],
           activeScope: { scopeId: "tenant-1", scopeType: "tenant" },
         },
       ],
@@ -196,6 +197,147 @@ describe("operations metrics proxy", () => {
       const headers = { "x-api-key": "reader-key" };
       expect((await fetch(`${bff.url}/api/operations/metrics?tenant=other`, { headers })).status).toBe(400);
       expect((await fetch(`${bff.url}/api/operations/metrics`, { method: "POST", headers })).status).toBe(405);
+    } finally {
+      await bff.close();
+      await upstream.close();
+    }
+  });
+});
+
+describe("operations incident query proxy", () => {
+  it("authorizes and returns a redacted structured projection by canonical runId", async () => {
+    let observedPath: string | undefined;
+    const upstream = await startServer(
+      http.createServer((req, res) => {
+        observedPath = req.url;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            schemaVersion: "1.0",
+            runId: "run-1",
+            events: [{ eventId: "event-1" }],
+            audit: [{ auditRef: "audit-1" }],
+            traces: [{ traceRef: "trace-1" }],
+            toolExecutions: [{ toolCallId: "tool-call-1" }],
+            terminalResult: { status: "completed" },
+          })
+        );
+      })
+    );
+    const authorizer: OperationsIncidentAuthorizer = {
+      authorize: vi.fn(async () => ({
+        effect: "allow" as const,
+        reasonCode: "POLICY_ALLOWED",
+      })),
+    };
+    const bff = await startServer(
+      createServer(createConfig(upstream.url), {
+        operationsIncidentAuthorizer: authorizer,
+      })
+    );
+
+    try {
+      const response = await fetch(`${bff.url}/api/incidents/run-1`, {
+        headers: { "x-api-key": "reader-key" },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("application/json");
+      expect(await response.json()).toMatchObject({
+        schemaVersion: "1.0",
+        runId: "run-1",
+        terminalResult: { status: "completed" },
+      });
+      expect(observedPath).toBe("/operations/incidents/run-1");
+      expect(authorizer.authorize).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "operations.incidents.read",
+          resource: expect.objectContaining({
+            resourceType: "runtime_incident",
+            resourceId: "run-1",
+          }),
+        })
+      );
+    } finally {
+      await bff.close();
+      await upstream.close();
+    }
+  });
+
+  it("denies unauthenticated or unauthorized incident queries without calling upstream", async () => {
+    let upstreamCalls = 0;
+    const upstream = await startServer(
+      http.createServer((_req, res) => {
+        upstreamCalls += 1;
+        res.end("unexpected");
+      })
+    );
+    const authorizer: OperationsIncidentAuthorizer = {
+      authorize: vi.fn(async () => ({
+        effect: "deny" as const,
+        reasonCode: "ACTION_NOT_ALLOWED",
+      })),
+    };
+    const bff = await startServer(
+      createServer(createConfig(upstream.url), {
+        operationsIncidentAuthorizer: authorizer,
+      })
+    );
+
+    try {
+      expect((await fetch(`${bff.url}/api/incidents/run-1`)).status).toBe(401);
+      expect(
+        (
+          await fetch(`${bff.url}/api/incidents/run-1`, {
+            headers: { "x-api-key": "reader-key" },
+          })
+        ).status
+      ).toBe(403);
+      expect(upstreamCalls).toBe(0);
+    } finally {
+      await bff.close();
+      await upstream.close();
+    }
+  });
+
+  it("keeps incident JSON and metrics exposition on separate routes", async () => {
+    const upstream = await startServer(
+      http.createServer((req, res) => {
+        if (req.url === "/operations/metrics") {
+          res.writeHead(200, { "content-type": "application/openmetrics-text" });
+          res.end("chat_gun_task_total 1\n# EOF\n");
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            schemaVersion: "1.0",
+            runId: "run-1",
+            events: [],
+            audit: [],
+            traces: [],
+            toolExecutions: [],
+            terminalResult: null,
+          })
+        );
+      })
+    );
+    const allow = vi.fn(async () => ({
+      effect: "allow" as const,
+      reasonCode: "POLICY_ALLOWED",
+    }));
+    const bff = await startServer(
+      createServer(createConfig(upstream.url), {
+        operationsMetricsAuthorizer: { authorize: allow },
+        operationsIncidentAuthorizer: { authorize: allow },
+      })
+    );
+
+    try {
+      const headers = { "x-api-key": "reader-key" };
+      const incident = await fetch(`${bff.url}/api/incidents/run-1`, { headers });
+      const metrics = await fetch(`${bff.url}/api/operations/metrics`, { headers });
+      expect(incident.headers.get("content-type")).toContain("application/json");
+      expect(metrics.headers.get("content-type")).toContain("application/openmetrics-text");
     } finally {
       await bff.close();
       await upstream.close();

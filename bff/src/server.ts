@@ -19,6 +19,11 @@ import {
   type OperationsMetricsAuthorizer,
 } from "./metrics-proxy.js";
 import {
+  defaultOperationsIncidentAuthorizer,
+  proxyOperationsIncident,
+  type OperationsIncidentAuthorizer,
+} from "./incident-proxy.js";
+import {
   createBffAbortError,
   createBffErrorEnvelope,
   isBffAbortReason,
@@ -126,6 +131,7 @@ export type ServerDependencies = {
   closeRedis?: () => Promise<void>;
   principalResolver?: PrincipalResolver;
   operationsMetricsAuthorizer?: OperationsMetricsAuthorizer;
+  operationsIncidentAuthorizer?: OperationsIncidentAuthorizer;
 };
 
 type RateLimitDecision = {
@@ -1196,6 +1202,8 @@ export function createServer(
     dependencies.principalResolver ?? selectPrincipalResolver(config);
   const operationsMetricsAuthorizer =
     dependencies.operationsMetricsAuthorizer ?? defaultOperationsMetricsAuthorizer;
+  const operationsIncidentAuthorizer =
+    dependencies.operationsIncidentAuthorizer ?? defaultOperationsIncidentAuthorizer;
 
   const server = http.createServer(async (req, res) => {
     const reqUrl = new URL(req.url ?? "/", `http://${getHeader(req, "host") ?? "localhost"}`);
@@ -1329,6 +1337,23 @@ export function createServer(
         config,
         principalResolution,
         operationsMetricsAuthorizer
+      );
+      return;
+    }
+
+    const incidentRouteMatch = /^\/api\/incidents\/([^/]+)$/u.exec(
+      reqUrl.pathname
+    );
+    if (incidentRouteMatch) {
+      await proxyOperationsIncident(
+        req,
+        res,
+        reqUrl,
+        incidentRouteMatch[1] ?? "",
+        ctx,
+        config,
+        principalResolution,
+        operationsIncidentAuthorizer
       );
       return;
     }
