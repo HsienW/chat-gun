@@ -1,0 +1,14 @@
+{
+  "datasetId": "runtime-production-readiness",
+  "datasetVersion": "v1.0.0",
+  "executionMode": "memory_only",
+  "cases": [
+    { "caseId": "fault-decoder", "category": "decoder", "expectedGateStatus": "failed" },
+    { "caseId": "fault-authorization", "category": "authorization", "expectedGateStatus": "failed" },
+    { "caseId": "fault-side-effect-duplicate", "category": "side_effect_duplicate", "expectedGateStatus": "failed" },
+    { "caseId": "fault-recovery", "category": "recovery", "expectedGateStatus": "failed" },
+    { "caseId": "fault-context-overflow", "category": "context_overflow", "expectedGateStatus": "failed" },
+    { "caseId": "fault-event-terminal-monotonicity", "category": "event_terminal_monotonicity", "expectedGateStatus": "failed" },
+    { "caseId": "control-valid-runtime", "category": "control", "expectedGateStatus": "passed" }
+  ]
+}

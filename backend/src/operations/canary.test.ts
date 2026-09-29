@@ -1,10 +1,17 @@
+import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
+
+import type { GovernedToolExecutor } from "../runtime/side-effect/governed-outcome.js";
+import type { RuntimeToolDispatchPipeline } from "../runtime/tool-dispatch/pipeline.js";
 
 import {
   runLiveRuntimeCanary,
   runSafeCanaryMockTool,
+  wireExecutionCompositionCanaryDependencies,
   type CanaryDependencies,
 } from "./canary.js";
+import { createExecutionCompositionRoot } from "./execution-composition-root.js";
+import { RUN_OUTCOME_METRIC_CLASSES } from "./metrics/export.js";
 
 const MANIFEST = {
   runtimeBuildId: "build-1",
@@ -41,6 +48,143 @@ function createDependencies(
 }
 
 describe("live runtime canary", () => {
+  it("uses the real execution composition root in default wiring", async () => {
+    const safeOutput = runSafeCanaryMockTool({
+      canaryId: "canary-root",
+      nonce: "nonce-root",
+    });
+    const sourceExecutor: GovernedToolExecutor<unknown, unknown> = {
+      executeTyped: vi.fn(async () => ({
+        type: "succeeded" as const,
+        result: safeOutput,
+      })),
+    };
+    const dispatchPipeline: RuntimeToolDispatchPipeline = {
+      createExecutor() {
+        return {
+          async executeTyped() {
+            return {
+              type: "succeeded",
+              result: {
+                schemaVersion: "1.0",
+                kind: "tool_result",
+                correlation: {
+                  requestId: "request-canary",
+                  threadId: "thread-canary",
+                  runId: "run-canary",
+                  taskId: "task-canary",
+                  stepId: "step-canary",
+                  toolCallId: "tool-call-canary",
+                },
+                tool: {
+                  name: "safe_canary_tool",
+                  version: "1.0.0",
+                  riskTier: "read",
+                  readOnly: true,
+                },
+                outcome: { type: "succeeded", result: safeOutput },
+                emittedAt: "2026-09-28T12:00:00.000Z",
+              },
+            };
+          },
+        };
+      },
+      hasCompensation: () => false,
+      async compensate() {
+        throw new Error("not used");
+      },
+    };
+    const root = createExecutionCompositionRoot({
+      createCorrelation: () => ({
+        requestId: "request-canary",
+        threadId: "thread-canary",
+        runId: "run-canary",
+        taskId: "task-canary",
+        stepId: "step-canary",
+        toolCallId: "tool-call-canary",
+        attempt: 1,
+      }),
+      dispatchPipeline,
+      selectTool: () => ({
+        toolName: "safe_canary_tool",
+        input: safeOutput,
+        sourceExecutor,
+      }),
+      recovery: {
+        async recover() {
+          return { terminal: "completed", output: safeOutput };
+        },
+      },
+      outputSchema: z.object({
+        resourceKind: z.literal("memory_only"),
+        effectId: z.string(),
+        digest: z.string(),
+      }).strict(),
+      collectEvidence: () => ({
+        auditRef: "audit:run-canary",
+        otelTraceRef: "trace:run-canary",
+        duplicateEffectCount: 0,
+        correlatedSliRef: "sli:run-canary",
+      }),
+      createEventId: () => "event-canary",
+      now: () => new Date("2026-09-28T12:00:00.000Z"),
+    });
+    const execute = vi.spyOn(root, "execute");
+    const dependencies = wireExecutionCompositionCanaryDependencies(
+      createDependencies(),
+      {
+        root,
+        createRequest: ({ canaryId, nonce }) => ({
+          executionManifest: MANIFEST,
+          principal: {
+            principalId: "canary-service",
+            principalType: "service",
+            tenantId: "tenant-canary",
+            roles: ["runtime-canary"],
+            scopes: ["tools:execute"],
+            authSource: "service_token",
+            authenticatedAt: "2026-09-28T12:00:00.000Z",
+          },
+          input: {
+            kind: "prompt",
+            text: `${canaryId}:${nonce}`,
+            attachments: [],
+          },
+          scope: {
+            scopeId: "scope-canary",
+            scopeType: "tenant",
+            tenantId: "tenant-canary",
+          },
+        }),
+        queryOutcomeMetricClasses: (runId) =>
+          runId === "run-canary" ? RUN_OUTCOME_METRIC_CLASSES : [],
+      }
+    );
+
+    const result = await runLiveRuntimeCanary(
+      {
+        canaryId: "canary-root",
+        nonce: "nonce-root",
+        runtimeBuildId: "build-1",
+        executionManifest: MANIFEST,
+        timeoutMs: 1_000,
+      },
+      dependencies
+    );
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      status: "healthy",
+      reasonCode: "CANARY_VERIFIED",
+      runId: "run-canary",
+      duplicateEffectCount: 0,
+      outcomeMetricsVerified: true,
+      frontendEnvelopeVerified: true,
+      runtimeBuildId: "build-1",
+      executionManifest: MANIFEST,
+    });
+  });
+
   it("executes the bounded lifecycle and records build/manifest/cleanup", async () => {
     const dependencies = createDependencies();
 

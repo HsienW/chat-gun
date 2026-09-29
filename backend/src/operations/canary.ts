@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
+import { runtimeEventEnvelopeSchema } from "../runtime/event-envelope.js";
+import type { CanonicalExecutionRequest, ExecutionCompositionRoot } from "./execution-composition-root.js";
+import { RUN_OUTCOME_METRIC_CLASSES, type RunOutcomeMetricClass } from "./metrics/export.js";
+
 import {
   executionManifestSchema,
   type ExecutionManifest,
@@ -49,6 +53,9 @@ const verificationSchema = z
     hasAudit: z.boolean(),
     hasOtelTrace: z.boolean(),
     duplicateEffectCount: z.number().int().nonnegative(),
+    runId: boundedIdentifierSchema.optional(),
+    outcomeMetricsVerified: z.boolean().optional(),
+    frontendEnvelopeVerified: z.boolean().optional(),
   })
   .strict();
 const cleanupSchema = z
@@ -111,11 +118,19 @@ export interface CanaryDependencies {
   ): Promise<void>;
 }
 
+export interface ExecutionCompositionCanaryWiring {
+  root: ExecutionCompositionRoot<SafeCanaryMockToolOutput>;
+  createRequest(input: SafeCanaryMockToolInput): CanonicalExecutionRequest;
+  queryOutcomeMetricClasses(runId: string): readonly RunOutcomeMetricClass[];
+}
+
 export type CanaryReasonCode =
   | "CANARY_VERIFIED"
   | "CANARY_AUDIT_MISSING"
   | "CANARY_TRACE_MISSING"
   | "CANARY_DUPLICATE_EFFECT"
+  | "CANARY_CORRELATED_METRICS_MISSING"
+  | "CANARY_FRONTEND_ENVELOPE_INVALID"
   | "CANARY_TIMEOUT"
   | "CANARY_EXECUTION_FAILED"
   | "CANARY_CLEANUP_FAILED";
@@ -129,6 +144,9 @@ export interface CanaryResult {
   stepId?: string;
   checkpointId?: string;
   duplicateEffectCount?: number;
+  runId?: string;
+  outcomeMetricsVerified?: boolean;
+  frontendEnvelopeVerified?: boolean;
   cleanupTraceRef?: string;
 }
 
@@ -186,7 +204,61 @@ function reasonFromVerification(
   }
   if (!verification.hasAudit) return "CANARY_AUDIT_MISSING";
   if (!verification.hasOtelTrace) return "CANARY_TRACE_MISSING";
+  if (verification.outcomeMetricsVerified === false) {
+    return "CANARY_CORRELATED_METRICS_MISSING";
+  }
+  if (verification.frontendEnvelopeVerified === false) {
+    return "CANARY_FRONTEND_ENVELOPE_INVALID";
+  }
   return "CANARY_VERIFIED";
+}
+
+export function wireExecutionCompositionCanaryDependencies(
+  dependencies: CanaryDependencies,
+  wiring: ExecutionCompositionCanaryWiring
+): CanaryDependencies {
+  let compositionResult:
+    | Awaited<ReturnType<typeof wiring.root.execute>>
+    | undefined;
+
+  return {
+    ...dependencies,
+    async invokeSafeMockTool(input, signal) {
+      if (signal.aborted) throw new CanaryTimeoutError();
+      compositionResult = await wiring.root.execute(wiring.createRequest(input));
+      return safeMockToolOutputSchema.parse(compositionResult.output);
+    },
+    async verifyAuditAndTrace(input, signal) {
+      const lifecycleVerification = verificationSchema.parse(
+        await dependencies.verifyAuditAndTrace(input, signal)
+      );
+      if (!compositionResult) {
+        throw new Error("CANARY_COMPOSITION_RESULT_UNAVAILABLE");
+      }
+      const observedClasses = new Set(
+        wiring.queryOutcomeMetricClasses(compositionResult.runId)
+      );
+      return {
+        hasAudit:
+          lifecycleVerification.hasAudit &&
+          typeof compositionResult.evidence.auditRef === "string",
+        hasOtelTrace:
+          lifecycleVerification.hasOtelTrace &&
+          typeof compositionResult.evidence.otelTraceRef === "string",
+        duplicateEffectCount: Math.max(
+          lifecycleVerification.duplicateEffectCount,
+          compositionResult.evidence.duplicateEffectCount
+        ),
+        runId: compositionResult.runId,
+        outcomeMetricsVerified: RUN_OUTCOME_METRIC_CLASSES.every((outcomeClass) =>
+          observedClasses.has(outcomeClass)
+        ),
+        frontendEnvelopeVerified: runtimeEventEnvelopeSchema.safeParse(
+          compositionResult.executionEvent
+        ).success,
+      };
+    },
+  };
 }
 
 export async function runLiveRuntimeCanary(
@@ -207,6 +279,9 @@ export async function runLiveRuntimeCanary(
   let stepId: string | undefined;
   let checkpointId: string | undefined;
   let duplicateEffectCount: number | undefined;
+  let runId: string | undefined;
+  let outcomeMetricsVerified: boolean | undefined;
+  let frontendEnvelopeVerified: boolean | undefined;
   let reasonCode: CanaryReasonCode = "CANARY_EXECUTION_FAILED";
   let cleanupTraceRef: string | undefined;
 
@@ -283,6 +358,9 @@ export async function runLiveRuntimeCanary(
       )
     );
     duplicateEffectCount = verification.duplicateEffectCount;
+    runId = verification.runId;
+    outcomeMetricsVerified = verification.outcomeMetricsVerified;
+    frontendEnvelopeVerified = verification.frontendEnvelopeVerified;
     reasonCode = reasonFromVerification(verification);
   } catch (error) {
     reasonCode =
@@ -314,6 +392,11 @@ export async function runLiveRuntimeCanary(
     ...(stepId ? { stepId } : {}),
     ...(checkpointId ? { checkpointId } : {}),
     ...(duplicateEffectCount !== undefined ? { duplicateEffectCount } : {}),
+    ...(runId ? { runId } : {}),
+    ...(outcomeMetricsVerified !== undefined ? { outcomeMetricsVerified } : {}),
+    ...(frontendEnvelopeVerified !== undefined
+      ? { frontendEnvelopeVerified }
+      : {}),
     ...(cleanupTraceRef ? { cleanupTraceRef } : {}),
   };
   await dependencies.markDeploymentHealth(result.status, result);
