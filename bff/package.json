@@ -16,10 +16,13 @@
   },
   "dependencies": {
     "dotenv": "^16.5.0",
-    "ioredis": "^6.0.0"
+    "ioredis": "^6.0.0",
+    "jose": "^6.2.12",
+    "pg": "^8.23.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.17",
+    "@types/pg": "^8.23.1",
     "typescript": "~5.7.2",
     "vitest": "^4.1.8"
   }

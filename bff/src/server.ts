@@ -40,6 +40,10 @@ import {
 import { InMemoryRateLimiter } from "./rate-limit.js";
 import { validateUploadPayload } from "./upload-security.js";
 import { pipeWebResponseBody } from "./stream-passthrough.js";
+import {
+  parseAnonymousMigrationRequest,
+  type AnonymousMigrationService,
+} from "./anonymous-migration.js";
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -132,6 +136,7 @@ export type ServerDependencies = {
   principalResolver?: PrincipalResolver;
   operationsMetricsAuthorizer?: OperationsMetricsAuthorizer;
   operationsIncidentAuthorizer?: OperationsIncidentAuthorizer;
+  anonymousMigrationService?: AnonymousMigrationService;
 };
 
 type RateLimitDecision = {
@@ -347,6 +352,90 @@ async function readRequestBody(
   return chunks.length > 0 ? Buffer.concat(chunks) : undefined;
 }
 
+async function handleAnonymousMigration(
+  req: IncomingMessage,
+  res: ServerResponse,
+  ctx: RequestContext,
+  config: BffConfig,
+  principalResolution: PrincipalResolution,
+  service: AnonymousMigrationService | undefined,
+): Promise<void> {
+  if (req.method !== "POST") {
+    sendJson(res, 405, { error: "Method not allowed" }, ctx.requestId);
+    return;
+  }
+  if (!principalResolution.ok) {
+    sendJson(res, principalResolution.status, {
+      error: principalResolution.code
+        ? { code: principalResolution.code, message: principalResolution.message }
+        : principalResolution.message,
+    }, ctx.requestId);
+    return;
+  }
+  const { principal } = principalResolution;
+  if (
+    principal.principalKind !== "authenticated" ||
+    !principal.accountId ||
+    !principal.sessionId
+  ) {
+    sendJson(res, 401, {
+      error: { code: "AUTHENTICATED_SESSION_REQUIRED", message: "Authenticated account session required" },
+    }, ctx.requestId);
+    return;
+  }
+  if (!service) {
+    sendJson(res, 503, {
+      error: { code: "IDENTITY_MIGRATION_UNAVAILABLE", message: "Identity migration is unavailable" },
+    }, ctx.requestId);
+    return;
+  }
+  const idempotency = validateIdempotencyHeader(req);
+  if (!idempotency.ok || !idempotency.present) {
+    sendJson(res, 400, {
+      error: { code: "INVALID_IDEMPOTENCY_KEY", message: "A valid idempotency key is required" },
+    }, ctx.requestId);
+    return;
+  }
+  try {
+    const body = await readRequestBody(req, config.maxBodyBytes, ctx);
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(body?.toString("utf8") ?? "");
+    } catch {
+      sendJson(res, 400, {
+        error: { code: "INVALID_MIGRATION_REQUEST", message: "Invalid migration request" },
+      }, ctx.requestId);
+      return;
+    }
+    const request = parseAnonymousMigrationRequest(parsedJson);
+    if (!request || request.idempotencyKey !== idempotency.clientKey) {
+      sendJson(res, 400, {
+        error: { code: "INVALID_MIGRATION_REQUEST", message: "Invalid migration request" },
+      }, ctx.requestId);
+      return;
+    }
+    const result = await service.migrate(request, {
+      accountId: principal.accountId,
+      sessionId: principal.sessionId,
+    });
+    sendJson(res, result.result === "conflict" ? 409 : 200, result, ctx.requestId);
+  } catch (error) {
+    if (error instanceof Error && error.name === "PayloadTooLargeError") {
+      sendJson(res, 413, { error: { code: "PAYLOAD_TOO_LARGE", message: "Request body too large" } }, ctx.requestId);
+      return;
+    }
+    if (error instanceof Error && error.message === "ANONYMOUS_CREDENTIAL_INVALID") {
+      sendJson(res, 401, {
+        error: { code: "ANONYMOUS_CREDENTIAL_INVALID", message: "Anonymous credential is invalid" },
+      }, ctx.requestId);
+      return;
+    }
+    sendJson(res, 503, {
+      error: { code: "IDENTITY_MIGRATION_UNAVAILABLE", message: "Identity migration is unavailable" },
+    }, ctx.requestId);
+  }
+}
+
 type InputKindValidation =
   | { ok: true }
   | { ok: false; errorCode: "unsupported_input_kind" };
@@ -430,7 +519,11 @@ function copyRequestHeaders(
   headers.set("x-request-id", ctx.requestId);
   headers.set("x-bff-principal-id", principal.principalId);
   headers.set("x-bff-principal-type", principal.principalType);
+  headers.set("x-bff-principal-kind", principal.principalKind);
   headers.set("x-bff-tenant-id", principal.tenantId);
+  if (principal.accountId) headers.set("x-bff-account-id", principal.accountId);
+  if (principal.sessionId) headers.set("x-bff-session-id", principal.sessionId);
+  if (principal.deviceId) headers.set("x-bff-device-id", principal.deviceId);
   headers.set("x-bff-roles", principal.roles.join(","));
   headers.set("x-bff-scopes", principal.scopes.join(","));
   headers.set("x-bff-scope-id", activeScope.scopeId);
@@ -577,7 +670,11 @@ async function proxyMetrics(
     sendJson(
       res,
       principalResolution.status,
-      { error: principalResolution.message },
+      {
+        error: principalResolution.code
+          ? { code: principalResolution.code, message: principalResolution.message }
+          : principalResolution.message,
+      },
       ctx.requestId
     );
     return;
@@ -892,7 +989,11 @@ async function proxyLangGraph(
     sendJson(
       res,
       principalResolution.status,
-      { error: principalResolution.message },
+      {
+        error: principalResolution.code
+          ? { code: principalResolution.code, message: principalResolution.message }
+          : principalResolution.message,
+      },
       ctx.requestId
     );
     return;
@@ -1215,7 +1316,7 @@ export function createServer(
       userId: "anonymous",
       tenantId: "public",
     };
-    const principalResolution = principalResolver.resolve(req, config);
+    const principalResolution = await principalResolver.resolve(req, config);
     if (principalResolution.ok) {
       ctx.userId = principalResolution.principal.principalId;
       ctx.tenantId = principalResolution.principal.tenantId;
@@ -1300,6 +1401,18 @@ export function createServer(
         429,
         { error: BFF_ERROR_MESSAGES.rateLimit.exceeded, retryAfter },
         ctx.requestId
+      );
+      return;
+    }
+
+    if (reqUrl.pathname === "/api/identity/anonymous-migrate") {
+      await handleAnonymousMigration(
+        req,
+        res,
+        ctx,
+        config,
+        principalResolution,
+        dependencies.anonymousMigrationService,
       );
       return;
     }
