@@ -23,6 +23,7 @@ import {
   withExecutionContext,
 } from "../runtime/execution-context/read-execution-context.js";
 import { instrumentGraphWithExecutionContext } from "../runtime/execution-context/instrument-graph.js";
+import { getRuntimeIdentityStatusInstrumentation } from "../runtime/authorization/identity-status-composition.js";
 import {
   tryToLegacyToolResult,
 } from "../runtime/tool-dispatch/structured-tool-result.js";
@@ -147,6 +148,7 @@ function resolveMathExecutionContext(input: unknown, config: unknown) {
 export const mathAgentGraph = mathDispatchPipelineEnabled
   ? instrumentGraphWithExecutionContext(
       governedMathGraph,
-      resolveMathExecutionContext
+      resolveMathExecutionContext,
+      getRuntimeIdentityStatusInstrumentation(),
     )
   : governedMathGraph;

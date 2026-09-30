@@ -7,6 +7,7 @@ export const PRINCIPAL_TYPES = [
 
 export const AUTH_SOURCES = [
   "trusted_gateway",
+  "oidc",
   "service_token",
   "development",
 ] as const;
@@ -14,10 +15,21 @@ export const AUTH_SOURCES = [
 export type PrincipalType = (typeof PRINCIPAL_TYPES)[number];
 export type AuthSource = (typeof AUTH_SOURCES)[number];
 
+import {
+  opaqueIdentityIdSchema,
+  principalKindSchema,
+  principalTypeAdapter,
+  type PrincipalKind,
+} from "./consumer-identity.js";
+
 export interface PrincipalContext {
   principalId: string;
   principalType: PrincipalType;
+  principalKind?: PrincipalKind;
   tenantId: string;
+  accountId?: string;
+  sessionId?: string;
+  deviceId?: string;
   roles: string[];
   scopes: string[];
   authSource: AuthSource;
@@ -32,6 +44,10 @@ const TRUSTED_PRINCIPAL_HEADERS = {
   scopes: "x-bff-scopes",
   authSource: "x-bff-auth-source",
   authenticatedAt: "x-bff-authenticated-at",
+  principalKind: "x-bff-principal-kind",
+  accountId: "x-bff-account-id",
+  sessionId: "x-bff-session-id",
+  deviceId: "x-bff-device-id",
 } as const;
 
 type TrustedPrincipalHeaderName =
@@ -133,6 +149,19 @@ export function parseTrustedPrincipal(
     return invalid(TRUSTED_PRINCIPAL_HEADERS.principalType);
   }
 
+  const rawPrincipalKind = readTrustedHeader(
+    headers,
+    TRUSTED_PRINCIPAL_HEADERS.principalKind
+  )?.trim();
+  const parsedPrincipalKind = rawPrincipalKind === undefined
+    ? principalTypeAdapter.toPrincipalKind(principalType)
+    : principalKindSchema.safeParse(rawPrincipalKind).success
+      ? principalKindSchema.parse(rawPrincipalKind)
+      : undefined;
+  if (parsedPrincipalKind === undefined) {
+    return invalid(TRUSTED_PRINCIPAL_HEADERS.principalKind);
+  }
+
   const tenantId = readTrustedHeader(headers, TRUSTED_PRINCIPAL_HEADERS.tenantId)?.trim();
   if (!tenantId) return missing(TRUSTED_PRINCIPAL_HEADERS.tenantId);
 
@@ -160,12 +189,28 @@ export function parseTrustedPrincipal(
     return invalid(TRUSTED_PRINCIPAL_HEADERS.authenticatedAt);
   }
 
+
+  const optionalOpaqueFields = [
+    ["accountId", TRUSTED_PRINCIPAL_HEADERS.accountId],
+    ["sessionId", TRUSTED_PRINCIPAL_HEADERS.sessionId],
+    ["deviceId", TRUSTED_PRINCIPAL_HEADERS.deviceId],
+  ] as const;
+  const optionalIdentity: { accountId?: string; sessionId?: string; deviceId?: string } = {};
+  for (const [property, header] of optionalOpaqueFields) {
+    const value = readTrustedHeader(headers, header)?.trim();
+    if (value === undefined) continue;
+    if (!opaqueIdentityIdSchema.safeParse(value).success) return invalid(header);
+    optionalIdentity[property] = value;
+  }
+
   return {
     ok: true,
     principal: {
       principalId,
       principalType,
+      principalKind: parsedPrincipalKind,
       tenantId,
+      ...optionalIdentity,
       roles: parseList(roles),
       scopes: parseList(scopes),
       authSource,

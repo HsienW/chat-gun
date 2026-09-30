@@ -6,6 +6,7 @@ import { MemorySaver } from "@langchain/langgraph-checkpoint";
 import { readCanonicalExecutionContext, readExecutionCorrelation } from "../runtime/execution-context/read-execution-context.js";
 import { readDevelopmentExecutionContext } from "../runtime/execution-context/read-execution-context.js";
 import { instrumentGraphWithExecutionContext } from "../runtime/execution-context/instrument-graph.js";
+import { getRuntimeIdentityStatusInstrumentation } from "../runtime/authorization/identity-status-composition.js";
 import { createClarificationInterruptId } from "../runtime/interaction/events.js";
 import { getPool } from "../runtime/persistence/connection.js";
 import {
@@ -3039,6 +3040,7 @@ export const deepResearcherGraph = instrumentGraphWithExecutionContext(
     process.env.NODE_ENV === "development" &&
     process.env.EXECUTION_CONTEXT_DEV_ENABLED === "true"
       ? readDevelopmentExecutionContext(input, config)
-      : undefined
+      : undefined,
+  getRuntimeIdentityStatusInstrumentation(),
 );
 

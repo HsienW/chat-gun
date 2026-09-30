@@ -26,6 +26,7 @@ import {
   readExecutionContext,
 } from "../runtime/execution-context/read-execution-context.js";
 import { instrumentGraphWithExecutionContext } from "../runtime/execution-context/instrument-graph.js";
+import { getRuntimeIdentityStatusInstrumentation } from "../runtime/authorization/identity-status-composition.js";
 import { normalizeAiMessageForStream } from "./message-normalization.js";
 import { createExecutionManifestRef } from "../runtime/recovery/execution-manifest.js";
 import {
@@ -164,5 +165,6 @@ export const mcpAgentGraph = instrumentGraphWithExecutionContext(
     instrumentGraphWithOpik(builder.compile(), "mcp_agent"),
     productionInteractionOrchestrator
   ),
-  resolveMcpExecutionContext
+  resolveMcpExecutionContext,
+  getRuntimeIdentityStatusInstrumentation(),
 );

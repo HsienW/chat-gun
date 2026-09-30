@@ -42,6 +42,17 @@ describe("runtime integration boundary switches", () => {
     );
   });
 
+  it("strictly validates identity status enforcement rollout", () => {
+    vi.stubEnv("IDENTITY_STATUS_ENFORCEMENT_ENABLED", "");
+    expect(getAgentRuntimeConfig().identityStatusEnforcementEnabled).toBe(false);
+    vi.stubEnv("IDENTITY_STATUS_ENFORCEMENT_ENABLED", "true");
+    expect(getAgentRuntimeConfig().identityStatusEnforcementEnabled).toBe(true);
+    vi.stubEnv("IDENTITY_STATUS_ENFORCEMENT_ENABLED", "sometimes");
+    expect(() => getAgentRuntimeConfig()).toThrow(
+      "IDENTITY_STATUS_ENFORCEMENT_ENABLED must be true or false"
+    );
+  });
+
   it("makes authorization default-deny when X13 is disabled", () => {
     vi.stubEnv("RUNTIME_X13_AUTHORIZATION_ENABLED", "false");
     const flags = getAgentRuntimeConfig().runtimeBoundaryFlags;

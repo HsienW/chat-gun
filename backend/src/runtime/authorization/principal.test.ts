@@ -9,6 +9,10 @@ import {
 const canonicalHeaders = {
   "x-bff-principal-id": "principal-1",
   "x-bff-principal-type": "merchant_staff",
+  "x-bff-principal-kind": "authenticated",
+  "x-bff-account-id": "account-1",
+  "x-bff-session-id": "session-1",
+  "x-bff-device-id": "device-1",
   "x-bff-tenant-id": "tenant-1",
   "x-bff-roles": "support, operator",
   "x-bff-scopes": "catalog:read, orders:write",
@@ -32,12 +36,43 @@ describe("parseTrustedPrincipal", () => {
       principal: {
         principalId: "principal-1",
         principalType: "merchant_staff",
+        principalKind: "authenticated",
+        accountId: "account-1",
+        sessionId: "session-1",
+        deviceId: "device-1",
         tenantId: "tenant-1",
         roles: ["support", "operator"],
         scopes: ["catalog:read", "orders:write"],
         authSource: "trusted_gateway",
         authenticatedAt: "2026-08-18T01:02:03.000Z",
       },
+    });
+  });
+
+  it("adapts a legacy producer without additive identity headers", () => {
+    const {
+      "x-bff-principal-kind": _kind,
+      "x-bff-account-id": _account,
+      "x-bff-session-id": _session,
+      "x-bff-device-id": _device,
+      ...legacyHeaders
+    } = canonicalHeaders;
+    const parsed = parseTrustedPrincipal(legacyHeaders);
+    expect(parsed).toMatchObject({ ok: true, principal: { principalKind: "authenticated" } });
+    if (parsed.ok) {
+      expect(parsed.principal.accountId).toBeUndefined();
+      expect(parsed.principal.sessionId).toBeUndefined();
+      expect(parsed.principal.deviceId).toBeUndefined();
+    }
+  });
+
+  it("rejects unknown canonical principal kind", () => {
+    expect(parseTrustedPrincipal({
+      ...canonicalHeaders,
+      "x-bff-principal-kind": "future-kind",
+    })).toMatchObject({
+      ok: false,
+      error: { field: "x-bff-principal-kind" },
     });
   });
 
@@ -107,6 +142,7 @@ describe("trusted principal domain constants", () => {
     ]);
     expect(AUTH_SOURCES).toEqual([
       "trusted_gateway",
+      "oidc",
       "service_token",
       "development",
     ]);

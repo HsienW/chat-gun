@@ -16,6 +16,7 @@ export interface ResourceRef {
   resourceType: string;
   resourceId: string;
   tenantId: string;
+  accountId?: string;
   ownerScopeId?: string;
 }
 

@@ -4,6 +4,11 @@ import { AUTH_SOURCES, PRINCIPAL_TYPES } from "../authorization/principal.js";
 import type { PrincipalContext } from "../authorization/principal.js";
 import { SCOPE_TYPES } from "../authorization/scope.js";
 import type { RuntimeScope } from "../authorization/scope.js";
+import {
+  opaqueIdentityIdSchema,
+  principalKindSchema,
+  type PrincipalKind,
+} from "../authorization/consumer-identity.js";
 
 export interface ExecutionContext {
   requestId: string;
@@ -16,6 +21,10 @@ export interface ExecutionContext {
   parentRunId?: string;
   agentId?: string;
   attempt: number;
+  accountId?: string;
+  sessionId?: string;
+  deviceId?: string;
+  principalKind?: PrincipalKind;
   principal: PrincipalContext;
   scope: RuntimeScope;
 }
@@ -25,7 +34,11 @@ export const executionIdSchema = z.string().min(1).max(256).regex(/^[A-Za-z0-9_\
 const principalContextSchema = z.object({
   principalId: z.string().min(1),
   principalType: z.enum(PRINCIPAL_TYPES),
+  principalKind: principalKindSchema.optional(),
   tenantId: z.string().min(1),
+  accountId: opaqueIdentityIdSchema.optional(),
+  sessionId: opaqueIdentityIdSchema.optional(),
+  deviceId: opaqueIdentityIdSchema.optional(),
   roles: z.array(z.string().min(1)),
   scopes: z.array(z.string().min(1)),
   authSource: z.enum(AUTH_SOURCES),
@@ -50,6 +63,10 @@ export const executionContextSchema: z.ZodType<ExecutionContext> = z.object({
   parentRunId: executionIdSchema.optional(),
   agentId: executionIdSchema.optional(),
   attempt: z.number().int().positive(),
+  accountId: opaqueIdentityIdSchema.optional(),
+  sessionId: opaqueIdentityIdSchema.optional(),
+  deviceId: opaqueIdentityIdSchema.optional(),
+  principalKind: principalKindSchema.optional(),
   principal: principalContextSchema,
   scope: runtimeScopeSchema,
 }).strict().refine(
