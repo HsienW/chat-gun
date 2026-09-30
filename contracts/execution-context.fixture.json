@@ -35,6 +35,75 @@
   "oversizedIdLength": 257,
   "unknownField": "runID",
   "concurrentRunIds": ["run-1", "run-2"],
+  "consumerIdentity": {
+    "schemaVersion": "1.0.0",
+    "opaqueId": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+      "minLength": 1,
+      "maxLength": 128,
+      "types": [
+        "AccountId",
+        "UserId",
+        "TenantId",
+        "SessionId",
+        "DeviceId",
+        "CredentialId",
+        "PrincipalId"
+      ]
+    },
+    "accountStatuses": [
+      "pending_verification",
+      "active",
+      "recovery_restricted",
+      "suspended",
+      "deletion_pending",
+      "deleted"
+    ],
+    "sessionStatuses": [
+      "active",
+      "expired",
+      "revoked",
+      "compromised"
+    ],
+    "principalKinds": [
+      "anonymous",
+      "authenticated",
+      "service",
+      "operator",
+      "delegated"
+    ],
+    "principalTypeAdapter": {
+      "version": "1.0.0",
+      "mapping": {
+        "user": "authenticated",
+        "merchant_staff": "authenticated",
+        "platform_staff": "operator",
+        "service": "service"
+      },
+      "unknown": "deny"
+    },
+    "trustedHeaders": {
+      "legacy": [
+        "x-bff-principal-id",
+        "x-bff-principal-type",
+        "x-bff-tenant-id",
+        "x-bff-roles",
+        "x-bff-scopes",
+        "x-bff-auth-source",
+        "x-bff-authenticated-at"
+      ],
+      "additive": [
+        "x-bff-account-id",
+        "x-bff-session-id",
+        "x-bff-device-id",
+        "x-bff-principal-kind"
+      ]
+    },
+    "accessDenial": {
+      "crossAccount": "CROSS_TENANT_DENIED",
+      "crossTenant": "CROSS_TENANT_DENIED"
+    }
+  },
   "trustedAuthorization": {
     "scopeTypes": ["principal", "tenant", "team", "conversation"],
     "principalHeaders": [
