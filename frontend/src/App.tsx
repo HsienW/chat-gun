@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, useReducer } from 'r
 
 import { WelcomeScreen } from '@/components/WelcomeScreen';
 import { ChatMessagesView } from '@/components/ChatMessagesView';
+import { IdentityLifecyclePanel } from '@/components/IdentityLifecyclePanel';
 import {
   extractAgentRuntimeEvents,
   extractClarificationInterruptId,
@@ -46,6 +47,10 @@ import {
   isStreamAbortError,
 } from '@/lib/stream-error-classification';
 import type { ClarificationResumeValue } from '@/components/WeatherToolResult';
+import {
+  parseIdentityFailure,
+  type IdentityFailure,
+} from '@/lib/identity-lifecycle';
 
 const STREAM_ERROR_MESSAGE_ID = 'stream-error';
 const WEATHER_CLARIFICATION_AI_MESSAGE_ID = 'weather-clarification-interrupt-ai';
@@ -148,6 +153,7 @@ export default function App() {
   const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
   const [rateLimitRetryAfter, setRateLimitRetryAfter] = useState<number | null>(null);
   const [cancelledMessage, setCancelledMessage] = useState<Message | null>(null);
+  const [identityFailure, setIdentityFailure] = useState<IdentityFailure | undefined>();
   const [weatherClarificationMessages, setWeatherClarificationMessages] =
     useState<Message[] | null>(null);
   const [isDispatching, setIsDispatching] = useState(false);
@@ -243,6 +249,7 @@ export default function App() {
       setWeatherClarificationMessages(null);
     }
     clarificationResumePendingRef.current = false;
+    setIdentityFailure(parseIdentityFailure(error));
     // Best-effort fast path; reducer terminal idempotency is the primary guard.
     if (
       isStreamAbortError(error) &&
@@ -422,6 +429,7 @@ export default function App() {
       setStreamErrorMessage(null);
       setRateLimitRetryAfter(null);
       setCancelledMessage(null);
+      setIdentityFailure(undefined);
       setWeatherClarificationMessages(null);
 
       const messageContent: Message['content'] =
@@ -603,6 +611,19 @@ export default function App() {
   return (
     <div className="flex h-screen bg-background text-foreground font-sans antialiased">
       <main className="flex-1 flex flex-col max-w-4xl mx-auto w-full min-h-0">
+        <IdentityLifecyclePanel
+          identityFailure={identityFailure}
+          accountStatus={identityFailure?.code === 'IDENTITY_ACCOUNT_SUSPENDED'
+            ? 'suspended'
+            : identityFailure?.code === 'IDENTITY_DELETION_PENDING'
+              ? 'deletion_pending'
+              : undefined}
+          sessionStatus={identityFailure?.code === 'IDENTITY_SESSION_EXPIRED'
+            ? 'expired'
+            : identityFailure?.code === 'IDENTITY_REVOKED_CREDENTIAL'
+              ? 'revoked'
+              : undefined}
+        />
         <div
           className={`flex-1 min-h-0 ${
             displayMessages.length === 0 ? 'flex' : ''
