@@ -29,6 +29,25 @@ describe("executionContextSchema", () => {
     expect(executionContextSchema.parse(validContext)).toEqual(validContext);
   });
 
+  it("round-trips additive opaque identity fields", () => {
+    const context = {
+      ...validContext,
+      accountId: "account-1",
+      sessionId: "session-1",
+      deviceId: "device-1",
+      principalKind: "authenticated",
+    };
+    expect(executionContextSchema.parse(context)).toEqual(context);
+  });
+
+  it("restores a pre-identity checkpoint with undefined additive fields", () => {
+    const restored = executionContextSchema.parse(validContext);
+    expect(restored.accountId).toBeUndefined();
+    expect(restored.sessionId).toBeUndefined();
+    expect(restored.deviceId).toBeUndefined();
+    expect(restored.principalKind).toBeUndefined();
+  });
+
   it.each(["requestId", "threadId", "runId", "taskId", "principal", "scope"])(
     "rejects a missing mandatory %s",
     (field) => {

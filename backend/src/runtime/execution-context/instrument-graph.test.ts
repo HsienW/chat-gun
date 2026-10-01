@@ -65,6 +65,45 @@ describe("execution context graph entry", () => {
     expect(output).toBe(fixture.legacyConfig);
   });
 
+  it("checks identity status before invoking the graph", async () => {
+    const invoke = vi.fn(async (_input: unknown, config: unknown) => config);
+    const checked: string[] = [];
+    const wrapped = instrumentGraphWithExecutionContext({ invoke },
+      (input, config) => readExecutionContext(input, config, "development"),
+      {
+        identityStatus: {
+          enabled: true,
+          protectedPath: () => true,
+          port: {
+            checkAccount: async (accountId) => { checked.push(accountId); return { status: "active" }; },
+            checkSession: async (sessionId) => { checked.push(sessionId); return { status: "active" }; },
+          },
+        },
+      },
+    );
+    await expect(wrapped.invoke({}, {
+      ...fixture.legacyConfig,
+      configurable: {
+        ...fixture.legacyConfig.configurable,
+        "x-bff-principal-id": "principal-1",
+        "x-bff-principal-type": "user",
+        "x-bff-principal-kind": "authenticated",
+        "x-bff-account-id": "account-1",
+        "x-bff-session-id": "session-1",
+        "x-bff-device-id": "device-1",
+        "x-bff-tenant-id": "tenant-1",
+        "x-bff-roles": "member",
+        "x-bff-scopes": "chat:write",
+        "x-bff-auth-source": "oidc",
+        "x-bff-authenticated-at": "2026-09-30T00:00:00.000Z",
+        "x-bff-scope-id": "tenant-1",
+        "x-bff-scope-type": "tenant",
+      },
+    })).resolves.toBeDefined();
+    expect(checked).toEqual(["account-1", "session-1"]);
+    expect(invoke).toHaveBeenCalledOnce();
+  });
+
   it("discards forged identity and canonical context at the development entry", async () => {
     const wrapped = instrumentGraphWithExecutionContext(graph, readDevelopmentExecutionContext);
     const output = await wrapped.invoke({}, {

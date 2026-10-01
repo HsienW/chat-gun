@@ -21,10 +21,15 @@ const CORRELATION_KEYS = {
 export type ExecutionCorrelation = Partial<Pick<ExecutionContext,
   "requestId" | "threadId" | "runId" | "taskId" | "stepId" |
   "toolCallId" | "toolExecutionId" | "parentRunId" | "agentId"
->>;
+>> & {
+  accountId?: string;
+  tenantId?: string;
+  principalId?: string;
+  sessionId?: string;
+};
 
-export function executionCorrelation(context: ExecutionContext): Pick<ExecutionContext,
-  "requestId" | "threadId" | "runId" | "taskId"
+export function executionCorrelation(context: ExecutionContext): ExecutionCorrelation & Required<
+  Pick<ExecutionContext, "requestId" | "threadId" | "runId" | "taskId">
 > {
   const validated = executionContextSchema.parse(context);
   return {
@@ -32,6 +37,10 @@ export function executionCorrelation(context: ExecutionContext): Pick<ExecutionC
     threadId: validated.threadId,
     runId: validated.runId,
     taskId: validated.taskId,
+    ...(validated.accountId ? { accountId: validated.accountId } : {}),
+    tenantId: validated.principal.tenantId,
+    principalId: validated.principal.principalId,
+    ...(validated.sessionId ? { sessionId: validated.sessionId } : {}),
   };
 }
 
@@ -89,6 +98,10 @@ export function readExecutionCorrelation(config: unknown): ExecutionCorrelation 
       ...(context.toolExecutionId ? { toolExecutionId: context.toolExecutionId } : {}),
       ...(context.parentRunId ? { parentRunId: context.parentRunId } : {}),
       ...(context.agentId ? { agentId: context.agentId } : {}),
+      ...(context.accountId ? { accountId: context.accountId } : {}),
+      tenantId: context.principal.tenantId,
+      principalId: context.principal.principalId,
+      ...(context.sessionId ? { sessionId: context.sessionId } : {}),
     };
   }
   const records = [runnableConfig, configurable];
@@ -131,7 +144,14 @@ function readAttempt(records: readonly Record<string, unknown>[]): number {
 function readTrustedIdentity(
   configurable: Record<string, unknown>,
   environment: ExecutionEnvironment
-): { principal?: PrincipalContext; scope?: RuntimeScope } {
+): {
+  principal?: PrincipalContext;
+  scope?: RuntimeScope;
+  accountId?: string;
+  sessionId?: string;
+  deviceId?: string;
+  principalKind?: PrincipalContext["principalKind"];
+} {
   const trustedHeaders: Record<string, string> = {};
   for (const [key, value] of Object.entries(configurable)) {
     if (key.startsWith("x-bff-") && typeof value === "string") {
@@ -155,6 +175,10 @@ function readTrustedIdentity(
     }
     return {
       principal: principalResult.principal,
+      ...(principalResult.principal.accountId ? { accountId: principalResult.principal.accountId } : {}),
+      ...(principalResult.principal.sessionId ? { sessionId: principalResult.principal.sessionId } : {}),
+      ...(principalResult.principal.deviceId ? { deviceId: principalResult.principal.deviceId } : {}),
+      principalKind: principalResult.principal.principalKind,
       scope: {
         scopeId,
         scopeType: parsedScopeType,
@@ -171,6 +195,7 @@ function readTrustedIdentity(
   const principal: PrincipalContext = {
     principalId: "anonymous",
     principalType: "user",
+    principalKind: "anonymous",
     tenantId: "public",
     roles: [],
     scopes: [],

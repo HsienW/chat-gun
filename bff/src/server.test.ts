@@ -9,6 +9,10 @@ import { createServer } from "./server.js";
 import type { ServerDependencies } from "./server.js";
 import type { BffConfig } from "./config.js";
 import type { RedisEvalClient } from "./redis-rate-limit.js";
+import {
+  AnonymousMigrationService,
+  createInMemoryAnonymousMigrationStore,
+} from "./anonymous-migration.js";
 
 const sharedAuthorizationFixture = JSON.parse(
   readFileSync(
@@ -146,6 +150,10 @@ describe("BFF metrics proxy", () => {
               {
                 principalId: "metrics-service",
                 principalType: "service",
+                principalKind: "service",
+                accountId: "trusted-account",
+                sessionId: "trusted-session",
+                deviceId: "trusted-device",
                 tenantId: "tenant-metrics",
                 roles: ["metrics-reader"],
                 scopes: ["metrics:read"],
@@ -394,6 +402,10 @@ describe("BFF LangGraph stream proxy", () => {
               {
                 principalId: "trusted-principal",
                 principalType: "service",
+                principalKind: "service",
+                accountId: "trusted-account",
+                sessionId: "trusted-session",
+                deviceId: "trusted-device",
                 tenantId: "trusted-tenant",
                 roles: ["operator", "auditor"],
                 scopes: ["runs:read", "runs:write"],
@@ -410,6 +422,10 @@ describe("BFF LangGraph stream proxy", () => {
               "x-api-key": "bff-key",
               "x-user-id": "attacker",
               "x-tenant-id": "attacker-tenant",
+              "x-bff-account-id": "attacker-account",
+              "x-bff-session-id": "attacker-session",
+              "x-bff-device-id": "attacker-device",
+              "x-bff-principal-kind": "operator",
             },
           });
           assert.equal(response.status, 200);
@@ -421,6 +437,10 @@ describe("BFF LangGraph stream proxy", () => {
     assert.equal(upstreamHeaders["x-tenant-id"], undefined);
     assert.equal(upstreamHeaders["x-bff-principal-id"], "trusted-principal");
     assert.equal(upstreamHeaders["x-bff-principal-type"], "service");
+    assert.equal(upstreamHeaders["x-bff-principal-kind"], "service");
+    assert.equal(upstreamHeaders["x-bff-account-id"], "trusted-account");
+    assert.equal(upstreamHeaders["x-bff-session-id"], "trusted-session");
+    assert.equal(upstreamHeaders["x-bff-device-id"], "trusted-device");
     assert.equal(upstreamHeaders["x-bff-tenant-id"], "trusted-tenant");
     assert.equal(upstreamHeaders["x-bff-roles"], "operator,auditor");
     assert.equal(upstreamHeaders["x-bff-scopes"], "runs:read,runs:write");
@@ -977,6 +997,68 @@ describe("BFF LangGraph stream proxy", () => {
         });
       }
     );
+  });
+});
+
+describe("anonymous identity migration", () => {
+  it("requires both authenticated product identity and anonymous credential", async () => {
+    const service = new AnonymousMigrationService(
+      createInMemoryAnonymousMigrationStore(),
+      { verify: async ({ credential }) => credential === "anonymous-secret" },
+    );
+    const principalResolver: NonNullable<ServerDependencies["principalResolver"]> = {
+      resolve: () => ({
+        ok: true,
+        principal: {
+          principalId: "principal_01",
+          principalType: "user",
+          principalKind: "authenticated",
+          tenantId: "tenant_01",
+          accountId: "account_01",
+          sessionId: "session_account_01",
+          deviceId: "device_account_01",
+          roles: [],
+          scopes: [],
+          authSource: "oidc",
+          authenticatedAt: "2026-09-30T00:00:00.000Z",
+        },
+        activeScope: { scopeId: "tenant_01", scopeType: "tenant" },
+      }),
+    };
+    await withServer((_req, res) => res.end("unused"), async (upstream) => {
+      await withBff(createTestConfig(upstream.url), async (bff) => {
+        const response = await fetch(`${bff.url}/api/identity/anonymous-migrate`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-idempotency-key": "migration_01" },
+          body: JSON.stringify({
+            schemaVersion: "1.0.0",
+            anonymousId: "anonymous_01",
+            anonymousSessionId: "session_anonymous_01",
+            anonymousDeviceId: "device_anonymous_01",
+            anonymousCredential: "anonymous-secret",
+            idempotencyKey: "migration_01",
+          }),
+        });
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { schemaVersion: "1.0.0", result: "migrated" });
+      }, { principalResolver, anonymousMigrationService: service });
+    });
+  });
+
+  it("uses the existing rate-limit path", async () => {
+    const service = new AnonymousMigrationService(
+      createInMemoryAnonymousMigrationStore(),
+      { verify: async () => true },
+    );
+    await withServer((_req, res) => res.end("unused"), async (upstream) => {
+      const config = createTestConfig(upstream.url, { rateLimitMaxRequests: 1 });
+      await withBff(config, async (bff) => {
+        const first = await fetch(`${bff.url}/api/identity/anonymous-migrate`, { method: "GET" });
+        const second = await fetch(`${bff.url}/api/identity/anonymous-migrate`, { method: "GET" });
+        assert.equal(first.status, 405);
+        assert.equal(second.status, 429);
+      }, { anonymousMigrationService: service });
+    });
   });
 });
 

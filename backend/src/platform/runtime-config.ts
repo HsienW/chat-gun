@@ -156,6 +156,7 @@ export type AgentRuntimeConfig = {
   locale: AgentLocale;
   timeZone: string;
   runtimeEventEnvelopeEnabled: boolean;
+  identityStatusEnforcementEnabled: boolean;
   runtimeBoundaryFlags: RuntimeBoundaryFlags;
   contextBudgetTotal: number;
   contextOutputReserveTokens: number;
@@ -353,6 +354,10 @@ export function getAgentRuntimeConfig(): AgentRuntimeConfig {
     runtimeEventEnvelopeEnabled: readStrictBoolean(
       "RUNTIME_EVENT_ENVELOPE_ENABLED",
       true
+    ),
+    identityStatusEnforcementEnabled: readStrictBoolean(
+      "IDENTITY_STATUS_ENFORCEMENT_ENABLED",
+      false
     ),
     runtimeBoundaryFlags: readRuntimeBoundaryFlags(),
     contextBudgetTotal: readPositiveInt(

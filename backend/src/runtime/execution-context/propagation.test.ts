@@ -14,12 +14,26 @@ const fixture = JSON.parse(readFileSync(
   new URL("../../../../contracts/execution-context.fixture.json", import.meta.url),
   "utf8"
 )) as { validContext: unknown };
-const context = executionContextSchema.parse(fixture.validContext);
+const context = executionContextSchema.parse({
+  ...(fixture.validContext as Record<string, unknown>),
+  accountId: "account-1",
+  sessionId: "session-1",
+  deviceId: "device-1",
+  principalKind: "authenticated",
+  principal: {
+    ...((fixture.validContext as { principal: Record<string, unknown> }).principal),
+    principalKind: "authenticated",
+  },
+});
 const correlation = {
   requestId: context.requestId,
   threadId: context.threadId,
   runId: context.runId,
   taskId: context.taskId,
+  accountId: "account-1",
+  tenantId: context.principal.tenantId,
+  principalId: context.principal.principalId,
+  sessionId: "session-1",
 };
 
 describe("canonical context propagation", () => {
@@ -61,7 +75,7 @@ describe("canonical context propagation", () => {
       reconciliationResult: null,
     });
     expect(interaction.payload.correlation).toEqual(correlation);
-    expect(JSON.stringify(interaction)).not.toContain(context.principal.principalId);
+    expect(JSON.stringify(interaction)).not.toContain("raw-credential");
   });
 
   it("adds canonical correlation to runtime and error envelopes", () => {
@@ -73,7 +87,7 @@ describe("canonical context propagation", () => {
       executionContext: context,
     });
     expect(parseErrorEnvelope(JSON.stringify(envelope))).toMatchObject({ correlation });
-    expect(JSON.stringify(envelope)).not.toContain(context.principal.principalId);
+    expect(JSON.stringify(envelope)).not.toContain("provider_claim");
   });
 
   it("adds one canonical correlation to task, step, and tool metrics", () => {

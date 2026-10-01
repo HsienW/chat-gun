@@ -3,14 +3,14 @@
     "name": "qwen3.7-plus"
   },
   "tools": {
-    "approvalMode": "auto-edit"
+    "approvalMode": "plan"
   },
   "permissions": {
     "deny": [
       "WebFetch"
     ],
     "allow": [
-      "Agent(general-purpose)",
+      "Agent(secondary-architecture-reviewer)",
       "Write",
       "Edit",
       "Bash"

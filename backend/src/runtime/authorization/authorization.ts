@@ -119,6 +119,7 @@ function isSameResource(left: ResourceRef, right: ResourceRef): boolean {
     left.resourceType === right.resourceType &&
     left.resourceId === right.resourceId &&
     left.tenantId === right.tenantId &&
+    left.accountId === right.accountId &&
     left.ownerScopeId === right.ownerScopeId
   );
 }
@@ -160,6 +161,8 @@ function boundaryDenialReason(
   scopeAccess: ScopeAccess
 ): AuthorizationReasonCode | null {
   if (
+    (request.resource.accountId !== undefined &&
+      request.principal.accountId !== request.resource.accountId) ||
     request.principal.tenantId !== request.resource.tenantId ||
     request.scope.tenantId !== request.resource.tenantId
   ) {

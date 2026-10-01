@@ -16,6 +16,7 @@ const baseRequest: AuthorizationRequest = {
   principal: {
     principalId: "principal-1",
     principalType: "user",
+    accountId: "account-1",
     tenantId: "tenant-1",
     roles: ["editor"],
     scopes: ["task:write"],
@@ -32,6 +33,7 @@ const baseRequest: AuthorizationRequest = {
     resourceType: "task",
     resourceId: "task-1",
     tenantId: "tenant-1",
+    accountId: "account-1",
     ownerScopeId: "scope-1",
   },
 };
@@ -95,6 +97,19 @@ describe("AuthorizationEngine", () => {
         principal: { ...baseRequest.principal, tenantId: "tenant-2" },
       })
     ).resolves.toMatchObject({
+      effect: "deny",
+      reasonCode: "CROSS_TENANT_DENIED",
+    });
+    expect(findMatching).not.toHaveBeenCalled();
+  });
+
+  it("denies a cross-account principal before grant lookup", async () => {
+    const findMatching = vi.fn<GrantStore["findMatching"]>(async () => null);
+    const engine = createEngine({ grantStore: createGrantStore(findMatching) });
+    await expect(engine.authorize({
+      ...baseRequest,
+      resource: { ...baseRequest.resource, accountId: "account-2" },
+    })).resolves.toMatchObject({
       effect: "deny",
       reasonCode: "CROSS_TENANT_DENIED",
     });
