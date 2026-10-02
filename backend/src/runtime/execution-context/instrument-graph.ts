@@ -4,6 +4,10 @@ import {
   enforceRuntimeIdentityStatus,
   type RuntimeIdentityStatusPort,
 } from "../authorization/identity-status.js";
+import {
+  recordExecutionContextCorrelations,
+  type SubjectCorrelationIndexPort,
+} from "../data-governance/subject-correlation-index.js";
 
 type ContextResolver = (input: unknown, config: unknown) => ExecutionContext | undefined;
 
@@ -52,21 +56,27 @@ export type IdentityStatusInstrumentation = {
 
 export type ExecutionContextInstrumentationOptions = {
   identityStatus?: IdentityStatusInstrumentation;
+  subjectCorrelationIndex?: SubjectCorrelationIndexPort;
 };
 
 async function prepareConfigWithIdentityStatus(
   input: unknown,
   config: unknown,
   resolveContext: ContextResolver,
-  identityStatus: IdentityStatusInstrumentation | undefined,
+  options: ExecutionContextInstrumentationOptions,
 ): Promise<unknown> {
   const { prepared, context } = prepareConfig(input, config, resolveContext);
-  if (!identityStatus || !context) return prepared;
-  await enforceRuntimeIdentityStatus(context, {
-    enabled: identityStatus.enabled,
-    protectedPath: identityStatus.protectedPath(input, config),
-    port: identityStatus.port,
-  });
+  if (!context) return prepared;
+  if (options.identityStatus) {
+    await enforceRuntimeIdentityStatus(context, {
+      enabled: options.identityStatus.enabled,
+      protectedPath: options.identityStatus.protectedPath(input, config),
+      port: options.identityStatus.port,
+    });
+  }
+  if (options.subjectCorrelationIndex) {
+    await recordExecutionContextCorrelations(options.subjectCorrelationIndex, context);
+  }
   return prepared;
 }
 
@@ -85,7 +95,7 @@ export function instrumentGraphWithExecutionContext<TGraph extends object>(
             input,
             config,
             resolveContext,
-            options.identityStatus,
+            options,
           );
           return Reflect.apply(member, target, [input, prepared]);
         };
@@ -97,7 +107,7 @@ export function instrumentGraphWithExecutionContext<TGraph extends object>(
               input,
               config,
               resolveContext,
-              options.identityStatus,
+              options,
             );
             const stream: unknown = await Reflect.apply(member, target, [input, prepared]);
             if (!isAsyncIterable(stream)) {
