@@ -44,6 +44,13 @@ import {
   parseAnonymousMigrationRequest,
   type AnonymousMigrationService,
 } from "./anonymous-migration.js";
+import {
+  executeSubjectRightRoute,
+  HttpSubjectRightsBackendClient,
+  executeIdentityGovernedStoreRoute,
+  type IdentityGovernedStoreAdapter,
+  type SubjectRightsBackendPort,
+} from "./subject-rights.js";
 
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -137,6 +144,8 @@ export type ServerDependencies = {
   operationsMetricsAuthorizer?: OperationsMetricsAuthorizer;
   operationsIncidentAuthorizer?: OperationsIncidentAuthorizer;
   anonymousMigrationService?: AnonymousMigrationService;
+  subjectRightsBackend?: SubjectRightsBackendPort;
+  identityGovernedStore?: IdentityGovernedStoreAdapter;
 };
 
 type RateLimitDecision = {
@@ -434,6 +443,55 @@ async function handleAnonymousMigration(
       error: { code: "IDENTITY_MIGRATION_UNAVAILABLE", message: "Identity migration is unavailable" },
     }, ctx.requestId);
   }
+}
+
+async function handleSubjectRights(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+  ctx: RequestContext,
+  config: BffConfig,
+  principalResolution: PrincipalResolution,
+  backend: SubjectRightsBackendPort | undefined,
+): Promise<void> {
+  if (!principalResolution.ok) {
+    sendJson(res, principalResolution.status, {
+      error: principalResolution.code
+        ? { code: principalResolution.code, message: principalResolution.message }
+        : principalResolution.message,
+    }, ctx.requestId);
+    return;
+  }
+  if (!backend) {
+    sendJson(res, 503, {
+      error: {
+        code: "STORE_UNAVAILABLE",
+        message: "Subject-right service is temporarily unavailable",
+      },
+    }, ctx.requestId);
+    return;
+  }
+  let body: unknown;
+  try {
+    const raw = await readRequestBody(req, config.maxBodyBytes, ctx);
+    body = raw && raw.byteLength > 0 ? JSON.parse(raw.toString("utf8")) : undefined;
+  } catch {
+    sendJson(res, 400, {
+      error: {
+        code: "INVALID_SUBJECT_RIGHT_REQUEST",
+        message: "Subject-right request is invalid",
+      },
+    }, ctx.requestId);
+    return;
+  }
+  const result = await executeSubjectRightRoute({
+    method: req.method ?? "GET",
+    pathname,
+    body,
+    principal: principalResolution.principal,
+    backend,
+  });
+  sendJson(res, result.status, result.body, ctx.requestId);
 }
 
 type InputKindValidation =
@@ -1305,6 +1363,14 @@ export function createServer(
     dependencies.operationsMetricsAuthorizer ?? defaultOperationsMetricsAuthorizer;
   const operationsIncidentAuthorizer =
     dependencies.operationsIncidentAuthorizer ?? defaultOperationsIncidentAuthorizer;
+  const subjectRightsBackend = dependencies.subjectRightsBackend ??
+    (config.subjectRightsBackendUrl && config.subjectRightsBackendToken
+      ? new HttpSubjectRightsBackendClient({
+          baseUrl: config.subjectRightsBackendUrl,
+          serviceToken: config.subjectRightsBackendToken,
+          timeoutMs: config.upstreamTimeoutMs,
+        })
+      : undefined);
 
   const server = http.createServer(async (req, res) => {
     const reqUrl = new URL(req.url ?? "/", `http://${getHeader(req, "host") ?? "localhost"}`);
@@ -1413,6 +1479,48 @@ export function createServer(
         config,
         principalResolution,
         dependencies.anonymousMigrationService,
+      );
+      return;
+    }
+
+    if (reqUrl.pathname === "/internal/governed-store/identity") {
+      let body: unknown;
+      try {
+        const raw = await readRequestBody(req, config.maxBodyBytes, ctx);
+        body = raw && raw.byteLength > 0 ? JSON.parse(raw.toString("utf8")) : undefined;
+      } catch {
+        body = undefined;
+      }
+      if (!dependencies.identityGovernedStore || !config.identityGovernanceServiceToken) {
+        sendJson(res, 503, {
+          error: { code: "STORE_UNAVAILABLE", message: "Identity governance store is unavailable" },
+        }, ctx.requestId);
+        return;
+      }
+      const result = await executeIdentityGovernedStoreRoute({
+        serviceToken: getHeader(req, "x-internal-service-token"),
+        expectedServiceToken: config.identityGovernanceServiceToken,
+        body,
+        adapter: dependencies.identityGovernedStore,
+      });
+      sendJson(res, result.status, result.body, ctx.requestId);
+      return;
+    }
+
+    if (
+      reqUrl.pathname === "/api/subject-rights/export" ||
+      reqUrl.pathname === "/api/subject-rights/deletion" ||
+      reqUrl.pathname === "/api/subject-rights/consent" ||
+      /^\/api\/subject-rights\/[^/]+$/u.test(reqUrl.pathname)
+    ) {
+      await handleSubjectRights(
+        req,
+        res,
+        reqUrl.pathname,
+        ctx,
+        config,
+        principalResolution,
+        subjectRightsBackend,
       );
       return;
     }

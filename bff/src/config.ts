@@ -210,6 +210,9 @@ export type BffConfig = {
   imageUploadAllowedExtensions: Set<string>;
   imageUploadAllowedMimeTypes: Set<string>;
   imageUploadS3BucketUrl: string;
+  subjectRightsBackendUrl?: URL;
+  subjectRightsBackendToken?: string;
+  identityGovernanceServiceToken?: string;
 };
 
 export function loadConfig(): BffConfig {
@@ -288,5 +291,12 @@ export function loadConfig(): BffConfig {
         : ["image/png", "image/jpeg", "image/webp"]
     ),
     imageUploadS3BucketUrl: process.env.BFF_IMAGE_UPLOAD_S3_BUCKET_URL ?? "",
+    subjectRightsBackendUrl: readOptionalString("BFF_SUBJECT_RIGHTS_BACKEND_URL")
+      ? new URL(readOptionalString("BFF_SUBJECT_RIGHTS_BACKEND_URL")!)
+      : undefined,
+    subjectRightsBackendToken: readOptionalString("BFF_SUBJECT_RIGHTS_BACKEND_TOKEN"),
+    identityGovernanceServiceToken: readOptionalString(
+      "BFF_IDENTITY_GOVERNANCE_SERVICE_TOKEN"
+    ),
   };
 }
