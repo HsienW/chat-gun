@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, useReducer } from 'r
 import { WelcomeScreen } from '@/components/WelcomeScreen';
 import { ChatMessagesView } from '@/components/ChatMessagesView';
 import { IdentityLifecyclePanel } from '@/components/IdentityLifecyclePanel';
+import { SubjectRightsPanel } from '@/components/SubjectRightsPanel';
 import {
   extractAgentRuntimeEvents,
   extractClarificationInterruptId,
@@ -624,6 +625,7 @@ export default function App() {
               ? 'revoked'
               : undefined}
         />
+        <SubjectRightsPanel />
         <div
           className={`flex-1 min-h-0 ${
             displayMessages.length === 0 ? 'flex' : ''
