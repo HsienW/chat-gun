@@ -193,7 +193,7 @@ export function renderOperationsMetrics(
     ...metric(
       "chat_gun_operations_signal_available",
       "Whether all configured operations health signals are available.",
-      health.signalStatus === "available" ? 1 : 0
+      health.reachable.status === "ready" && health.missingSignals.length === 0 ? 1 : 0
     ),
     ...RUN_OUTCOME_METRIC_CLASSES.flatMap((outcomeClass) =>
       metric(

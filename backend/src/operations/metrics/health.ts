@@ -15,7 +15,13 @@ export interface RuntimeRunSignal {
 }
 
 export interface RuntimeHealthProjection {
-  signalStatus: "available" | "degraded";
+  alive: HealthLayer;
+  reachable: HealthLayer;
+  acceptNewWork: HealthLayer;
+  resumeDurableWork: HealthLayer;
+  degraded: { status: "normal" | "read_only"; reasonCodes: string[] };
+  deploymentPolicySource: "default" | "environment";
+  multiInstanceSafe: boolean;
   queueDepth?: number;
   activeRunCount?: number;
   stuckRunCount?: number;
@@ -23,6 +29,11 @@ export interface RuntimeHealthProjection {
   heartbeatFreshnessMs?: number;
   isHeartbeatStale?: boolean;
   missingSignals: string[];
+}
+
+export interface HealthLayer {
+  status: "ready" | "not_ready";
+  reasonCodes: string[];
 }
 
 export interface RuntimeHealthProjectionInput {
@@ -33,6 +44,16 @@ export interface RuntimeHealthProjectionInput {
   latestOwnershipUpdateAt?: string;
   stuckRunAfterMs: number;
   heartbeatStaleAfterMs: number;
+  processAlive?: boolean;
+  redisReachable?: boolean;
+  postgresReachable?: boolean;
+  checkpointReachable?: boolean;
+  recoveryReachable?: boolean;
+  acceptsNewWork?: boolean;
+  isDraining?: boolean;
+  readOnlyDegraded?: boolean;
+  deploymentPolicySource?: "default" | "environment";
+  multiInstanceSafe?: boolean;
 }
 
 function elapsedMs(observedAt: string, updatedAt: string): number | undefined {
@@ -49,8 +70,42 @@ export function projectRuntimeHealth(
 ): RuntimeHealthProjection {
   const missingSignals: string[] = [];
   const projection: RuntimeHealthProjection = {
-    signalStatus: "available",
+    alive: {
+      status: input.processAlive === false ? "not_ready" : "ready",
+      reasonCodes: input.processAlive === false ? ["process_unavailable"] : [],
+    },
+    reachable: { status: "not_ready", reasonCodes: [] },
+    acceptNewWork: { status: "not_ready", reasonCodes: [] },
+    resumeDurableWork: { status: "not_ready", reasonCodes: [] },
+    degraded: {
+      status: input.readOnlyDegraded ? "read_only" : "normal",
+      reasonCodes: input.readOnlyDegraded ? ["write_dependency_degraded"] : [],
+    },
+    deploymentPolicySource: input.deploymentPolicySource ?? "default",
+    multiInstanceSafe: input.multiInstanceSafe ?? false,
     missingSignals,
+  };
+
+  const dependencyReasons: string[] = [];
+  if (input.redisReachable !== true) dependencyReasons.push("redis_unreachable");
+  if (input.postgresReachable !== true) dependencyReasons.push("postgres_unreachable");
+  if (input.checkpointReachable !== true) dependencyReasons.push("checkpoint_unreachable");
+  projection.reachable = {
+    status: dependencyReasons.length === 0 ? "ready" : "not_ready",
+    reasonCodes: dependencyReasons,
+  };
+  const acceptReasons = [...dependencyReasons];
+  if (input.acceptsNewWork !== true) acceptReasons.push("new_work_disabled");
+  if (input.isDraining) acceptReasons.push("draining");
+  projection.acceptNewWork = {
+    status: acceptReasons.length === 0 ? "ready" : "not_ready",
+    reasonCodes: acceptReasons,
+  };
+  const resumeReasons = dependencyReasons.filter((reason) => reason !== "redis_unreachable");
+  if (input.recoveryReachable !== true) resumeReasons.push("recovery_unreachable");
+  projection.resumeDurableWork = {
+    status: resumeReasons.length === 0 ? "ready" : "not_ready",
+    reasonCodes: resumeReasons,
   };
 
   if (input.runs === undefined) {
@@ -87,6 +142,5 @@ export function projectRuntimeHealth(
     projection.isHeartbeatStale = freshness >= input.heartbeatStaleAfterMs;
   }
 
-  projection.signalStatus = missingSignals.length === 0 ? "available" : "degraded";
   return projection;
 }

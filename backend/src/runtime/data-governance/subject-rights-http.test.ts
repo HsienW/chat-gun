@@ -6,8 +6,10 @@ import { SubjectRightsDeniedError } from "./deletion-coordinator.js";
 import { SubjectRightWorkflowError } from "./subject-right-workflow.js";
 import {
   configureSubjectRightsHttp,
+  createOperationsHttpApp,
   operationsHttpApp,
 } from "../../operations/http-app.js";
+import { projectRuntimeHealth } from "../../operations/metrics/health.js";
 
 const token = "internal-token-at-least-sixteen";
 const workflow: SubjectRightWorkflow = {
@@ -192,5 +194,39 @@ describe("subject-right internal HTTP boundary", () => {
     } finally {
       configureSubjectRightsHttp(undefined);
     }
+  });
+
+  it("mounts subject rights alongside injected health probes", async () => {
+    const { workflows, consent } = fixture();
+    const app = createOperationsHttpApp({
+      healthProbe: () =>
+        projectRuntimeHealth({
+          observedAt: "2026-10-03T00:00:00.000Z",
+          stuckRunAfterMs: 1_000,
+          heartbeatStaleAfterMs: 1_000,
+          processAlive: true,
+        }),
+      subjectRightsProvider: () => ({ serviceToken: token, workflows, consent }),
+    });
+
+    const healthResponse = await app.request("/health/live");
+    const exportResponse = await app.request(
+      "/internal/subject-rights/export",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-internal-service-token": token,
+        },
+        body: JSON.stringify({
+          workflowId: "workflow_01",
+          subject: workflow.subject,
+          deadline: workflow.deadline,
+        }),
+      },
+    );
+
+    expect(healthResponse.status).toBe(200);
+    expect(exportResponse.status).toBe(202);
   });
 });

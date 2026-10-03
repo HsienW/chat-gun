@@ -8,6 +8,8 @@ import type {
   WorkerRecoveryClassification,
   WorkerRecoveryDecision,
 } from "../types.js";
+import type { SingletonLease } from "../../runtime/lock/singleton-lease.js";
+import type { Queryable } from "../../runtime/persistence/rows.js";
 
 const timestampSchema = z.string().datetime({ offset: true });
 const ownershipSchema = z
@@ -79,6 +81,50 @@ export interface StuckRunFinding {
   classification: WorkerRecoveryClassification;
   decision: WorkerRecoveryDecision | null;
   observedAt: string;
+  ownershipGeneration: number | null;
+  isSuperseded: boolean;
+}
+
+export interface RecoveryOwnershipPort {
+  takeover(input: {
+    runId: string;
+    expectedGeneration: number | null;
+    nextGeneration: number;
+    decision: WorkerRecoveryDecision;
+    observedAt: string;
+  }): Promise<boolean>;
+}
+
+export class PgRecoveryOwnershipPort implements RecoveryOwnershipPort {
+  constructor(private readonly database: Queryable) {}
+
+  async takeover(input: {
+    runId: string;
+    expectedGeneration: number | null;
+    nextGeneration: number;
+    decision: WorkerRecoveryDecision;
+    observedAt: string;
+  }): Promise<boolean> {
+    if (input.expectedGeneration === null) return false;
+    const result = await this.database.query<{ run_id: string }>(
+      `UPDATE active_run_ownership
+       SET generation = $3, updated_at = $4
+       WHERE run_id = $1
+         AND generation = $2
+         AND status = 'active'
+         AND superseded_by_run_id IS NULL
+       RETURNING run_id`,
+      [input.runId, input.expectedGeneration, input.nextGeneration, input.observedAt]
+    );
+    return result.rows.length === 1;
+  }
+}
+
+export interface TakeoverResult {
+  runId: string;
+  status: "taken_over" | "rejected" | "skipped";
+  generation?: number;
+  decision?: WorkerRecoveryDecision;
 }
 
 function isExpired(
@@ -165,7 +211,62 @@ export function evaluateStuckRuns(inputValue: unknown): StuckRunFinding[] {
         classification: mapping.classification,
         decision: mapping.decision,
         observedAt: input.observedAt,
+        ownershipGeneration: run.ownership?.generation ?? null,
+        isSuperseded:
+          run.ownership?.status === "superseded" ||
+          run.ownership?.supersededByRunId !== undefined,
       },
     ];
   });
+}
+
+export async function executeStuckRunTakeovers(
+  findings: readonly StuckRunFinding[],
+  ownership: RecoveryOwnershipPort
+): Promise<TakeoverResult[]> {
+  const outcomes: TakeoverResult[] = [];
+  for (const finding of findings) {
+    if (finding.isSuperseded || finding.decision === null) {
+      outcomes.push({ runId: finding.runId, status: "skipped" });
+      continue;
+    }
+    const nextGeneration = (finding.ownershipGeneration ?? 0) + 1;
+    const acquired = await ownership.takeover({
+      runId: finding.runId,
+      expectedGeneration: finding.ownershipGeneration,
+      nextGeneration,
+      decision: finding.decision,
+      observedAt: finding.observedAt,
+    });
+    outcomes.push({
+      runId: finding.runId,
+      status: acquired ? "taken_over" : "rejected",
+      generation: nextGeneration,
+      decision: finding.decision,
+    });
+  }
+  return outcomes;
+}
+
+export async function runReaperCycle(input: {
+  lease: SingletonLease;
+  owner: string;
+  ttlMs: number;
+  findings: readonly StuckRunFinding[];
+  ownership: RecoveryOwnershipPort;
+}): Promise<{ leader: boolean; outcomes: TakeoverResult[] }> {
+  const grant = await input.lease.acquire("reaper", input.owner, input.ttlMs);
+  if (!grant) return { leader: false, outcomes: [] };
+  const outcomes: TakeoverResult[] = [];
+  for (const finding of input.findings) {
+    if (!(await input.lease.renew(grant, input.ttlMs))) {
+      return { leader: false, outcomes };
+    }
+    await input.lease.assertCurrent(grant);
+    outcomes.push(...(await executeStuckRunTakeovers([finding], input.ownership)));
+  }
+  return {
+    leader: true,
+    outcomes,
+  };
 }

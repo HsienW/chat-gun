@@ -4,7 +4,8 @@ import {
   createMetricsCollector,
   setMetricsCollector,
 } from "../platform/metrics/metrics-collector.js";
-import { operationsHttpApp } from "./http-app.js";
+import { createOperationsHttpApp, operationsHttpApp } from "./http-app.js";
+import { projectRuntimeHealth } from "./metrics/health.js";
 import { getIncidentProjectionIndex } from "./incident-query.js";
 
 describe("operations HTTP app", () => {
@@ -25,6 +26,39 @@ describe("operations HTTP app", () => {
     expect(await response.text()).toMatch(/# EOF\n$/);
 
     expect((await operationsHttpApp.request("/operations/metrics", { method: "POST" })).status).toBe(405);
+  });
+
+  it("renders OpenMetrics from the injected health probe", async () => {
+    const app = createOperationsHttpApp({
+      healthProbe: () =>
+        projectRuntimeHealth({
+          observedAt: "2026-10-02T00:00:00.000Z",
+          runs: [
+            {
+              status: "pending",
+              updatedAt: "2026-10-02T00:00:00.000Z",
+            },
+          ],
+          activeWorkerCount: 0,
+          workerCapacity: 1,
+          latestOwnershipUpdateAt: "2026-10-02T00:00:00.000Z",
+          stuckRunAfterMs: 1_000,
+          heartbeatStaleAfterMs: 1_000,
+          processAlive: true,
+          redisReachable: true,
+          postgresReachable: true,
+          checkpointReachable: true,
+          recoveryReachable: true,
+          acceptsNewWork: true,
+        }),
+    });
+
+    const response = await app.request("/operations/metrics");
+    const exposition = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(exposition).toContain("chat_gun_operations_signal_available 1");
+    expect(exposition).toContain("chat_gun_queue_depth 1");
   });
 
   it("returns a structured incident projection separately from metrics", async () => {
@@ -62,5 +96,25 @@ describe("operations HTTP app", () => {
         })
       ).status
     ).toBe(405);
+  });
+
+  it("fails readiness closed while keeping liveness independent", async () => {
+    const app = createOperationsHttpApp({
+      healthProbe: () =>
+        projectRuntimeHealth({
+          observedAt: "2026-10-02T00:00:00.000Z",
+          stuckRunAfterMs: 1_000,
+          heartbeatStaleAfterMs: 1_000,
+          processAlive: true,
+          postgresReachable: false,
+          checkpointReachable: false,
+          recoveryReachable: false,
+          acceptsNewWork: false,
+        }),
+    });
+    expect((await app.request("/health/live")).status).toBe(200);
+    expect((await app.request("/health/readiness")).status).toBe(503);
+    expect((await app.request("/health/resume-ready")).status).toBe(503);
+    expect((await app.request("/health/degraded")).status).toBe(200);
   });
 });

@@ -7,6 +7,11 @@ export const FAULT_INJECTION_CATEGORIES = [
   "recovery",
   "context_overflow",
   "event_terminal_monotonicity",
+  "step_boundary_crash",
+  "approval_wait_crash",
+  "streaming_crash",
+  "post_effect_pre_ack_crash",
+  "fenced_worker_takeover",
 ] as const;
 
 export type FaultInjectionCategory =
@@ -59,6 +64,32 @@ export interface FaultInjectionEvaluationResult {
   passed: boolean;
   failedCaseIds: string[];
   reasonCode?: "FAULT_INJECTION_NEGATIVE_CHECK_FAILED";
+}
+
+export type CrashRecoveryAction =
+  | "resume"
+  | "requeue"
+  | "reconciliation"
+  | "reject_stale_owner";
+
+export function classifyCrashRecovery(input: {
+  category: Extract<FaultInjectionCategory,
+    | "step_boundary_crash"
+    | "approval_wait_crash"
+    | "streaming_crash"
+    | "post_effect_pre_ack_crash"
+    | "fenced_worker_takeover">;
+  isEffectAcknowledged: boolean;
+  isCurrentFencingToken: boolean;
+}): CrashRecoveryAction {
+  if (!input.isCurrentFencingToken) return "reject_stale_owner";
+  if (input.category === "post_effect_pre_ack_crash" && !input.isEffectAcknowledged) {
+    return "reconciliation";
+  }
+  if (input.category === "approval_wait_crash" || input.category === "streaming_crash") {
+    return "resume";
+  }
+  return "requeue";
 }
 
 export async function evaluateFaultInjectionDataset(

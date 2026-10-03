@@ -16,9 +16,22 @@ describe("projectRuntimeHealth", () => {
         latestOwnershipUpdateAt: "2026-09-14T00:00:08.000Z",
         stuckRunAfterMs: 5_000,
         heartbeatStaleAfterMs: 5_000,
+        redisReachable: true,
+        postgresReachable: true,
+        checkpointReachable: true,
+        recoveryReachable: true,
+        acceptsNewWork: true,
+        multiInstanceSafe: true,
+        deploymentPolicySource: "environment",
       })
     ).toEqual({
-      signalStatus: "available",
+      alive: { status: "ready", reasonCodes: [] },
+      reachable: { status: "ready", reasonCodes: [] },
+      acceptNewWork: { status: "ready", reasonCodes: [] },
+      resumeDurableWork: { status: "ready", reasonCodes: [] },
+      degraded: { status: "normal", reasonCodes: [] },
+      deploymentPolicySource: "environment",
+      multiInstanceSafe: true,
       queueDepth: 1,
       activeRunCount: 1,
       stuckRunCount: 1,
@@ -36,7 +49,9 @@ describe("projectRuntimeHealth", () => {
       heartbeatStaleAfterMs: 5_000,
     });
 
-    expect(projection.signalStatus).toBe("degraded");
+    expect(projection.reachable.status).toBe("not_ready");
+    expect(projection.acceptNewWork.status).toBe("not_ready");
+    expect(projection.resumeDurableWork.status).toBe("not_ready");
     expect(projection).not.toHaveProperty("workerSaturation");
     expect(projection).not.toHaveProperty("heartbeatFreshnessMs");
     expect(projection.missingSignals).toEqual([
@@ -44,5 +59,21 @@ describe("projectRuntimeHealth", () => {
       "worker_capacity",
       "ownership_progress",
     ]);
+  });
+
+  it("represents read-only degradation independently from readiness", () => {
+    const projection = projectRuntimeHealth({
+      observedAt: "2026-09-14T00:00:10.000Z",
+      stuckRunAfterMs: 5_000,
+      heartbeatStaleAfterMs: 5_000,
+      redisReachable: true,
+      postgresReachable: true,
+      checkpointReachable: true,
+      recoveryReachable: true,
+      acceptsNewWork: true,
+      readOnlyDegraded: true,
+    });
+    expect(projection.acceptNewWork.status).toBe("ready");
+    expect(projection.degraded.status).toBe("read_only");
   });
 });

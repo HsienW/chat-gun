@@ -8,6 +8,17 @@ import {
   renderOperationsMetrics,
 } from "./export.js";
 
+const READY_HEALTH = {
+  alive: { status: "ready" as const, reasonCodes: [] },
+  reachable: { status: "ready" as const, reasonCodes: [] },
+  acceptNewWork: { status: "ready" as const, reasonCodes: [] },
+  resumeDurableWork: { status: "ready" as const, reasonCodes: [] },
+  degraded: { status: "normal" as const, reasonCodes: [] },
+  deploymentPolicySource: "environment" as const,
+  multiInstanceSafe: true,
+  missingSignals: [],
+};
+
 describe("renderOperationsMetrics", () => {
   it("exports aggregate OpenMetrics without raw identifiers or sensitive event attributes", () => {
     const collector = createMetricsCollector();
@@ -31,14 +42,13 @@ describe("renderOperationsMetrics", () => {
     });
 
     const exposition = renderOperationsMetrics(collector, {
-      signalStatus: "available",
+      ...READY_HEALTH,
       queueDepth: 0,
       activeRunCount: 0,
       stuckRunCount: 0,
       workerSaturation: 0.5,
       heartbeatFreshnessMs: 20,
       isHeartbeatStale: false,
-      missingSignals: [],
     });
 
     expect(exposition).toContain("# TYPE chat_gun_task_total gauge");
@@ -73,8 +83,7 @@ describe("renderOperationsMetrics", () => {
     }
 
     const exposition = renderOperationsMetrics(collector, {
-      signalStatus: "available",
-      missingSignals: [],
+      ...READY_HEALTH,
       isHeartbeatStale: false,
     });
 

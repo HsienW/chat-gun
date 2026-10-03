@@ -2,6 +2,7 @@ import {
   createStepLockKey,
   getRedis,
 } from "./redis-client.js";
+import { loadDeploymentPolicy } from "../../platform/deployment-policy.js";
 
 const RELEASE_LOCK_SCRIPT = `
 if redis.call("GET", KEYS[1]) == ARGV[1] then
@@ -109,8 +110,17 @@ export class NoopStepLock implements StepLock {
   }
 }
 
-export function createStepLock(): StepLock {
+export interface CreateStepLockOptions {
+  multiInstanceEnabled?: boolean;
+}
+
+export function createStepLock(options: CreateStepLockOptions = {}): StepLock {
   const redisClient = getRedis();
+  const multiInstanceEnabled =
+    options.multiInstanceEnabled ?? loadDeploymentPolicy().policy.multiInstanceEnabled;
+  if (!redisClient && multiInstanceEnabled) {
+    throw new Error("LOCK_INFRASTRUCTURE_UNAVAILABLE");
+  }
   return redisClient ? new RedisStepLock(redisClient) : new NoopStepLock();
 }
 

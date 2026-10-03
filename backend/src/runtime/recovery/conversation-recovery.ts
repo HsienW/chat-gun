@@ -19,6 +19,7 @@ import {
   type SanitizeResult,
 } from "./recovery-sanitizer.js";
 import type { ResumeResponseSchemaRegistry } from "./resume-response-schema-registry.js";
+import type { RunSequenceAllocator } from "../event-sequence.js";
 
 export interface DurableRecoveryEvidence {
   taskStatus: TaskStatus;
@@ -80,6 +81,10 @@ export interface ConversationRecoveryDependencies {
     evidence: DurableRecoveryEvidence
   ) => SideEffectReconciler<unknown> | undefined;
   confirmationAuthorizer?: ConfirmationResumeAuthorizer;
+  eventSequence: {
+    allocator: RunSequenceAllocator;
+    readMaxPersistedSequence(runId: string): Promise<number>;
+  };
 }
 
 function hasExpectedCorrelation(
@@ -246,6 +251,10 @@ export function createConversationRecovery(
         input.response
       );
       if (!validated.ok) return manual([validated.reasonCode], classification);
+      const maxPersistedSequence = await dependencies.eventSequence.readMaxPersistedSequence(
+        input.runId
+      );
+      dependencies.eventSequence.allocator.seed(input.runId, maxPersistedSequence);
       if (!(await consumeResume({ manifest, response: validated.value, now, dependencies }))) {
         return manual(["RESUME_CONSUME_REJECTED"], classification);
       }

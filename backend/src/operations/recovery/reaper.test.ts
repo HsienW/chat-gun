@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { evaluateStuckRuns } from "./reaper.js";
+import { evaluateStuckRuns, executeStuckRunTakeovers, PgRecoveryOwnershipPort } from "./reaper.js";
+import { runReaperCycle } from "./reaper.js";
+import { SingletonLease } from "../../runtime/lock/singleton-lease.js";
+import type { Queryable } from "../../runtime/persistence/rows.js";
 
 const NOW = "2026-09-14T00:10:00.000Z";
 const STALE = "2026-09-14T00:00:00.000Z";
@@ -137,5 +140,69 @@ describe("stuck-run reaper projection", () => {
       classification: "park_manual",
       decision: "parked_manual",
     });
+  });
+
+  it("takes over with generation+1 and rejects superseded ownership", async () => {
+    const findings = evaluateStuckRuns({
+      observedAt: NOW,
+      policy: POLICY,
+      runs: [
+        createRun({ ownership: { ...createRun().ownership, updatedAt: STALE } }),
+        createRun({
+          runId: "superseded",
+          ownership: {
+            ...createRun().ownership,
+            runId: "superseded",
+            status: "superseded",
+            supersededByRunId: "run-new",
+            updatedAt: STALE,
+          },
+        }),
+      ],
+    });
+    const takeover = vi.fn(async () => true);
+    const outcomes = await executeStuckRunTakeovers(findings, { takeover });
+
+    expect(takeover).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-1", expectedGeneration: 1, nextGeneration: 2 })
+    );
+    expect(outcomes).toEqual([
+      expect.objectContaining({ status: "taken_over", generation: 2 }),
+      expect.objectContaining({ runId: "superseded", status: "skipped" }),
+    ]);
+  });
+
+  it("executes takeover only while holding the reaper singleton lease", async () => {
+    let token = 0;
+    const lease = new SingletonLease(
+      {
+        set: vi.fn(async () => "OK" as const),
+        eval: vi.fn(async () => 1),
+        get: vi.fn(async () => null),
+      },
+      {
+        next: async () => ++token,
+        isCurrent: async (_name, candidate) => candidate === token,
+      }
+    );
+    const finding = evaluateStuckRuns({
+      observedAt: NOW,
+      policy: POLICY,
+      runs: [{ ...createRun(), ownership: { ...createRun().ownership, updatedAt: STALE } }],
+    });
+    const takeover = vi.fn(async () => true);
+    await expect(runReaperCycle({ lease, owner: "instance-b", ttlMs: 1_000, findings: finding, ownership: { takeover } })).resolves.toMatchObject({ leader: true });
+    expect(takeover).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a generation CAS and rejects superseded ownership in Postgres", async () => {
+    const query = vi.fn(async (_text: string, _values?: readonly unknown[]) => ({ rows: [{ run_id: "run-1" }], rowCount: 1 }));
+    const port = new PgRecoveryOwnershipPort({ query: query as unknown as Queryable["query"] });
+    await expect(port.takeover({ runId: "run-1", expectedGeneration: 3, nextGeneration: 4, decision: "resumed", observedAt: NOW })).resolves.toBe(true);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("AND generation = $2"),
+      ["run-1", 3, 4, NOW]
+    );
+    expect(query.mock.calls[0]?.[0]).toContain("superseded_by_run_id IS NULL");
   });
 });

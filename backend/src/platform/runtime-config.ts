@@ -1,4 +1,8 @@
 import { DEFAULT_CONTEXT_TOKEN_BUDGET } from "../context/context-budget.js";
+import {
+  loadDeploymentPolicy,
+  type LoadedDeploymentPolicy,
+} from "./deployment-policy.js";
 import { getEnv } from "./env.js";
 import type { ImAgentContextPack } from "./im-context-pack.js";
 
@@ -153,6 +157,7 @@ export interface RuntimeBoundaryPolicy extends RuntimeBoundaryContract {
 }
 
 export type AgentRuntimeConfig = {
+  deploymentPolicy: LoadedDeploymentPolicy;
   locale: AgentLocale;
   timeZone: string;
   runtimeEventEnvelopeEnabled: boolean;
@@ -349,6 +354,7 @@ function readSampleRate(): number {
 
 export function getAgentRuntimeConfig(): AgentRuntimeConfig {
   return {
+    deploymentPolicy: loadDeploymentPolicy(),
     locale: readLocale(),
     timeZone: getEnv("AGENT_TIME_ZONE", "Asia/Taipei"),
     runtimeEventEnvelopeEnabled: readStrictBoolean(

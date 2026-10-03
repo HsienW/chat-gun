@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { createIncidentProjectionIndex } from "./incident-query.js";
+import {
+  createAuthoritativeIncidentProjection,
+  createIncidentProjectionIndex,
+  type IncidentFactStore,
+} from "./incident-query.js";
 
 const PROJECTION = {
   schemaVersion: "1.0" as const,
@@ -39,5 +43,29 @@ describe("incident projection index", () => {
   it("rejects non-canonical run identifiers", () => {
     const index = createIncidentProjectionIndex();
     expect(() => index.query("run id with spaces")).toThrow();
+  });
+
+  it("rebuilds an equivalent projection from authoritative facts", async () => {
+    const facts: typeof PROJECTION[] = [];
+    const store: IncidentFactStore = {
+      append: async (projection) => { facts.push(projection as typeof PROJECTION); },
+      list: async () => facts,
+    };
+    const firstIndex = createIncidentProjectionIndex();
+    await createAuthoritativeIncidentProjection(store, firstIndex).recordAuthoritative(PROJECTION);
+
+    const rebuiltIndex = createIncidentProjectionIndex();
+    await expect(createAuthoritativeIncidentProjection(store, rebuiltIndex).rebuild()).resolves.toEqual({ rebuilt: 1, failed: 0 });
+    expect(rebuiltIndex.query("run-1")).toEqual(firstIndex.query("run-1"));
+  });
+
+  it("keeps the authoritative fact when projection update fails", async () => {
+    const append = vi.fn(async () => undefined);
+    const projection = createAuthoritativeIncidentProjection(
+      { append, list: async () => [] },
+      { record: () => { throw new Error("projection unavailable"); }, query: () => null, delete: () => undefined }
+    );
+    await expect(projection.recordAuthoritative(PROJECTION)).resolves.toEqual({ projected: false });
+    expect(append).toHaveBeenCalledWith(PROJECTION);
   });
 });

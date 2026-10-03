@@ -2,13 +2,18 @@ import { z } from "zod";
 import { describe, expect, it } from "vitest";
 
 import type { GovernedToolExecutor } from "../runtime/side-effect/governed-outcome.js";
+import { RunSequenceAllocator } from "../runtime/event-sequence.js";
 import type { RuntimeToolDispatchPipeline } from "../runtime/tool-dispatch/pipeline.js";
 import {
   createExecutionCompositionRoot,
   type CanonicalExecutionRequest,
   type ExecutionCompositionStage,
 } from "./execution-composition-root.js";
-import { getIncidentProjectionIndex } from "./incident-query.js";
+import {
+  createAuthoritativeIncidentProjection,
+  createInMemoryIncidentFactStore,
+  getIncidentProjectionIndex,
+} from "./incident-query.js";
 
 const EXECUTION_MANIFEST = {
   runtimeBuildId: "build-1",
@@ -117,6 +122,11 @@ function createRoot() {
       correlatedSliRef: `sli:${context.runId}`,
     }),
     createEventId: () => "event-1",
+    sequenceAllocator: new RunSequenceAllocator(),
+    incidentProjection: createAuthoritativeIncidentProjection(
+      createInMemoryIncidentFactStore(),
+      getIncidentProjectionIndex()
+    ),
     now: () => new Date("2026-09-28T12:01:00.000Z"),
   });
 }

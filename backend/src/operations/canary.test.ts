@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { GovernedToolExecutor } from "../runtime/side-effect/governed-outcome.js";
 import type { RuntimeToolDispatchPipeline } from "../runtime/tool-dispatch/pipeline.js";
+import { RunSequenceAllocator } from "../runtime/event-sequence.js";
 
 import {
   runLiveRuntimeCanary,
@@ -11,6 +12,10 @@ import {
   type CanaryDependencies,
 } from "./canary.js";
 import { createExecutionCompositionRoot } from "./execution-composition-root.js";
+import {
+  createAuthoritativeIncidentProjection,
+  createInMemoryIncidentFactStore,
+} from "./incident-query.js";
 import { RUN_OUTCOME_METRIC_CLASSES } from "./metrics/export.js";
 
 const MANIFEST = {
@@ -127,6 +132,10 @@ describe("live runtime canary", () => {
         correlatedSliRef: "sli:run-canary",
       }),
       createEventId: () => "event-canary",
+      sequenceAllocator: new RunSequenceAllocator(),
+      incidentProjection: createAuthoritativeIncidentProjection(
+        createInMemoryIncidentFactStore()
+      ),
       now: () => new Date("2026-09-28T12:00:00.000Z"),
     });
     const execute = vi.spyOn(root, "execute");
