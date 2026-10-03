@@ -3,6 +3,7 @@ import { MemorySaver } from "@langchain/langgraph-checkpoint";
 import { describe, expect, it, vi } from "vitest";
 
 import { hashBusinessEffectKey } from "../side-effect/identity.js";
+import { RunSequenceAllocator } from "../event-sequence.js";
 import type { SideEffectReconciler } from "../side-effect/side-effect-descriptor.js";
 import {
   createConversationRecovery,
@@ -140,6 +141,13 @@ const baseEvidence: DurableRecoveryEvidence = {
   },
 };
 
+function createEventSequence(maxPersistedSequence = 0) {
+  return {
+    allocator: new RunSequenceAllocator(),
+    readMaxPersistedSequence: vi.fn(async () => maxPersistedSequence),
+  };
+}
+
 describe("conversation recovery with a real LangGraph checkpoint", () => {
   it("sanitizes checkpoint history, resumes once, reconciles mutations, and stays terminal", async () => {
     const repository = new InMemoryManifestRepository();
@@ -167,6 +175,7 @@ describe("conversation recovery with a real LangGraph checkpoint", () => {
     );
     evidence.set("task-safe", baseEvidence);
 
+    const eventSequence = createEventSequence(41);
     const recovery = createConversationRecovery({
       checkpoint: safeAdapter,
       manifests: repository,
@@ -178,6 +187,7 @@ describe("conversation recovery with a real LangGraph checkpoint", () => {
         return value;
       },
       resolveReconciler: () => reconciler,
+      eventSequence,
     });
 
     const resumed = await recovery.recover({
@@ -194,6 +204,10 @@ describe("conversation recovery with a real LangGraph checkpoint", () => {
       sanitizeStatus: "sanitized",
     });
     expect(repository.manifests.get("interrupt-safe")?.status).toBe("resumed");
+    expect(eventSequence.readMaxPersistedSequence).toHaveBeenCalledWith(
+      "run-task-safe"
+    );
+    expect(eventSequence.allocator.next("run-task-safe")).toBe(42);
     const terminalSnapshot = await safeAdapter.read("thread-safe");
     expect(terminalSnapshot.messages).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "partial-1" })])
@@ -251,6 +265,7 @@ describe("conversation recovery with a real LangGraph checkpoint", () => {
       currentExecutionManifest: executionManifest,
       loadDurableEvidence: async (taskId) => evidence.get(taskId) ?? baseEvidence,
       resolveReconciler: () => reconciler,
+      eventSequence: createEventSequence(),
     });
     await expect(
       reconcileRecovery.recover({
@@ -295,6 +310,7 @@ describe("conversation recovery with a real LangGraph checkpoint", () => {
       responseSchemas: createResumeResponseSchemaRegistry(),
       currentExecutionManifest: executionManifest,
       loadDurableEvidence: async () => baseEvidence,
+      eventSequence: createEventSequence(),
     });
 
     await expect(

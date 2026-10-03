@@ -46,6 +46,60 @@ export interface IncidentProjectionIndex {
   delete(runId: string): void;
 }
 
+export interface IncidentFactStore {
+  append(projection: IncidentProjection): Promise<void>;
+  list(): Promise<readonly IncidentProjection[]>;
+}
+
+export interface AuthoritativeIncidentProjection {
+  recordAuthoritative(projection: unknown): Promise<{ projected: boolean }>;
+  rebuild(): Promise<{ rebuilt: number; failed: number }>;
+}
+
+export function createAuthoritativeIncidentProjection(
+  factStore: IncidentFactStore,
+  index: IncidentProjectionIndex = createIncidentProjectionIndex()
+): AuthoritativeIncidentProjection {
+  return {
+    async recordAuthoritative(value) {
+      const projection = incidentProjectionSchema.parse(value);
+      await factStore.append(projection);
+      try {
+        index.record(projection);
+        return { projected: true };
+      } catch {
+        return { projected: false };
+      }
+    },
+    async rebuild() {
+      const facts = await factStore.list();
+      let rebuilt = 0;
+      let failed = 0;
+      for (const fact of facts) {
+        try {
+          index.record(fact);
+          rebuilt += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+      return { rebuilt, failed };
+    },
+  };
+}
+
+export function createInMemoryIncidentFactStore(): IncidentFactStore {
+  const facts: IncidentProjection[] = [];
+  return {
+    async append(projection) {
+      facts.push(incidentProjectionSchema.parse(projection));
+    },
+    async list() {
+      return facts.map((fact) => incidentProjectionSchema.parse(fact));
+    },
+  };
+}
+
 const MAX_INDEXED_RUNS = 1_000;
 
 export function createIncidentProjectionIndex(): IncidentProjectionIndex {

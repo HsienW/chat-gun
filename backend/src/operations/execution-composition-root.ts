@@ -28,7 +28,7 @@ import type {
 } from "../runtime/side-effect/governed-outcome.js";
 import type { RuntimeToolDispatchPipeline } from "../runtime/tool-dispatch/pipeline.js";
 import type { StructuredToolResultEnvelope } from "../runtime/tool-dispatch/structured-tool-result.js";
-import { getIncidentProjectionIndex } from "./incident-query.js";
+import type { AuthoritativeIncidentProjection } from "./incident-query.js";
 import { executionManifestSchema, type ExecutionManifest } from "./types.js";
 
 export const EXECUTION_COMPOSITION_STAGES = [
@@ -129,7 +129,8 @@ export interface ExecutionCompositionRootDependencies<TOutput> {
     recovery: ExecutionRecoveryResult<TOutput>;
   }): Promise<Omit<ExecutionEvidence, "stages">> | Omit<ExecutionEvidence, "stages">;
   createEventId?: () => string;
-  sequenceAllocator?: RunSequenceAllocator;
+  sequenceAllocator: RunSequenceAllocator;
+  incidentProjection: AuthoritativeIncidentProjection;
   now?: () => Date;
 }
 
@@ -171,7 +172,9 @@ function requireDependencies<TOutput>(
     typeof dependencies.selectTool !== "function" ||
     typeof dependencies.recovery?.recover !== "function" ||
     typeof dependencies.outputSchema?.parse !== "function" ||
-    typeof dependencies.collectEvidence !== "function"
+    typeof dependencies.collectEvidence !== "function" ||
+    !(dependencies.sequenceAllocator instanceof RunSequenceAllocator) ||
+    typeof dependencies.incidentProjection?.recordAuthoritative !== "function"
   ) {
     throw new ExecutionCompositionError("EXECUTION_COMPOSITION_DEPENDENCY_UNAVAILABLE");
   }
@@ -244,8 +247,7 @@ export function createExecutionCompositionRoot<TOutput>(
   dependencies: ExecutionCompositionRootDependencies<TOutput>
 ): ExecutionCompositionRoot<TOutput> {
   requireDependencies(dependencies);
-  const sequenceAllocator =
-    dependencies.sequenceAllocator ?? new RunSequenceAllocator();
+  const sequenceAllocator = dependencies.sequenceAllocator;
   const now = dependencies.now ?? (() => new Date());
 
   return {
@@ -308,7 +310,7 @@ export function createExecutionCompositionRoot<TOutput>(
       if (isRunTerminalStatus(recovery.terminal)) {
         sequenceAllocator.release(context.runId);
       }
-      getIncidentProjectionIndex().record({
+      await dependencies.incidentProjection.recordAuthoritative({
         schemaVersion: "1.0",
         runId: context.runId,
         events: [
