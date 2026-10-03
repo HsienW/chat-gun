@@ -5,26 +5,63 @@ import { getMetricsCollector } from "../platform/metrics/metrics-collector.js";
 import { executionIdSchema } from "../runtime/execution-context/execution-context.js";
 import { getIncidentProjectionIndex } from "./incident-query.js";
 import { renderOperationsMetrics } from "./metrics/export.js";
+import { projectRuntimeHealth, type RuntimeHealthProjection } from "./metrics/health.js";
 
 const OPEN_METRICS_CONTENT_TYPE =
   "application/openmetrics-text; version=1.0.0; charset=utf-8";
 
-export const operationsHttpApp = new Hono();
+export interface OperationsHttpAppDependencies {
+  healthProbe(): Promise<RuntimeHealthProjection> | RuntimeHealthProjection;
+}
 
-operationsHttpApp.route("/", metricsApp);
-operationsHttpApp.all("/operations/metrics", (context) => {
+const defaultHealthProbe = () =>
+  projectRuntimeHealth({
+    observedAt: new Date().toISOString(),
+    stuckRunAfterMs: 1,
+    heartbeatStaleAfterMs: 1,
+    processAlive: true,
+  });
+
+export function createOperationsHttpApp(
+  dependencies: OperationsHttpAppDependencies = { healthProbe: defaultHealthProbe }
+) {
+const app = new Hono();
+
+app.route("/", metricsApp);
+app.get("/health/live", async (context) => {
+  const health = await dependencies.healthProbe();
+  return context.json(health.alive, health.alive.status === "ready" ? 200 : 503);
+});
+app.get("/health/readiness", async (context) => {
+  const health = await dependencies.healthProbe();
+  return context.json(
+    { ...health.acceptNewWork, degraded: health.degraded },
+    health.acceptNewWork.status === "ready" ? 200 : 503
+  );
+});
+app.get("/health/resume-ready", async (context) => {
+  const health = await dependencies.healthProbe();
+  return context.json(
+    health.resumeDurableWork,
+    health.resumeDurableWork.status === "ready" ? 200 : 503
+  );
+});
+app.get("/health/degraded", async (context) =>
+  context.json((await dependencies.healthProbe()).degraded, 200)
+);
+app.all("/operations/metrics", async (context) => {
   if (context.req.method !== "GET") {
     return context.json({ error: "Method not allowed" }, 405);
   }
 
-  const exposition = renderOperationsMetrics(getMetricsCollector(), {
-    signalStatus: "degraded",
-    missingSignals: ["run_status", "worker_capacity", "ownership_progress"],
-  });
+  const exposition = renderOperationsMetrics(
+    getMetricsCollector(),
+    await dependencies.healthProbe()
+  );
   return context.body(exposition, 200, { "content-type": OPEN_METRICS_CONTENT_TYPE });
 });
 
-operationsHttpApp.all("/operations/incidents/:runId", (context) => {
+app.all("/operations/incidents/:runId", (context) => {
   if (context.req.method !== "GET") {
     return context.json({ error: "Method not allowed" }, 405);
   }
@@ -37,3 +74,8 @@ operationsHttpApp.all("/operations/incidents/:runId", (context) => {
     ? context.json(projection, 200)
     : context.json({ error: "Incident not found" }, 404);
 });
+
+return app;
+}
+
+export const operationsHttpApp = createOperationsHttpApp();
