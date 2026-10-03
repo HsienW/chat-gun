@@ -181,6 +181,15 @@ describe("NoopStepLock", () => {
 });
 
 describe("createStepLock", () => {
+  it("fails closed without Redis in multi-instance mode", async () => {
+    process.env.REDIS_URI = "";
+    const { createStepLock } = await import("./step-lock.js");
+
+    expect(() => createStepLock({ multiInstanceEnabled: true })).toThrow(
+      "LOCK_INFRASTRUCTURE_UNAVAILABLE"
+    );
+  });
+
   it("creates NoopStepLock when REDIS_URI is blank", async () => {
     process.env.REDIS_URI = "";
     const { createStepLock, NoopStepLock: DynamicNoopStepLock } = await import(
