@@ -7,13 +7,15 @@
   "scripts": {
     "dev": "langgraphjs dev",
     "build": "tsc -p tsconfig.json --noEmit",
-    "lint": "tsc -p tsconfig.json --noEmit",
+    "lint": "npm run migrations:check && tsc -p tsconfig.json --noEmit",
+    "migrations:check": "tsx src/runtime/persistence/migration-additive.cli.ts",
     "postinstall": "patch-package",
     "start": "langgraphjs dev",
     "test": "vitest run",
     "eval:opik": "vitest run src/evaluation/opik/experiment.live-smoke.test.ts",
     "operations:release-gate": "tsx src/operations/release-gate.cli.ts",
-    "operations:feedback-loop": "tsx src/operations/feedback-loop.cli.ts"
+    "operations:feedback-loop": "tsx src/operations/feedback-loop.cli.ts",
+    "operations:rolling-deploy": "tsx src/operations/rolling-deploy.cli.ts"
   },
   "dependencies": {
     "@langchain/core": "1.2.10",
