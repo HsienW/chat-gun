@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { metricsApp } from "../platform/metrics/metrics-endpoint.js";
 import { getMetricsCollector } from "../platform/metrics/metrics-collector.js";
 import { executionIdSchema } from "../runtime/execution-context/execution-context.js";
+import { createSubjectRightsHttpApp } from "../runtime/data-governance/subject-rights-http.js";
 import { getIncidentProjectionIndex } from "./incident-query.js";
 import { renderOperationsMetrics } from "./metrics/export.js";
 
@@ -11,7 +12,38 @@ const OPEN_METRICS_CONTENT_TYPE =
 
 export const operationsHttpApp = new Hono();
 
+type SubjectRightsHttpDependencies = Parameters<typeof createSubjectRightsHttpApp>[0];
+let subjectRightsHttpDependencies: SubjectRightsHttpDependencies | undefined;
+
+export function configureSubjectRightsHttp(
+  dependencies: SubjectRightsHttpDependencies | undefined,
+): void {
+  subjectRightsHttpDependencies = dependencies;
+}
+
 operationsHttpApp.route("/", metricsApp);
+operationsHttpApp.route(
+  "/internal/subject-rights",
+  new Hono().all("*", async (context) => {
+    if (!subjectRightsHttpDependencies) {
+      return context.json({
+        error: { code: "SUBJECT_RIGHTS_DISABLED", message: "Subject-right service is disabled" },
+      }, 503);
+    }
+    const url = new URL(context.req.url);
+    url.pathname = url.pathname.replace(/^\/internal\/subject-rights/u, "") || "/";
+    const method = context.req.method;
+    const rawBody = method === "GET" || method === "HEAD"
+      ? undefined
+      : await context.req.arrayBuffer();
+    const request = new Request(url, {
+      method,
+      headers: context.req.raw.headers,
+      ...(rawBody && rawBody.byteLength > 0 ? { body: rawBody } : {}),
+    });
+    return createSubjectRightsHttpApp(subjectRightsHttpDependencies).fetch(request);
+  }),
+);
 operationsHttpApp.all("/operations/metrics", (context) => {
   if (context.req.method !== "GET") {
     return context.json({ error: "Method not allowed" }, 405);
