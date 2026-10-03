@@ -7,7 +7,10 @@ import { assertAdditiveMigration, checkMigrationDirectory } from "./migration-ad
 describe("additive migration gate", () => {
   it("accepts the checked-in migration up blocks", async () => {
     const directory = join(dirname(fileURLToPath(import.meta.url)), "migrations");
-    await expect(checkMigrationDirectory(directory)).resolves.toHaveLength(20);
+    const migrationNames = await checkMigrationDirectory(directory);
+
+    expect(migrationNames).toHaveLength(21);
+    expect(migrationNames.at(-1)).toBe("021_create_data_governance.sql");
   });
 
   it.each([
