@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   FAULT_INJECTION_CATEGORIES,
+  classifyCrashRecovery,
   evaluateFaultInjectionDataset,
   type FaultInjectionDataset,
 } from "./fault-injection.js";
@@ -27,13 +28,19 @@ function createDataset(): FaultInjectionDataset {
 }
 
 describe("fault-injection negative checks", () => {
-  it("passes only when all six deliberate regressions fail the gate and the control passes", async () => {
+  it("passes only when every deliberate regression fails the gate and the control passes", async () => {
     const result = await evaluateFaultInjectionDataset(
       createDataset(),
       async (faultCase) => faultCase.expectedGateStatus
     );
 
     expect(result).toMatchObject({ passed: true, failedCaseIds: [] });
+  });
+
+  it("routes post-effect/pre-ack to reconciliation and rejects stale ownership", () => {
+    expect(classifyCrashRecovery({ category: "post_effect_pre_ack_crash", isEffectAcknowledged: false, isCurrentFencingToken: true })).toBe("reconciliation");
+    expect(classifyCrashRecovery({ category: "fenced_worker_takeover", isEffectAcknowledged: false, isCurrentFencingToken: false })).toBe("reject_stale_owner");
+    expect(classifyCrashRecovery({ category: "approval_wait_crash", isEffectAcknowledged: false, isCurrentFencingToken: true })).toBe("resume");
   });
 
   it("fails when a deliberate regression is incorrectly allowed", async () => {
