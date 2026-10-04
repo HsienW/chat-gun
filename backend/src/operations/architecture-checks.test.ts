@@ -5,8 +5,12 @@ import { z } from "zod";
 
 import { RuntimeToolDescriptorRegistry } from "../runtime/tool-dispatch/runtime-tool-descriptor.js";
 import { runArchitectureChecks } from "./architecture-checks.js";
+import { EXECUTION_PROFILE_ENFORCEMENT_MARKER } from "../runtime/tool-dispatch/execution-profile.js";
 
 const DELIBERATE_BYPASSES = [
+  ["profile-missing-dispatch", "sourceTool.invoke(input)"],
+  ["egress-bypass", "const response = await fetch(url)"],
+  ["secret-into-context", "const secret = configurable.apiKey"],
   ["direct-protected-tool-invocation", "protectedTool.invoke(input)"],
   [
     "mutation-descriptor-missing",
@@ -35,6 +39,11 @@ describe("production runtime architecture checks", () => {
       "../agents/mcp-agent.ts",
       "../agents/deep-researcher.ts",
       "../tools/registry.ts",
+      "../tools/web-search.ts",
+      "../tools/web-fetch.ts",
+      "../tools/weather.ts",
+      "../tools/mcp-loader.ts",
+      "../platform/tool-governance.ts",
       "../runtime/tool-dispatch/pipeline.ts",
       "../runtime/event-envelope.ts",
     ].map((path) => ({
@@ -42,7 +51,10 @@ describe("production runtime architecture checks", () => {
       source: readFileSync(new URL(path, import.meta.url), "utf8"),
     }));
 
-    expect(runArchitectureChecks({ sources })).toMatchObject({
+    expect(runArchitectureChecks({
+      sources,
+      runtimeSymbols: [EXECUTION_PROFILE_ENFORCEMENT_MARKER],
+    })).toMatchObject({
       status: "passed",
       findings: [],
     });

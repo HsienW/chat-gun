@@ -1,4 +1,9 @@
+import { EXECUTION_PROFILE_ENFORCEMENT_MARKER } from "../runtime/tool-dispatch/execution-profile.js";
+
 export const ARCHITECTURE_CHECK_IDS = [
+  "profile-missing-dispatch",
+  "egress-bypass",
+  "secret-into-context",
   "direct-protected-tool-invocation",
   "mutation-descriptor-missing",
   "production-registry-authorization-missing",
@@ -57,8 +62,32 @@ function hasObjectWithoutField(
 const CHECKS: ReadonlyArray<{
   checkId: ArchitectureCheckId;
   reasonCode: string;
-  detects(source: string): boolean;
+  detects(source: string, runtimeSymbols: readonly symbol[]): boolean;
 }> = [
+  {
+    checkId: "profile-missing-dispatch",
+    reasonCode: "PROFILE_MISSING_DISPATCH",
+    detects: (source, runtimeSymbols) =>
+      /\bsourceTool\s*\.\s*invoke\s*\(/u.test(source) &&
+      (!/\bexecutionProfileEnforcer\s*\??\s*\.\s*enforce\s*\(/u.test(source) ||
+        !runtimeSymbols.includes(EXECUTION_PROFILE_ENFORCEMENT_MARKER)),
+  },
+  {
+    checkId: "egress-bypass",
+    reasonCode: "EGRESS_BYPASS",
+    detects: (source) =>
+      /\bfetch\s*\(/u.test(source) &&
+      !/\bfetchWithValidatedRedirects\s*\(/u.test(source),
+  },
+  {
+    checkId: "secret-into-context",
+    reasonCode: "SECRET_INTO_CONTEXT",
+    detects: (source) =>
+      /\b(?:configurable|metadata)\s*\.\s*(?:apiKey|credential|password|secret|token)\b/iu.test(
+        source
+      ) ||
+      /\bgetEnv\s*\(\s*["'](?:BRAVE_API_KEY|TAVILY_API_KEY)["']/u.test(source),
+  },
   {
     checkId: "direct-protected-tool-invocation",
     reasonCode: "DIRECT_PROTECTED_TOOL_INVOCATION",
@@ -151,11 +180,14 @@ function parseOverride(
 
 export function runArchitectureChecks(input: {
   sources: readonly ArchitectureSource[];
+  runtimeSymbols?: readonly symbol[];
   overrideConfig?: string;
   now?: Date;
 }): ArchitectureCheckResult {
   const findings = input.sources.flatMap(({ path, source }) =>
-    CHECKS.filter((check) => check.detects(source)).map((check) => ({
+    CHECKS.filter((check) =>
+      check.detects(source, input.runtimeSymbols ?? [])
+    ).map((check) => ({
       checkId: check.checkId,
       path,
       reasonCode: check.reasonCode,
