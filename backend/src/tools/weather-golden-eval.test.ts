@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { installEgressPolicyTestTransport } from "../runtime/tool-dispatch/egress-policy.testing.js";
 import {
   WEATHER_GOLDEN_EVAL_CASES,
   evaluateWeatherGoldenCase,
@@ -8,6 +9,8 @@ import {
 } from "./weather-golden-eval.js";
 import { weatherTool } from "./weather.js";
 import type { WeatherToolResult } from "./weather-types.js";
+
+installEgressPolicyTestTransport();
 
 type OpenMeteoResult = {
   name: string;

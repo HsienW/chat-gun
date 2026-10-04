@@ -1,9 +1,12 @@
 import { tool } from "@langchain/core/tools";
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
 import { z } from "zod";
 
 import { configureNetwork } from "../platform/network.js";
+import {
+  EgressPolicyError,
+  fetchWithValidatedRedirects,
+} from "../runtime/tool-dispatch/egress-policy.js";
+import { WEB_FETCH_EGRESS_POLICY } from "../runtime/tool-dispatch/production-egress-policies.js";
 
 configureNetwork();
 
@@ -19,131 +22,6 @@ function getAllowedPorts(): Set<string> {
     .filter(Boolean);
 
   return configuredPorts.length > 0 ? new Set(configuredPorts) : DEFAULT_ALLOWED_PORTS;
-}
-
-function getEffectivePort(url: URL): string {
-  if (url.port) {
-    return url.port;
-  }
-
-  return url.protocol === "https:" ? "443" : "80";
-}
-
-function isPrivateIpv4(address: string): boolean {
-  const octets = address.split(".").map((part) => Number(part));
-  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part))) {
-    return true;
-  }
-
-  const [first, second] = octets;
-  return (
-    first === 0 ||
-    first === 10 ||
-    first === 127 ||
-    (first === 100 && second >= 64 && second <= 127) ||
-    (first === 169 && second === 254) ||
-    (first === 172 && second >= 16 && second <= 31) ||
-    (first === 192 && second === 168) ||
-    (first === 198 && (second === 18 || second === 19)) ||
-    first >= 224
-  );
-}
-
-function isPrivateIpv6(address: string): boolean {
-  const normalized = address.toLowerCase();
-  return (
-    normalized === "::" ||
-    normalized === "::1" ||
-    normalized.startsWith("fc") ||
-    normalized.startsWith("fd") ||
-    normalized.startsWith("fe80:") ||
-    normalized.startsWith("ff") ||
-    normalized.startsWith("::ffff:127.") ||
-    normalized.startsWith("::ffff:10.") ||
-    normalized.startsWith("::ffff:192.168.")
-  );
-}
-
-function assertPublicIp(address: string): void {
-  const ipVersion = isIP(address);
-  if (ipVersion === 4 && isPrivateIpv4(address)) {
-    throw new Error(`Blocked non-public IPv4 address: ${address}`);
-  }
-  if (ipVersion === 6 && isPrivateIpv6(address)) {
-    throw new Error(`Blocked non-public IPv6 address: ${address}`);
-  }
-  if (ipVersion === 0) {
-    throw new Error(`Invalid resolved IP address: ${address}`);
-  }
-}
-
-async function assertHttpUrl(rawUrl: string): Promise<URL> {
-  const url = new URL(rawUrl);
-
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("Only http and https URLs are allowed");
-  }
-
-  if (url.username || url.password) {
-    throw new Error("URLs with embedded credentials are not allowed");
-  }
-
-  const effectivePort = getEffectivePort(url);
-  if (!getAllowedPorts().has(effectivePort)) {
-    throw new Error(`Port ${effectivePort} is not allowed by WEB_FETCH_ALLOWED_PORTS`);
-  }
-
-  if (["localhost", "localhost."].includes(url.hostname.toLowerCase())) {
-    throw new Error("localhost URLs are not allowed");
-  }
-
-  if (isIP(url.hostname)) {
-    assertPublicIp(url.hostname);
-    return url;
-  }
-
-  const resolvedAddresses = await lookup(url.hostname, {
-    all: true,
-    verbatim: true,
-  });
-
-  if (resolvedAddresses.length === 0) {
-    throw new Error(`Could not resolve hostname: ${url.hostname}`);
-  }
-
-  for (const address of resolvedAddresses) {
-    assertPublicIp(address.address);
-  }
-
-  return url;
-}
-
-async function fetchWithValidatedRedirects(
-  url: URL,
-  init: RequestInit,
-  maxRedirects = 3
-): Promise<Response> {
-  let currentUrl = url;
-
-  for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
-    const response = await fetch(currentUrl, {
-      ...init,
-      redirect: "manual",
-    });
-
-    if (![301, 302, 303, 307, 308].includes(response.status)) {
-      return response;
-    }
-
-    const location = response.headers.get("location");
-    if (!location) {
-      return response;
-    }
-
-    currentUrl = await assertHttpUrl(new URL(location, currentUrl).toString());
-  }
-
-  throw new Error(`Too many redirects; maximum is ${maxRedirects}`);
 }
 
 async function readLimitedText(response: Response): Promise<string> {
@@ -238,18 +116,22 @@ function limitContent(content: string, maxCharacters: number): string {
 export const webFetchTool = tool(
   async ({ url, maxCharacters }) => {
     try {
-      const parsedUrl = await assertHttpUrl(url);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 12_000);
 
       try {
-        const response = await fetchWithValidatedRedirects(parsedUrl, {
-          signal: controller.signal,
-          headers: {
-            Accept: "text/html,text/plain,application/json;q=0.9,*/*;q=0.8",
-            "User-Agent": "chat-gun/0.1",
+        const response = await fetchWithValidatedRedirects(
+          url,
+          {
+            signal: controller.signal,
+            headers: {
+              Accept: "text/html,text/plain,application/json;q=0.9,*/*;q=0.8",
+              "User-Agent": "chat-gun/0.1",
+            },
           },
-        });
+          WEB_FETCH_EGRESS_POLICY,
+          { allowedPorts: getAllowedPorts() }
+        );
 
         if (!response.ok) {
           throw new Error(`${response.status} ${response.statusText}`);
@@ -266,7 +148,7 @@ export const webFetchTool = tool(
         const contentLimit = clampMaxCharacters(maxCharacters);
 
         return [
-          `Fetched URL: ${parsedUrl.toString()}`,
+          `Fetched URL: ${url}`,
           `Content-Type: ${contentType || "unknown"}`,
           metadata.title ? `Title: ${metadata.title}` : undefined,
           metadata.description ? `Description: ${metadata.description}` : undefined,
@@ -279,6 +161,7 @@ export const webFetchTool = tool(
         clearTimeout(timeout);
       }
     } catch (error) {
+      if (error instanceof EgressPolicyError) throw error;
       return `Error: web_fetch failed - ${
         error instanceof Error ? error.message : String(error)
       }`;

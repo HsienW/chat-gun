@@ -4,7 +4,14 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
 import { defaultToolPolicy } from "../platform/tool-governance.js";
+import {
+  ExecutionProfileRegistry,
+  type EgressRequirements,
+  type ExecutionProfile,
+} from "../runtime/tool-dispatch/execution-profile.js";
 import type { RuntimeSchema } from "../runtime/tool-dispatch/runtime-tool-descriptor.js";
+import type { SecretReference } from "../runtime/tool-dispatch/secret-broker.js";
+import { PRODUCTION_EGRESS_REQUIREMENTS } from "../runtime/tool-dispatch/production-egress-policies.js";
 import {
   RuntimeToolDescriptorRegistry,
   type RuntimeToolDescriptor,
@@ -25,6 +32,16 @@ import { webSearchTool } from "./web-search.js";
 
 export const LOCAL_RUNTIME_TOOL_VERSION = "1.0";
 
+const LOCAL_PROFILE_ID_PREFIX = "local-read-only";
+const LOCAL_EGRESS_REQUIREMENTS: Readonly<Record<string, EgressRequirements>> =
+  PRODUCTION_EGRESS_REQUIREMENTS;
+
+export const TAVILY_SECRET_REFERENCE: SecretReference = {
+  secretRef: "env:TAVILY_API_KEY",
+  secretName: "TAVILY_API_KEY",
+  scope: "tool:web_search",
+};
+
 export const LOCAL_PRODUCTION_TOOLS = [
   calculatorTool,
   webSearchTool,
@@ -32,6 +49,48 @@ export const LOCAL_PRODUCTION_TOOLS = [
   weatherTool,
   weatherForecastTool,
 ] as const satisfies readonly StructuredToolInterface[];
+
+function localProfileId(toolName: string): string {
+  return `${LOCAL_PROFILE_ID_PREFIX}:${toolName}`;
+}
+
+function createTrustedLocalProfile(toolName: string): ExecutionProfile {
+  const egressRequirements = LOCAL_EGRESS_REQUIREMENTS[toolName];
+  return {
+    profileVersion: "1.0",
+    mode: "trusted_in_process",
+    filesystem: { roots: [], writeMode: "read_only" },
+    process: { creation: "deny" },
+    resources: {
+      cpuTimeMs: 15_000,
+      memoryBytes: 256 * 1024 * 1024,
+      diskBytes: 0,
+      wallClockMs: 30_000,
+    },
+    egress: {
+      destinations: egressRequirements?.destinations ?? [],
+      protocols: egressRequirements?.protocols ?? [],
+      dns: "resolve_and_connect",
+    },
+    env: {
+      allowedVariables:
+        toolName === "web_search" ? ["TAVILY_API_KEY"] : [],
+    },
+    binaries: { allowed: [], runtimeImages: [] },
+    output: { maxBytes: 24_000, artifactHandling: "inline" },
+  };
+}
+
+export function createLocalExecutionProfileRegistry(): ExecutionProfileRegistry {
+  const registry = new ExecutionProfileRegistry();
+  for (const tool of LOCAL_PRODUCTION_TOOLS) {
+    registry.register(
+      { profileId: localProfileId(tool.name), profileVersion: "1.0" },
+      createTrustedLocalProfile(tool.name)
+    );
+  }
+  return registry;
+}
 
 function isRuntimeSchema(value: unknown): value is RuntimeSchema<unknown> {
   return (
@@ -98,6 +157,16 @@ export function createLocalRuntimeToolDescriptors(): RuntimeToolDescriptor<
         retryableCategories: [...DEFAULT_RETRY_POLICY.retryableCategories],
       },
       interruptBehavior: "cancel_safe" as const,
+      executionProfileRef: {
+        profileId: localProfileId(tool.name),
+        profileVersion: "1.0" as const,
+      },
+      ...(LOCAL_EGRESS_REQUIREMENTS[tool.name]
+        ? { egressRequirements: LOCAL_EGRESS_REQUIREMENTS[tool.name] }
+        : {}),
+      ...(tool.name === "web_search"
+        ? { secretRequirements: [TAVILY_SECRET_REFERENCE] }
+        : {}),
     };
   });
 }
@@ -131,12 +200,44 @@ export interface ExposedMcpRuntimeTools {
   tools: readonly StructuredToolInterface[];
 }
 
+export interface McpServerExecutionPolicy {
+  serverName: string;
+  profileId: string;
+  profile: ExecutionProfile;
+  secretRequirements?: readonly SecretReference[];
+}
+
+export interface McpRuntimeExecutionRegistration {
+  profileRegistry: ExecutionProfileRegistry;
+  serverPolicies: readonly McpServerExecutionPolicy[];
+}
+
 export function registerMcpRuntimeToolDescriptors(
   registry: RuntimeToolDescriptorRegistry,
   servers: readonly ExposedMcpRuntimeTools[],
-  riskDescriptors: readonly McpToolRiskDescriptorV1[]
+  riskDescriptors: readonly McpToolRiskDescriptorV1[],
+  execution?: McpRuntimeExecutionRegistration
 ): void {
+  const executionPolicyByServer = new Map<string, McpServerExecutionPolicy>();
+  for (const policy of execution?.serverPolicies ?? []) {
+    if (policy.profile.mode !== "isolated_process") {
+      throw new Error(`MCP server profile must use isolated_process: ${policy.serverName}`);
+    }
+    if (executionPolicyByServer.has(policy.serverName)) {
+      throw new Error(`Duplicate MCP server execution policy: ${policy.serverName}`);
+    }
+    executionPolicyByServer.set(policy.serverName, policy);
+    execution?.profileRegistry.register(
+      { profileId: policy.profileId, profileVersion: policy.profile.profileVersion },
+      policy.profile
+    );
+  }
+
   for (const { serverName, tools } of servers) {
+    const executionPolicy = executionPolicyByServer.get(serverName);
+    if (execution !== undefined && executionPolicy === undefined) {
+      throw new Error(`Missing MCP server execution policy: ${serverName}`);
+    }
     for (const tool of tools) {
       const riskDescriptor = findMcpToolRiskDescriptor(
         riskDescriptors,
@@ -166,6 +267,21 @@ export function registerMcpRuntimeToolDescriptors(
           retryableCategories: [...DEFAULT_RETRY_POLICY.retryableCategories],
         },
         interruptBehavior: isReadOnly ? "cancel_safe" : "reconcile_first",
+        ...(executionPolicy
+          ? {
+              executionProfileRef: {
+                profileId: executionPolicy.profileId,
+                profileVersion: executionPolicy.profile.profileVersion,
+              },
+              egressRequirements: {
+                destinations: executionPolicy.profile.egress.destinations,
+                protocols: executionPolicy.profile.egress.protocols,
+              },
+              ...(executionPolicy.secretRequirements
+                ? { secretRequirements: executionPolicy.secretRequirements }
+                : {}),
+            }
+          : {}),
         ...(isReadOnly
           ? {}
           : {

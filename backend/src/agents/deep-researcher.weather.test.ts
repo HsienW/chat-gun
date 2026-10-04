@@ -2,11 +2,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { deepResearcherWeatherTestInternals } from "./deep-researcher.js";
+import { installEgressPolicyTestTransport } from "../runtime/tool-dispatch/egress-policy.testing.js";
 import {
   getConfiguredLlmCapabilities,
   llmGateway,
 } from "../platform/llm-gateway.js";
 import type { WeatherToolResult } from "../tools/weather-types.js";
+
+installEgressPolicyTestTransport();
 
 vi.mock("../tools/authorization/tool-authorization.js", async (importOriginal) => {
   const actual = await importOriginal<
@@ -2112,7 +2115,7 @@ describe("Deep Research weather structured result integration", () => {
     expect(logs).toContain("weather.llm.diagnostic");
     expect(logs).toContain('"phase":"planner_extraction"');
     expect(logs).toContain('"plannerJson"');
-    expect(logs).toContain("[redacted]");
+    expect(logs).not.toContain('"apiKey"');
     expect(logs).not.toContain("sk-secret-value");
   });
 

@@ -9,6 +9,11 @@ import {
 } from "../platform/errors.js";
 import { auditLogger, recordMetric } from "../platform/observability.js";
 import { configureNetwork } from "../platform/network.js";
+import {
+  EgressPolicyError,
+  fetchWithValidatedRedirects,
+} from "../runtime/tool-dispatch/egress-policy.js";
+import { WEATHER_EGRESS_POLICY } from "../runtime/tool-dispatch/production-egress-policies.js";
 
 import { OpenMeteoGeocodingProvider } from "./geocoding/open-meteo-provider.js";
 import { resolveLocation, DEFAULT_RESOLVER_OPTIONS } from "./geocoding/location-resolver.js";
@@ -255,12 +260,16 @@ async function fetchJsonWithTimeout<T>(url: URL, timeoutMs: number, externalSign
   }
 
   try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        "User-Agent": "chat-gun/0.1",
+    const response = await fetchWithValidatedRedirects(
+      url,
+      {
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "chat-gun/0.1",
+        },
       },
-    });
+      WEATHER_EGRESS_POLICY
+    );
 
     if (!response.ok) {
       throw new Error(`${response.status} ${response.statusText}`);
@@ -268,6 +277,7 @@ async function fetchJsonWithTimeout<T>(url: URL, timeoutMs: number, externalSign
 
     return (await response.json()) as T;
   } catch (error) {
+    if (error instanceof EgressPolicyError) throw error;
     if (error instanceof DOMException && error.name === "AbortError") {
       if (externalSignal?.aborted) {
         throw getFetchAbortError(externalSignal);

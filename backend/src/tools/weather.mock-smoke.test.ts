@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { installEgressPolicyTestTransport } from "../runtime/tool-dispatch/egress-policy.testing.js";
 import { weatherTool } from "./weather.js";
 import type { WeatherToolResult } from "./weather-types.js";
+
+installEgressPolicyTestTransport();
 
 // NOTE: This file implements mock smoke acceptance for the OpenSpec manual acceptance
 // matrix (scenarios 9.1-9.13).  Both geocoding and forecast providers are mocked.

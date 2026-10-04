@@ -98,7 +98,7 @@ describe("tool dispatch pipeline feature flags", () => {
       ? getGovernedToolExecutor(calculator)
       : undefined;
 
-    const outcome = await executor?.executeTyped(
+    const outcome = await executor?.executeAuthorizedTyped?.(
       { expression: "2 + 2" },
       {
         configurable: {

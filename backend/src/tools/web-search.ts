@@ -1,8 +1,14 @@
 import { tool } from "@langchain/core/tools";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 
-import { getEnv } from "../platform/env.js";
 import { configureNetwork } from "../platform/network.js";
+import {
+  EgressPolicyError,
+  fetchWithValidatedRedirects,
+} from "../runtime/tool-dispatch/egress-policy.js";
+import { WEB_SEARCH_EGRESS_POLICY } from "../runtime/tool-dispatch/production-egress-policies.js";
+import { readResolvedSecret } from "../runtime/tool-dispatch/secret-broker.js";
 
 configureNetwork();
 
@@ -77,12 +83,16 @@ async function postJson<T>(url: URL, body: unknown, headers: Record<string, stri
   const timeout = setTimeout(() => controller.abort(), 15_000);
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      signal: controller.signal,
-      headers,
-      body: JSON.stringify(body),
-    });
+    const response = await fetchWithValidatedRedirects(
+      url,
+      {
+        method: "POST",
+        signal: controller.signal,
+        headers,
+        body: JSON.stringify(body),
+      },
+      WEB_SEARCH_EGRESS_POLICY
+    );
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
@@ -137,8 +147,11 @@ function formatResults(results: NormalizedSearchResult[]): string {
 }
 
 export const webSearchTool = tool(
-  async ({ query, count, freshness, format, searchDepth, topic }) => {
-    const apiKey = getEnv("TAVILY_API_KEY");
+  async (
+    { query, count, freshness, format, searchDepth, topic },
+    config?: RunnableConfig
+  ) => {
+    const apiKey = readResolvedSecret(config, "env:TAVILY_API_KEY");
     const requestedFormat = format ?? "text";
     const selectedTopic = topic ?? "general";
 
@@ -209,6 +222,7 @@ export const webSearchTool = tool(
         .filter((part) => part !== undefined && part.length > 0)
         .join("\n");
     } catch (error) {
+      if (error instanceof EgressPolicyError) throw error;
       const message = `Error: web_search failed - ${
         error instanceof Error ? error.message : String(error)
       }`;

@@ -11,7 +11,11 @@ import type { AuthorizationConfirmationStore } from "../runtime/authorization/co
 import type { InterruptManifestRepository } from "../runtime/recovery/interrupt-manifest-repository.js";
 import { createRuntimeToolDispatchPipeline } from "../runtime/tool-dispatch/pipeline.js";
 import type { RuntimeToolDispatchPipelineDependencies } from "../runtime/tool-dispatch/pipeline.js";
+import { ExecutionProfileEnforcer } from "../runtime/tool-dispatch/execution-profile.js";
+import type { SandboxRunnerPort } from "../runtime/tool-dispatch/execution-profile.js";
+import { EnvironmentSecretBroker } from "../runtime/tool-dispatch/secret-broker.js";
 import {
+  createLocalExecutionProfileRegistry,
   createLocalRuntimeToolDescriptorRegistry,
   LOCAL_PRODUCTION_TOOLS,
 } from "./production-runtime-tool-descriptors.js";
@@ -24,6 +28,7 @@ const PIPELINE_FLAG_BY_SOURCE = {
 
 export interface LoadAgentToolsOptions {
   includeMcp?: boolean;
+  sandboxRunner?: SandboxRunnerPort;
   dispatchPipelineDependencies?: Omit<
     RuntimeToolDispatchPipelineDependencies,
     "registry"
@@ -71,18 +76,38 @@ export async function loadAgentToolRuntime(
   } =
     createRuntimeToolAuthorizationComposition();
   const descriptorRegistry = createLocalRuntimeToolDescriptorRegistry();
+  const profileRegistry = createLocalExecutionProfileRegistry();
+  const executionProfileEnforcer =
+    options.dispatchPipelineDependencies?.executionProfileEnforcer ??
+    new ExecutionProfileEnforcer({
+      descriptorRegistry,
+      profileRegistry,
+      runner: options.sandboxRunner,
+      secretBroker: new EnvironmentSecretBroker({
+        references: {
+          "env:TAVILY_API_KEY": "TAVILY_API_KEY",
+          "env:BRAVE_API_KEY": "BRAVE_API_KEY",
+        },
+      }),
+      isEnabled: () =>
+        process.env.TOOL_EXECUTION_PROFILE_ENFORCEMENT_ENABLED === "true",
+    });
   const dispatchPipeline = isToolDispatchPipelineEnabled(source)
     ? createRuntimeToolDispatchPipeline({
         ...options.dispatchPipelineDependencies,
         registry: descriptorRegistry,
+        executionProfileEnforcer,
       })
     : undefined;
-  const governanceOptions: ToolGovernanceOptions | undefined = dispatchPipeline
-    ? {
+  const governanceOptions: ToolGovernanceOptions = {
+    executionProfileEnforcer,
+    ...(dispatchPipeline
+      ? {
         createExecutor: (tool, defaultExecutor) =>
           dispatchPipeline.createExecutor(tool.name, defaultExecutor),
-      }
-    : undefined;
+        }
+      : {}),
+  };
   const localTools = applyToolGovernance(
     [...LOCAL_PRODUCTION_TOOLS],
     authorization,
@@ -92,7 +117,14 @@ export async function loadAgentToolRuntime(
     options.includeMcp ?? false,
     authorization,
     mcpRiskDescriptors,
-    { descriptorRegistry, dispatchPipeline }
+    {
+      descriptorRegistry,
+      profileRegistry,
+      dispatchPipeline,
+      executionProfileEnforcer,
+      isExecutionProfileEnforcementEnabled: () =>
+        process.env.TOOL_EXECUTION_PROFILE_ENFORCEMENT_ENABLED === "true",
+    }
   );
   const tools = [...localTools, ...mcpTools];
   await auditToolLoad(source, tools);

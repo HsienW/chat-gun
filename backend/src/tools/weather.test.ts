@@ -2,6 +2,7 @@
 // Tests weather tool structured result contract, status handling, and error conditions.
 
 import { afterEach, describe, it, expect, vi } from "vitest";
+import { installEgressPolicyTestTransport } from "../runtime/tool-dispatch/egress-policy.testing.js";
 import { describeWeatherCode, describeWindDirection, getWeatherConfig, weatherForecastTool, weatherTool } from "./weather.js";
 import {
   WeatherToolResult,
@@ -11,6 +12,8 @@ import {
   WeatherErrorResult,
   WeatherForecastResult,
 } from "./weather-types.js";
+
+installEgressPolicyTestTransport();
 
 function jsonResponse(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), {
