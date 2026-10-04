@@ -4,6 +4,7 @@ import type { Pool } from "pg";
 
 import type { Queryable } from "../persistence/rows.js";
 import type { GovernedToolOutcome } from "./governed-outcome.js";
+import type { ExecutionProfileEvidence, ExecutionProfileTerminationCause } from "../tool-dispatch/execution-profile.js";
 import type {
   BusinessEffectKey,
   ReplayKey,
@@ -58,6 +59,11 @@ export interface ToolExecutionRecord {
   toolName: string;
   toolVersion: string;
   decisionId?: string;
+  executionProfileVersion?: string;
+  effectiveCapabilities?: ExecutionProfileEvidence["effectiveCapabilities"];
+  secretRefsUsed?: string[];
+  egressDecision?: ExecutionProfileEvidence["egressDecision"];
+  terminationCause?: ExecutionProfileTerminationCause;
 }
 
 export interface CommittedToolExecutionReference {
@@ -83,6 +89,7 @@ export interface PrepareSideEffectInput {
   externalSystemNamespace?: string;
   externalOperationId?: string;
   expiresAt?: string;
+  securityEvidence?: ExecutionProfileEvidence;
 }
 
 export type PrepareSideEffectResult =
@@ -133,6 +140,7 @@ export interface BusinessEffectLedger {
     expectedStatus: ToolExecutionStatus;
     nextStatus: ToolExecutionStatus;
     resultRef?: string;
+    terminationCause?: ExecutionProfileTerminationCause;
   }): Promise<void>;
   transitionBusinessEffect(input: {
     businessEffectId: string;
@@ -145,6 +153,7 @@ export interface BusinessEffectLedger {
     toolExecutionId: string;
     expectedExecutionStatus: ToolExecutionStatus;
     resultRef: string;
+    terminationCause?: ExecutionProfileTerminationCause;
     businessEffectId: string;
     expectedEffectState: BusinessEffectCommitState;
     externalSystemNamespace?: string;
@@ -189,6 +198,11 @@ interface ToolExecutionRow extends Record<string, unknown> {
   tool_name: string;
   tool_version: string;
   decision_id: string | null;
+  execution_profile_version: string | null;
+  effective_capabilities: ExecutionProfileEvidence["effectiveCapabilities"] | null;
+  secret_refs_used: string[] | null;
+  egress_decision: ExecutionProfileEvidence["egressDecision"];
+  termination_cause: ExecutionProfileTerminationCause | null;
 }
 
 const BUSINESS_EFFECT_COLUMNS = `
@@ -199,7 +213,9 @@ const BUSINESS_EFFECT_COLUMNS = `
 const TOOL_EXECUTION_COLUMNS = `
   tool_execution_id, business_effect_id, replay_key, request_id, thread_id,
   run_id, task_id, step_id, tool_name, tool_version, call_index, status,
-  request_hash, result_ref, decision_id, created_at, updated_at
+  request_hash, result_ref, decision_id, execution_profile_version,
+  effective_capabilities, secret_refs_used, egress_decision, termination_cause,
+  created_at, updated_at
 `;
 
 function toOptionalIsoString(value: string | Date | null): string | undefined {
@@ -256,6 +272,15 @@ function mapToolExecution(row: ToolExecutionRow): ToolExecutionRecord {
     toolName: row.tool_name,
     toolVersion: row.tool_version,
     ...(row.decision_id ? { decisionId: row.decision_id } : {}),
+    ...(row.execution_profile_version
+      ? { executionProfileVersion: row.execution_profile_version }
+      : {}),
+    ...(row.effective_capabilities
+      ? { effectiveCapabilities: row.effective_capabilities }
+      : {}),
+    ...(row.secret_refs_used ? { secretRefsUsed: row.secret_refs_used } : {}),
+    ...(row.egress_decision ? { egressDecision: row.egress_decision } : {}),
+    ...(row.termination_cause ? { terminationCause: row.termination_cause } : {}),
   };
 }
 
@@ -365,9 +390,12 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
           `INSERT INTO tool_executions (
              tool_execution_id, business_effect_id, replay_key, request_id,
              thread_id, run_id, task_id, step_id, tool_name, tool_version,
-             call_index, status, request_hash, result_ref
+             call_index, status, request_hash, result_ref,
+             execution_profile_version, effective_capabilities,
+             secret_refs_used, egress_decision, termination_cause
            ) VALUES (
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+             $15, $16, $17, $18, $19
            )
            ON CONFLICT (replay_key) DO NOTHING
            RETURNING ${TOOL_EXECUTION_COLUMNS}`,
@@ -386,6 +414,12 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
             executionStatus,
             input.requestHash,
             resultRef,
+            input.securityEvidence?.executionProfileVersion ?? null,
+            input.securityEvidence?.effectiveCapabilities ?? null,
+            input.securityEvidence?.secretRefsUsed ?? null,
+            input.securityEvidence?.egressDecision ?? null,
+            reusableExecution?.termination_cause ??
+              (executionStatus === "committed" ? "completed" : null),
           ]
         );
         const executionRow =
@@ -488,11 +522,16 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
     expectedStatus: ToolExecutionStatus;
     nextStatus: ToolExecutionStatus;
     resultRef?: string;
+    terminationCause?: ExecutionProfileTerminationCause;
   }): Promise<void> {
     const result = await this.db.query(
       `UPDATE tool_executions
        SET status = $3,
            result_ref = CASE WHEN $4::text IS NULL THEN result_ref ELSE $4 END,
+           termination_cause = CASE
+             WHEN $5::text IS NULL THEN termination_cause
+             ELSE $5
+           END,
            updated_at = NOW()
        WHERE tool_execution_id = $1 AND status = $2`,
       [
@@ -500,6 +539,7 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
         input.expectedStatus,
         input.nextStatus,
         input.resultRef ?? null,
+        input.terminationCause ?? null,
       ]
     );
     if ((result.rowCount ?? 0) !== 1) {
@@ -539,6 +579,7 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
     toolExecutionId: string;
     expectedExecutionStatus: ToolExecutionStatus;
     resultRef: string;
+    terminationCause?: ExecutionProfileTerminationCause;
     businessEffectId: string;
     expectedEffectState: BusinessEffectCommitState;
     externalSystemNamespace?: string;
@@ -547,9 +588,15 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
     await this.db.withTransaction(async (transaction) => {
       const executionResult = await transaction.query(
         `UPDATE tool_executions
-         SET status = 'committed', result_ref = $3, updated_at = NOW()
+         SET status = 'committed', result_ref = $3,
+             termination_cause = $4, updated_at = NOW()
          WHERE tool_execution_id = $1 AND status = $2`,
-        [input.toolExecutionId, input.expectedExecutionStatus, input.resultRef]
+        [
+          input.toolExecutionId,
+          input.expectedExecutionStatus,
+          input.resultRef,
+          input.terminationCause ?? "completed",
+        ]
       );
       if ((executionResult.rowCount ?? 0) !== 1) {
         throw new SideEffectStateConflictError(

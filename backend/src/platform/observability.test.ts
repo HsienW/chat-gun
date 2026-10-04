@@ -25,6 +25,22 @@ afterEach(async () => {
 });
 
 describe("audit logger selection", () => {
+  it("redacts secret-bearing console audit fields", async () => {
+    const secretValue = "console-secret-value";
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    await new ConsoleAuditLogger().record("tool.secret", {
+      toolName: "web_search",
+      credential: secretValue,
+      nested: { apiKey: secretValue },
+    });
+
+    expect(JSON.stringify(info.mock.calls)).not.toContain(secretValue);
+    expect(info).toHaveBeenCalledWith(
+      "[audit] tool.secret",
+      JSON.stringify({ toolName: "web_search", nested: {} })
+    );
+  });
   it("uses console by default", () => {
     delete process.env.AUDIT_BACKEND;
 

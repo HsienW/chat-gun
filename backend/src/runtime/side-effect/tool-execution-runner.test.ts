@@ -384,6 +384,34 @@ describe("ToolExecutionRunner", () => {
     expect(executor.executeTyped).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    "EGRESS_DENIED",
+    "SANDBOX_CAPABILITY_INSUFFICIENT",
+    "SANDBOX_STARTUP_FAILED",
+    "RESOURCE_EXHAUSTED",
+  ])("does not retry security or resource policy failure %s", async (errorCode) => {
+    const executor = createExecutor([
+      { type: "failed_not_committed", errorCode },
+      { type: "succeeded", result: { operationId: "unsafe-retry" } },
+    ]);
+    const runner = createRunner(createLedger(), createResultStore());
+
+    await expect(
+      runner.execute({
+        ...runInput(executor, undefined, createBudget(3)),
+        retryPolicy: {
+          maxAttempts: 3,
+          maxElapsedMs: 60_000,
+          retryableCategories: ["timeout", "rate_limit", "server_error"],
+          backoffStrategy: "fixed",
+          jitter: false,
+        },
+        retryAfterMaxMs: 5_000,
+      })
+    ).resolves.toEqual({ type: "failed", errorCode });
+    expect(executor.executeTyped).toHaveBeenCalledOnce();
+  });
+
   it("stops read-only retry when backoff is aborted", async () => {
     const controller = new AbortController();
     const executor = createExecutor([
@@ -520,6 +548,7 @@ describe("ToolExecutionRunner", () => {
       toolExecutionId: "execution-1",
       expectedExecutionStatus: "executing",
       resultRef: "result-ref-1",
+      terminationCause: "completed",
       businessEffectId: "effect-1",
       expectedEffectState: "prepared",
     });
@@ -842,6 +871,12 @@ describe("ToolExecutionRunner", () => {
     expect(ledger.recordAttempt).toHaveBeenCalledOnce();
     expect(executor.executeAuthorizedTyped).toHaveBeenCalledOnce();
     expect(executor.authorizeTyped).toHaveBeenCalledOnce();
+    expect(ledger.transitionExecution).toHaveBeenLastCalledWith({
+      toolExecutionId: "execution-1",
+      expectedStatus: "executing",
+      nextStatus: "failed",
+      terminationCause: "failed_not_committed",
+    });
   });
 
   it("retries a reconciled not_committed outcome with a new physical attempt", async () => {
@@ -918,6 +953,7 @@ describe("ToolExecutionRunner", () => {
       toolExecutionId: "execution-1",
       expectedStatus: "unknown",
       nextStatus: "manual_intervention_required",
+      terminationCause: "ambiguous_after_dispatch",
     });
   });
 

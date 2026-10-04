@@ -5,8 +5,12 @@ import {
   executionContextSchema,
   type ExecutionContext,
 } from "../execution-context/execution-context.js";
-import type { GovernedToolOutcome } from "../side-effect/governed-outcome.js";
+import {
+  getToolExecutionTerminationCause,
+  type GovernedToolOutcome,
+} from "../side-effect/governed-outcome.js";
 import type { RuntimeToolDescriptor } from "./runtime-tool-descriptor.js";
+import type { ExecutionProfileEvidence, ExecutionProfileTerminationCause } from "./execution-profile.js";
 
 const dispatchStateSchema = z.enum(["before", "after", "unknown"]);
 
@@ -74,6 +78,15 @@ export const structuredToolResultEnvelopeSchema = z
       })
       .strict(),
     outcome: governedToolOutcomeSchema,
+    executionProfileVersion: z.string().min(1).nullable().optional(),
+    effectiveCapabilities: z.record(z.unknown()).nullable().optional(),
+    secretRefsUsed: z.array(z.string()).nullable().optional(),
+    egressDecision: z
+      .object({ decision: z.enum(["allow", "deny"]), reasonCode: z.string() })
+      .strict()
+      .nullable()
+      .optional(),
+    terminationCause: z.string().nullable().optional(),
     emittedAt: z.string().datetime(),
   })
   .strict();
@@ -95,6 +108,11 @@ export interface StructuredToolResultEnvelope<TResult = unknown> {
     readOnly: boolean;
   };
   outcome: GovernedToolOutcome<TResult>;
+  executionProfileVersion?: string | null;
+  effectiveCapabilities?: ExecutionProfileEvidence["effectiveCapabilities"] | null;
+  secretRefsUsed?: string[] | null;
+  egressDecision?: ExecutionProfileEvidence["egressDecision"];
+  terminationCause?: ExecutionProfileTerminationCause | null;
   emittedAt: string;
 }
 
@@ -102,6 +120,8 @@ export interface CreateStructuredToolResultInput<TResult> {
   executionContext: ExecutionContext;
   descriptor: RuntimeToolDescriptor<unknown, TResult>;
   outcome: GovernedToolOutcome<TResult>;
+  securityEvidence?: ExecutionProfileEvidence;
+  terminationCause?: ExecutionProfileTerminationCause;
   emittedAt?: string;
 }
 
@@ -130,6 +150,16 @@ export function createStructuredToolResultEnvelope<TResult>(
       readOnly: input.descriptor.isReadOnly,
     },
     outcome: input.outcome,
+    ...(input.securityEvidence
+      ? {
+          executionProfileVersion: input.securityEvidence.executionProfileVersion,
+          effectiveCapabilities: input.securityEvidence.effectiveCapabilities,
+          secretRefsUsed: input.securityEvidence.secretRefsUsed,
+          egressDecision: input.securityEvidence.egressDecision,
+        }
+      : {}),
+    terminationCause:
+      input.terminationCause ?? getToolExecutionTerminationCause(input.outcome),
     emittedAt: input.emittedAt ?? new Date().toISOString(),
   };
 

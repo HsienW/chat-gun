@@ -16,6 +16,7 @@ import {
 import { classifyExecutionManifestCompatibility } from "../recovery/execution-manifest.js";
 import type { ExecutionManifestRef } from "../recovery/interrupt-manifest.js";
 import type { InterruptManifestRepository } from "../recovery/interrupt-manifest-repository.js";
+import { redactCheckpointUpdate } from "../persistence/checkpoint-redaction.js";
 import {
   confirmationRequiredDescriptorSchema,
   parseConfirmationResume,
@@ -69,11 +70,14 @@ function toolMessage(
   call: AuthorizationGraphToolCall,
   content: unknown
 ): ToolMessage {
+  const redactedContent = redactCheckpointUpdate(content);
   return new ToolMessage({
     name: call.toolName,
     tool_call_id: call.toolCallId,
     content:
-      typeof content === "string" ? content : JSON.stringify(content ?? null),
+      typeof redactedContent === "string"
+        ? redactedContent
+        : JSON.stringify(redactedContent ?? null),
   });
 }
 

@@ -70,6 +70,7 @@ import {
   ToolSchedulingError,
   type ToolDispatchScheduler,
 } from "./scheduler.js";
+import type { ExecutionProfileEnforcerPort, ExecutionProfileEvidence } from "./execution-profile.js";
 
 export interface ToolDispatchTaskStepAdapter {
   start(
@@ -102,6 +103,7 @@ export interface ToolDispatchObservability {
 
 export interface RuntimeToolDispatchPipelineDependencies {
   registry: RuntimeToolDescriptorRegistry;
+  executionProfileEnforcer?: ExecutionProfileEnforcerPort;
   pool?: ReturnType<typeof getPool>;
   toolExecutionRunner?: Pick<ToolExecutionRunner, "execute">;
   retryBudgetFactory?: (stepId: string, policy: RetryPolicy) => RetryBudget;
@@ -134,6 +136,14 @@ const AMBIGUOUS_DEFERRED_CODES = new Set([
   "SIDE_EFFECT_RECONCILIATION_REQUIRED",
   "SIDE_EFFECT_PERSISTENCE_UNCERTAIN",
   "SIDE_EFFECT_OUTPUT_VALIDATION_FAILED",
+]);
+
+const PROFILE_DENY_CODES = new Set([
+  "EXECUTION_PROFILE_MISSING",
+  "EXECUTION_PROFILE_VERSION_UNSUPPORTED",
+  "EXECUTION_PROFILE_INVALID",
+  "SANDBOX_RUNNER_UNAVAILABLE",
+  "SANDBOX_CAPABILITY_INSUFFICIENT",
 ]);
 
 function canonicalize(value: unknown): unknown {
@@ -276,6 +286,12 @@ function mapRunnerResult(
     return { type: "failed_not_committed", errorCode: result.errorCode };
   }
   if (result.type === "failed") {
+    if (PROFILE_DENY_CODES.has(result.errorCode)) {
+      return {
+        type: "rejected_before_dispatch",
+        errorCode: result.errorCode,
+      };
+    }
     return {
       type: "failed_not_committed",
       errorCode: result.errorCode,
@@ -334,6 +350,32 @@ async function ignoreObservabilityFailure(
   } catch {
     // Exporters are best-effort after the durable execution outcome exists.
   }
+}
+
+function mergeExecutionConfig(base: unknown, update: unknown): unknown {
+  const baseRecord =
+    base !== null && typeof base === "object"
+      ? (base as Record<PropertyKey, unknown>)
+      : {};
+  const updateRecord =
+    update !== null && typeof update === "object"
+      ? (update as Record<PropertyKey, unknown>)
+      : {};
+  const baseConfigurable =
+    baseRecord.configurable !== null &&
+    typeof baseRecord.configurable === "object"
+      ? (baseRecord.configurable as Record<string, unknown>)
+      : {};
+  const updateConfigurable =
+    updateRecord.configurable !== null &&
+    typeof updateRecord.configurable === "object"
+      ? (updateRecord.configurable as Record<string, unknown>)
+      : {};
+  return {
+    ...baseRecord,
+    ...updateRecord,
+    configurable: { ...baseConfigurable, ...updateConfigurable },
+  };
 }
 
 async function recordLatency(
@@ -501,9 +543,43 @@ export function createRuntimeToolDispatchPipeline(
         errorCode: "TOOL_EXECUTION_CONTEXT_UNAVAILABLE",
       };
     }
+    let authorizationOutcome: GovernedAuthorizationOutcome;
+    try {
+      authorizationOutcome = authorizationAlreadyEvaluated
+        ? { type: "authorized" }
+        : await sourceExecutor.authorizeTyped(parsedInput.data, config);
+    } catch {
+      return {
+        type: "rejected_before_dispatch",
+        errorCode: "AUTHORIZATION_UNAVAILABLE",
+      };
+    }
+    if (authorizationOutcome.type !== "authorized") {
+      return authorizationOutcome;
+    }
+
+    let enforcedConfig = config;
+    let securityEvidence: ExecutionProfileEvidence | undefined;
+    if (dependencies.executionProfileEnforcer !== undefined) {
+      const enforcement = await dependencies.executionProfileEnforcer.enforce({
+        toolName: descriptor.toolName,
+        input: parsedInput.data,
+        config,
+      });
+      if (enforcement.type === "denied") {
+        return {
+          type: "rejected_before_dispatch",
+          errorCode: enforcement.errorCode,
+        };
+      }
+      enforcedConfig = enforcement.config;
+      if (enforcement.type === "allowed") {
+        securityEvidence = enforcement.evidence;
+      }
+    }
     const stepId = executionContext.stepId;
     const toolCallId = executionContext.toolCallId;
-    const signal = getAbortSignal(config);
+    const signal = getAbortSignal(enforcedConfig);
     const dispatchStartedAt = performance.now();
 
     try {
@@ -617,14 +693,16 @@ export function createRuntimeToolDispatchPipeline(
           };
         }
 
-        const runnerExecutor: GovernedToolExecutor<unknown, unknown> =
-          authorizationAlreadyEvaluated
-            ? {
-                executeTyped: sourceExecutor.executeAuthorizedTyped.bind(
-                  sourceExecutor
-                ),
-              }
-            : sourceExecutor;
+        const executeAuthorized = (runnerInput: unknown, runnerConfig?: unknown) =>
+          sourceExecutor.executeAuthorizedTyped(
+            runnerInput,
+            mergeExecutionConfig(enforcedConfig, runnerConfig)
+          );
+        const runnerExecutor: GovernedToolExecutor<unknown, unknown> = {
+          authorizeTyped: async () => authorizationOutcome,
+          executeAuthorizedTyped: executeAuthorized,
+          executeTyped: executeAuthorized,
+        };
         const retryPolicy =
           authorizationAlreadyEvaluated && !descriptor.isReadOnly
             ? { ...descriptor.retryPolicy, maxAttempts: 1 }
@@ -679,6 +757,7 @@ export function createRuntimeToolDispatchPipeline(
                 retryPolicy,
                 retryAfterMaxMs: runtimeConfig.toolRetryAfterMaxMs,
                 signal: stepLockLease.signal,
+                securityEvidence,
               });
             },
             { runId: executionContext.runId, signal: stepLockLease.signal }
@@ -716,6 +795,7 @@ export function createRuntimeToolDispatchPipeline(
           executionContext,
           descriptor,
           outcome: governedOutcome,
+          securityEvidence,
         });
 
         try {
@@ -735,6 +815,7 @@ export function createRuntimeToolDispatchPipeline(
               type: "ambiguous_after_dispatch",
               errorCode: "TASK_STEP_PERSISTENCE_FAILED_AFTER_DISPATCH",
             },
+            securityEvidence,
           });
           await Promise.allSettled([
             dependencies.taskStepAdapter.fail(executionContext, envelope),

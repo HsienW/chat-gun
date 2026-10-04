@@ -381,9 +381,15 @@ describePostgres("side-effect PostgreSQL integration", () => {
       toolExecutionId: prepared.execution.toolExecutionId,
       expectedExecutionStatus: "executing",
       resultRef: reference.resultRefId,
+      terminationCause: "completed",
       businessEffectId: prepared.businessEffect.businessEffectId,
       expectedEffectState: "prepared",
     });
+
+    const stored = await ledger.findExecutionByReplayKey(
+      prepared.execution.replayKey
+    );
+    expect(stored?.terminationCause).toBe("completed");
 
     await expect(
       resultStore.resolve({

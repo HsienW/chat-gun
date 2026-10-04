@@ -8,6 +8,7 @@ import { applyToolGovernance } from "../../platform/tool-governance.js";
 import type { AuthorizationConfirmationStore } from "./confirmation.js";
 import { createConfirmationRequiredDescriptor } from "./confirmation.js";
 import { ToolRiskRegistry } from "./tool-risk.js";
+import type { ExecutionProfileEnforcerPort } from "../tool-dispatch/execution-profile.js";
 import type { InterruptManifestRepository } from "../recovery/interrupt-manifest-repository.js";
 import {
   createToolAuthorizationGraphNodes,
@@ -42,6 +43,73 @@ const executionContext = {
 };
 
 describe("tool authorization confirmation graph adapter", () => {
+  it("uses the shared enforcement primitive in physicalDispatch", async () => {
+    const invoked = vi.fn(async () => "ok");
+    const source = tool(invoked, {
+      name: "read_file",
+      description: "reads a file",
+      schema: z.object({ path: z.string() }),
+    });
+    const enforcer: ExecutionProfileEnforcerPort = {
+      enforce: vi.fn(async ({ config }) => ({
+        type: "allowed" as const,
+        config,
+        evidence: {
+          executionProfileVersion: "1.0",
+          effectiveCapabilities: {
+            executionMode: "trusted_in_process" as const,
+          },
+          secretRefsUsed: [],
+          egressDecision: null,
+        },
+      })),
+    };
+    const [governed] = applyToolGovernance(
+      [source],
+      undefined,
+      { executionProfileEnforcer: enforcer }
+    );
+    const nodes = createToolAuthorizationGraphNodes({
+      tools: [governed],
+      confirmationStore: {
+        upsertPending: vi.fn(async () => undefined),
+        consume: vi.fn(),
+      },
+      interruptManifestRepository: {
+        create: vi.fn(),
+        findByInterruptId: vi.fn(),
+        consume: vi.fn(),
+        transitionStatus: vi.fn(),
+      },
+      executionManifest: {
+        manifestVersion: "1.0.0",
+        graphId: "mcp_agent",
+        graphConfigHash: "a".repeat(64),
+        schemaVersions: {
+          runtimeEventEnvelope: "1.0.0",
+          toolDescriptor: "1.0",
+          authorizationPolicy: "1.0",
+          normalizedInput: "1.0",
+        },
+      },
+    });
+
+    await nodes.physicalDispatch(
+      {
+        messages: [],
+        toolQueue: [],
+        activeToolCall: {
+          toolName: "read_file",
+          toolCallId: "call-1",
+          input: { path: "a.txt" },
+        },
+      },
+      { configurable: { execution_context: executionContext } }
+    );
+
+    expect(enforcer.enforce).toHaveBeenCalledOnce();
+    expect(invoked).toHaveBeenCalledOnce();
+  });
   it("interrupts and resumes on the same thread before one physical dispatch", async () => {
     const invoked = vi.fn(async ({ path }: { path: string }) => `wrote:${path}`);
     const source = tool(invoked, {
