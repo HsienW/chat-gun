@@ -18,7 +18,10 @@ import type { DecisionStore } from "../runtime/authorization/decision-store.js";
 import type { ConfirmationRequiredDescriptor } from "../runtime/authorization/confirmation.js";
 import type { PrincipalContext } from "../runtime/authorization/principal.js";
 import type { RuntimeScope } from "../runtime/authorization/scope.js";
-import { readExecutionCorrelation } from "../runtime/execution-context/read-execution-context.js";
+import {
+  readCanonicalExecutionContext,
+  readExecutionCorrelation,
+} from "../runtime/execution-context/read-execution-context.js";
 import { executionContextSchema, type ExecutionContext } from "../runtime/execution-context/execution-context.js";
 import type {
   ToolRiskPolicy,
@@ -26,6 +29,13 @@ import type {
 } from "../runtime/authorization/tool-risk.js";
 import { auditLogger, recordMetric } from "./observability.js";
 import { getOpikTracer } from "./tracing/opik/opik-tracer.js";
+import type {
+  ExecutionProfileEnforcerPort,
+  ExecutionProfileEvidence,
+} from "../runtime/tool-dispatch/execution-profile.js";
+import { EgressPolicyError } from "../runtime/tool-dispatch/egress-policy.js";
+import { runWithEgressDecisionCapture } from "../runtime/tool-dispatch/egress-policy.js";
+import { getToolExecutionTerminationCause } from "../runtime/side-effect/governed-outcome.js";
 
 export type {
   GovernedToolExecutor,
@@ -53,6 +63,7 @@ export interface ToolGovernanceOptions {
     tool: StructuredToolInterface,
     defaultExecutor: GovernedToolExecutor<unknown, unknown>
   ) => GovernedToolExecutor<unknown, unknown>;
+  executionProfileEnforcer?: ExecutionProfileEnforcerPort;
 }
 
 const DEFAULT_TOOL_TIMEOUT_MS = 15_000;
@@ -346,6 +357,9 @@ function mapExecutionError<TResult>(
   if (error instanceof GovernedDispatchError) {
     return { type: error.outcomeType, errorCode: error.errorCode };
   }
+  if (error instanceof EgressPolicyError) {
+    return { type: "failed_not_committed", errorCode: error.code };
+  }
   if (isToolInputValidationError(error)) {
     return {
       type: "rejected_before_dispatch",
@@ -520,7 +534,8 @@ export class GovernanceExecutor<TResult = unknown>
   constructor(
     private readonly sourceTool: StructuredToolInterface,
     private readonly policy: ToolPolicy,
-    private readonly authorization?: ToolAuthorizationGovernanceConfig
+    private readonly authorization?: ToolAuthorizationGovernanceConfig,
+    private readonly executionProfileEnforcer?: ExecutionProfileEnforcerPort
   ) {}
 
   async executeTyped(
@@ -558,11 +573,23 @@ export class GovernanceExecutor<TResult = unknown>
   ): Promise<GovernedToolOutcome<TResult>> {
     const startedAt = Date.now();
     const inputChars = serializeForLimit(input).length;
+    const executionContext = readCanonicalExecutionContext(config);
     const commonAuditPayload = {
       toolName: this.sourceTool.name,
       inputChars,
       timeoutMs: this.policy.timeoutMs,
       maxOutputChars: this.policy.maxOutputChars,
+      ...(executionContext
+        ? {
+            runId: executionContext.runId,
+            taskId: executionContext.taskId,
+            ...(executionContext.stepId ? { stepId: executionContext.stepId } : {}),
+            ...(executionContext.toolCallId
+              ? { toolCallId: executionContext.toolCallId }
+              : {}),
+            principalId: executionContext.principal.principalId,
+          }
+        : {}),
     };
 
     if (!this.policy.enabled) {
@@ -597,8 +624,31 @@ export class GovernanceExecutor<TResult = unknown>
 
     await auditToolEvent("tool.invoke.start", this.policy, commonAuditPayload);
     let wasDispatched = false;
+    let executionEvidence: ExecutionProfileEvidence | undefined;
     try {
-      const { stepId, toolCallId } = readExecutionCorrelation(config);
+      const enforcement = this.executionProfileEnforcer
+        ? await this.executionProfileEnforcer.enforce({
+            toolName: this.sourceTool.name,
+            input,
+            config,
+          })
+        : { type: "disabled" as const, config };
+      if (enforcement.type === "denied") {
+        await auditToolEvent("tool.blocked", this.policy, {
+          ...commonAuditPayload,
+          reasonCode: enforcement.errorCode,
+          terminationCause: enforcement.terminationCause,
+        });
+        return {
+          type: "rejected_before_dispatch",
+          errorCode: enforcement.errorCode,
+        };
+      }
+      const enforcedConfig = enforcement.config;
+      if (enforcement.type === "allowed") {
+        executionEvidence = enforcement.evidence;
+      }
+      const { stepId, toolCallId } = readExecutionCorrelation(enforcedConfig);
       const result = await getOpikTracer().withToolSpan(
         {
           toolName: this.sourceTool.name,
@@ -606,17 +656,60 @@ export class GovernanceExecutor<TResult = unknown>
           ...(toolCallId ? { toolCallId } : {}),
         },
         () =>
-          withTimeout(
+          runWithEgressDecisionCapture(
+            () => withTimeout(
             (signal) => {
               wasDispatched = true;
+              if (
+                enforcement.type === "allowed" &&
+                enforcement.executionPlan !== undefined
+              ) {
+                const executionContext = readCanonicalExecutionContext(enforcedConfig);
+                if (executionContext === undefined) {
+                  throw new GovernedDispatchError(
+                    "rejected_before_dispatch",
+                    "EXECUTION_CONTEXT_REQUIRED"
+                  );
+                }
+                const sandboxConfig = withGovernanceSignal(enforcedConfig, signal);
+                return enforcement.executionPlan.runner
+                  .run(
+                    {
+                      toolName: this.sourceTool.name,
+                      input,
+                      executionContext,
+                      config: sandboxConfig,
+                      signal,
+                    },
+                    enforcement.executionPlan.profile
+                  )
+                  .then((sandboxResult) => {
+                    if (sandboxResult.type === "succeeded") {
+                      return sandboxResult.result as TResult;
+                    }
+                    if (sandboxResult.type === "cancelled") {
+                      throw new GovernanceCancellationError("after");
+                    }
+                    throw new GovernedDispatchError(
+                      "failed_not_committed",
+                      sandboxResult.errorCode
+                    );
+                  });
+              }
               return this.sourceTool.invoke(
                 input as never,
-                withGovernanceSignal(config, signal) as never
+                withGovernanceSignal(enforcedConfig, signal) as never
               ) as Promise<TResult>;
             },
             this.policy.timeoutMs,
             this.sourceTool.name,
             externalSignal
+            ),
+            (decision) => {
+              if (enforcement.type === "allowed") {
+                enforcement.evidence.egressDecision = decision;
+              }
+            }
           ),
         input
       );
@@ -628,6 +721,8 @@ export class GovernanceExecutor<TResult = unknown>
       const durationMs = Date.now() - startedAt;
       await auditToolEvent("tool.invoke.success", this.policy, {
         ...commonAuditPayload,
+        ...executionEvidence,
+        terminationCause: "completed",
         outputChars: serializeForLimit(governedResult).length,
         durationMs,
       });
@@ -645,6 +740,8 @@ export class GovernanceExecutor<TResult = unknown>
       const durationMs = Date.now() - startedAt;
       await auditToolEvent("tool.invoke.failure", this.policy, {
         ...commonAuditPayload,
+        ...executionEvidence,
+        terminationCause: getToolExecutionTerminationCause(outcome),
         durationMs,
         outcomeType: outcome.type,
         ...(outcome.type === "cancelled"
@@ -686,7 +783,12 @@ function wrapToolWithGovernance(
     Object.create(Object.getPrototypeOf(sourceTool)) as StructuredToolInterface,
     sourceTool
   );
-  const defaultExecutor = new GovernanceExecutor(sourceTool, policy, authorization);
+  const defaultExecutor = new GovernanceExecutor(
+    sourceTool,
+    policy,
+    authorization,
+    options?.executionProfileEnforcer
+  );
   const executor =
     options?.createExecutor?.(sourceTool, defaultExecutor) ?? defaultExecutor;
   const governedInvoke = async (input: unknown, config?: unknown): Promise<unknown> => {

@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { RuntimeToolDescriptor } from "./runtime-tool-descriptor.js";
 import { RuntimeToolDescriptorRegistry } from "./runtime-tool-descriptor.js";
+import type { SecretReference } from "./secret-broker.js";
 
 const inputSchema = z.object({ value: z.string() }).strict();
 const outputSchema = z.string();
@@ -82,6 +83,52 @@ describe("RuntimeToolDescriptorRegistry", () => {
       toolName: "read_tool",
       toolVersion: "1.0",
     });
+  });
+
+  it("registers additive execution profile, egress, and secret declarations", () => {
+    const registry = new RuntimeToolDescriptorRegistry();
+    const secretRequirement: SecretReference = {
+      secretRef: "env:TAVILY_API_KEY",
+      secretName: "TAVILY_API_KEY",
+      scope: "tool:web_search",
+    };
+    const descriptor = createReadOnlyDescriptor({
+      executionProfileRef: {
+        profileId: "trusted-read-only",
+        profileVersion: "1.0",
+      },
+      egressRequirements: {
+        destinations: ["api.tavily.com"],
+        protocols: ["https"],
+      },
+      secretRequirements: [secretRequirement],
+    });
+
+    expect(() =>
+      registry.register(
+        { toolName: "read_tool", toolVersion: "1.0" },
+        descriptor
+      )
+    ).not.toThrow();
+    expect(registry.resolve("read_tool")).toMatchObject({
+      executionProfileRef: { profileVersion: "1.0" },
+      secretRequirements: [secretRequirement],
+    });
+  });
+
+  it("fails closed for malformed execution declarations received at runtime", () => {
+    const registry = new RuntimeToolDescriptorRegistry();
+    const descriptor = {
+      ...createReadOnlyDescriptor(),
+      executionProfileRef: { profileId: "trusted-read-only", profileVersion: "" },
+    } as unknown as RuntimeToolDescriptor<{ value: string }, string>;
+
+    expect(() =>
+      registry.register(
+        { toolName: "read_tool", toolVersion: "1.0" },
+        descriptor
+      )
+    ).toThrow("executionProfileRef.profileVersion");
   });
 
   it.each([

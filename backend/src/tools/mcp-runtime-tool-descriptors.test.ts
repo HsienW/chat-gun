@@ -3,6 +3,7 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 
 import { RuntimeToolDescriptorRegistry } from "../runtime/tool-dispatch/runtime-tool-descriptor.js";
+import { ExecutionProfileRegistry, type ExecutionProfile } from "../runtime/tool-dispatch/execution-profile.js";
 import type { McpToolRiskDescriptorV1 } from "./authorization/mcp-risk.js";
 import { registerMcpRuntimeToolDescriptors } from "./production-runtime-tool-descriptors.js";
 
@@ -16,11 +17,12 @@ function createTool(name: string) {
 
 function riskDescriptor(
   toolName: string,
-  riskTier: McpToolRiskDescriptorV1["riskTier"]
+  riskTier: McpToolRiskDescriptorV1["riskTier"],
+  serverName = "filesystem"
 ): McpToolRiskDescriptorV1 {
   return {
     schemaVersion: "1.0",
-    serverName: "filesystem",
+    serverName,
     toolName,
     riskTier,
     actions: [riskTier === "read" ? "tool:read" : "tool:write"],
@@ -30,6 +32,66 @@ function riskDescriptor(
 }
 
 describe("MCP runtime tool descriptors", () => {
+  it("registers isolated profiles and scoped Brave secret references", () => {
+    const registry = new RuntimeToolDescriptorRegistry();
+    const profileRegistry = new ExecutionProfileRegistry();
+    const isolatedProfile: ExecutionProfile = {
+      profileVersion: "1.0",
+      mode: "isolated_process",
+      filesystem: { roots: [], writeMode: "read_only" },
+      process: { creation: "allow" },
+      resources: {
+        cpuTimeMs: 5_000,
+        memoryBytes: 128 * 1024 * 1024,
+        diskBytes: 16 * 1024 * 1024,
+        wallClockMs: 15_000,
+      },
+      egress: {
+        destinations: ["api.search.brave.com"],
+        protocols: ["https"],
+        dns: "resolve_and_connect",
+      },
+      env: { allowedVariables: ["BRAVE_API_KEY"] },
+      binaries: { allowed: ["node"], runtimeImages: ["mcp-brave-search"] },
+      output: { maxBytes: 64_000, artifactHandling: "inline" },
+    };
+
+    registerMcpRuntimeToolDescriptors(
+      registry,
+      [{ serverName: "brave_search", tools: [createTool("brave_web_search")] }],
+      [riskDescriptor("brave_web_search", "read", "brave_search")],
+      {
+        profileRegistry,
+        serverPolicies: [
+          {
+            serverName: "brave_search",
+            profileId: "mcp-isolated:brave_search",
+            profile: isolatedProfile,
+            secretRequirements: [
+              {
+                secretRef: "env:BRAVE_API_KEY",
+                secretName: "BRAVE_API_KEY",
+                scope: "mcp:brave_search",
+              },
+            ],
+          },
+        ],
+      }
+    );
+
+    const descriptor = registry.resolve("brave_web_search");
+    expect(descriptor?.executionProfileRef).toEqual({
+      profileId: "mcp-isolated:brave_search",
+      profileVersion: "1.0",
+    });
+    expect(descriptor?.secretRequirements).toEqual([
+      expect.objectContaining({ secretRef: "env:BRAVE_API_KEY" }),
+    ]);
+    expect(profileRegistry.resolve(descriptor!.executionProfileRef!)).toEqual(
+      isolatedProfile
+    );
+  });
+
   it("registers read tools without side effects and mutation tools with them", () => {
     const registry = new RuntimeToolDescriptorRegistry();
     registerMcpRuntimeToolDescriptors(

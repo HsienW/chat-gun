@@ -117,8 +117,10 @@ describe("PgBusinessEffectLedger.prepare", () => {
 
   it("claims a new business effect and prepares its execution atomically", async () => {
     const executedSql: string[] = [];
-    const db = new FakeSideEffectDatabase(async (text) => {
+    const executedValues: unknown[][] = [];
+    const db = new FakeSideEffectDatabase(async (text, values) => {
       executedSql.push(text);
+      executedValues.push([...(values ?? [])]);
       if (text.includes("INSERT INTO business_effects")) {
         return { rows: [businessEffectRow()], rowCount: 1 };
       }
@@ -129,16 +131,31 @@ describe("PgBusinessEffectLedger.prepare", () => {
     });
     const ledger = new PgBusinessEffectLedger(db);
 
-    await expect(ledger.prepare(prepareInput)).resolves.toMatchObject({
+    await expect(ledger.prepare({
+      ...prepareInput,
+      securityEvidence: {
+        executionProfileVersion: "1.0",
+        effectiveCapabilities: { executionMode: "isolated_process" },
+        secretRefsUsed: ["env:BRAVE_API_KEY"],
+        egressDecision: null,
+      },
+    })).resolves.toMatchObject({
       type: "claimed",
       businessEffect: { businessEffectId: "effect-1", commitState: "prepared" },
       execution: { toolExecutionId: "execution-1", status: "prepared" },
     });
     expect(executedSql).toHaveLength(2);
+    expect(executedSql[1]).toContain("execution_profile_version");
+    expect(executedSql[1]).toContain("termination_cause");
+    expect(executedValues[1]).toHaveLength(19);
+    expect(executedValues[1]?.[18]).toBeNull();
+    expect(executedValues[1]).toContain("1.0");
+    expect(JSON.stringify(executedValues[1])).toContain("env:BRAVE_API_KEY");
   });
 
   it("does not claim an already committed business effect", async () => {
-    const db = new FakeSideEffectDatabase(async (text) => {
+    let insertedValues: readonly unknown[] | undefined;
+    const db = new FakeSideEffectDatabase(async (text, values) => {
       if (text.includes("INSERT INTO business_effects")) {
         return { rows: [], rowCount: 0 };
       }
@@ -147,13 +164,20 @@ describe("PgBusinessEffectLedger.prepare", () => {
       }
       if (text.includes("FROM tool_executions") && text.includes("status = 'committed'")) {
         return {
-          rows: [toolExecutionRow("committed", "result-ref-1")],
+          rows: [{
+            ...toolExecutionRow("committed", "result-ref-1"),
+            termination_cause: "completed",
+          }],
           rowCount: 1,
         };
       }
       if (text.includes("INSERT INTO tool_executions")) {
+        insertedValues = values;
         return {
-          rows: [toolExecutionRow("committed", "result-ref-1")],
+          rows: [{
+            ...toolExecutionRow("committed", "result-ref-1"),
+            termination_cause: "completed",
+          }],
           rowCount: 1,
         };
       }
@@ -163,12 +187,75 @@ describe("PgBusinessEffectLedger.prepare", () => {
 
     await expect(ledger.prepare(prepareInput)).resolves.toMatchObject({
       type: "existing_committed",
-      execution: { resultRef: "result-ref-1", status: "committed" },
+      execution: {
+        resultRef: "result-ref-1",
+        status: "committed",
+        terminationCause: "completed",
+      },
     });
+    expect(insertedValues).toHaveLength(19);
+    expect(insertedValues?.[18]).toBe("completed");
+  });
+});
+
+describe("PgBusinessEffectLedger.transitionExecution", () => {
+  it("persists the terminal cause with the execution status transition", async () => {
+    let executedSql = "";
+    let executedValues: readonly unknown[] | undefined;
+    const db = new FakeSideEffectDatabase(async (text, values) => {
+      executedSql = text;
+      executedValues = values;
+      return { rows: [], rowCount: 1 };
+    });
+    const ledger = new PgBusinessEffectLedger(db);
+
+    await ledger.transitionExecution({
+      toolExecutionId: "execution-1",
+      expectedStatus: "executing",
+      nextStatus: "failed",
+      terminationCause: "failed_not_committed",
+    });
+
+    expect(executedSql).toContain("termination_cause");
+    expect(executedValues).toEqual([
+      "execution-1",
+      "executing",
+      "failed",
+      null,
+      "failed_not_committed",
+    ]);
   });
 });
 
 describe("PgBusinessEffectLedger.commitExecutionAndBusinessEffect", () => {
+  it("persists completed as the atomic commit termination cause", async () => {
+    const executedSql: string[] = [];
+    const executedValues: unknown[][] = [];
+    const db = new FakeSideEffectDatabase(async (text, values) => {
+      executedSql.push(text);
+      executedValues.push([...(values ?? [])]);
+      return { rows: [], rowCount: 1 };
+    });
+    const ledger = new PgBusinessEffectLedger(db);
+
+    await ledger.commitExecutionAndBusinessEffect({
+      toolExecutionId: "execution-1",
+      expectedExecutionStatus: "executing",
+      resultRef: "result-ref-1",
+      terminationCause: "completed",
+      businessEffectId: "effect-1",
+      expectedEffectState: "prepared",
+    });
+
+    expect(executedSql[0]).toContain("termination_cause");
+    expect(executedValues[0]).toEqual([
+      "execution-1",
+      "executing",
+      "result-ref-1",
+      "completed",
+    ]);
+  });
+
   it("rejects the atomic commit when either CAS transition is not acquired", async () => {
     const executedSql: string[] = [];
     const db = new FakeSideEffectDatabase(async (text) => {

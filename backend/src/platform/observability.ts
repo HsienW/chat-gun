@@ -1,4 +1,5 @@
 import { PgAuditLogger } from "../runtime/audit/pg-audit-logger.js";
+import { redact } from "../runtime/audit/redaction.js";
 import type { ExecutionContext } from "../runtime/execution-context/execution-context.js";
 import { executionCorrelation } from "../runtime/execution-context/read-execution-context.js";
 import { getPool } from "../runtime/persistence/connection.js";
@@ -13,7 +14,7 @@ export interface AuditLogger {
 
 export class ConsoleAuditLogger implements AuditLogger {
   async record(eventName: string, payload: AuditPayload, _context?: ExecutionContext): Promise<void> {
-    console.info(`[audit] ${eventName}`, JSON.stringify(payload));
+    console.info(`[audit] ${eventName}`, JSON.stringify(redact(payload)));
   }
 }
 

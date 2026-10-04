@@ -4,6 +4,16 @@ import {
 } from "../authorization/tool-risk.js";
 import type { RetryPolicy } from "../retry/retry-policy.js";
 import type { SideEffectToolDescriptor } from "../side-effect/side-effect-descriptor.js";
+import {
+  egressRequirementsSchema,
+  executionProfileReferenceSchema,
+  type EgressRequirements,
+  type ExecutionProfileReference,
+} from "./execution-profile.js";
+import {
+  secretReferenceSchema,
+  type SecretReference,
+} from "./secret-broker.js";
 
 export interface RuntimeSchemaParseSuccess<TValue> {
   success: true;
@@ -55,6 +65,9 @@ export interface RuntimeToolDescriptor<TInput = unknown, TOutput = unknown> {
   rateLimitPolicy?: ToolRateLimitPolicy;
   circuitBreakerPolicy?: ToolCircuitBreakerPolicy;
   interruptBehavior: InterruptBehavior;
+  executionProfileRef?: ExecutionProfileReference;
+  egressRequirements?: EgressRequirements;
+  secretRequirements?: readonly SecretReference[];
   sideEffect?: SideEffectToolDescriptor<TInput, TOutput>;
 }
 
@@ -130,6 +143,37 @@ function validateDescriptor<TInput, TOutput>(
   }
   if (!INTERRUPT_BEHAVIORS.has(descriptor.interruptBehavior)) {
     throw new Error("Runtime tool descriptor interruptBehavior is invalid");
+  }
+
+  if (descriptor.executionProfileRef !== undefined) {
+    const parsed = executionProfileReferenceSchema.safeParse(
+      descriptor.executionProfileRef
+    );
+    if (!parsed.success) {
+      throw new Error(
+        parsed.error.issues.some((issue) =>
+          issue.path.includes("profileVersion")
+        )
+          ? "Runtime tool descriptor executionProfileRef.profileVersion is invalid"
+          : "Runtime tool descriptor executionProfileRef is invalid"
+      );
+    }
+  }
+  if (
+    descriptor.egressRequirements !== undefined &&
+    !egressRequirementsSchema.safeParse(descriptor.egressRequirements).success
+  ) {
+    throw new Error("Runtime tool descriptor egressRequirements is invalid");
+  }
+  if (descriptor.secretRequirements !== undefined) {
+    const hasInvalidSecret =
+      !Array.isArray(descriptor.secretRequirements) ||
+      descriptor.secretRequirements.some(
+        (reference) => !secretReferenceSchema.safeParse(reference).success
+      );
+    if (hasInvalidSecret) {
+      throw new Error("Runtime tool descriptor secretRequirements is invalid");
+    }
   }
 
   if (descriptor.rateLimitPolicy !== undefined) {

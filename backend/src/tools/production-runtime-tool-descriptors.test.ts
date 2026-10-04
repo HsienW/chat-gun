@@ -2,11 +2,31 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LOCAL_PRODUCTION_TOOL_NAMES } from "./authorization/tool-authorization.js";
 import {
+  createLocalExecutionProfileRegistry,
   createLocalRuntimeToolDescriptorRegistry,
   LOCAL_PRODUCTION_TOOLS,
 } from "./production-runtime-tool-descriptors.js";
 
 describe("local production runtime tool descriptors", () => {
+  it("registers a constrained trusted profile for every local tool", () => {
+    const descriptorRegistry = createLocalRuntimeToolDescriptorRegistry();
+    const profileRegistry = createLocalExecutionProfileRegistry();
+
+    expect(descriptorRegistry.list()).toHaveLength(5);
+    for (const descriptor of descriptorRegistry.list()) {
+      expect(descriptor.executionProfileRef).toBeDefined();
+      const profile = profileRegistry.resolve(descriptor.executionProfileRef!);
+      expect(profile).toMatchObject({
+        profileVersion: "1.0",
+        mode: "trusted_in_process",
+        filesystem: { roots: [], writeMode: "read_only" },
+        process: { creation: "deny" },
+      });
+      expect(profile?.egress.destinations).toEqual(
+        descriptor.egressRequirements?.destinations ?? []
+      );
+    }
+  });
   afterEach(() => {
     vi.unstubAllEnvs();
   });

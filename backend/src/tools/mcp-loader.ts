@@ -18,13 +18,21 @@ import {
 import { ToolRiskRegistry } from "../runtime/authorization/tool-risk.js";
 import type { RuntimeToolDescriptorRegistry } from "../runtime/tool-dispatch/runtime-tool-descriptor.js";
 import type { RuntimeToolDispatchPipeline } from "../runtime/tool-dispatch/pipeline.js";
+import {
+  type ExecutionProfile,
+  type ExecutionProfileEnforcerPort,
+  type ExecutionProfileRegistry,
+} from "../runtime/tool-dispatch/execution-profile.js";
+import type { SecretReference } from "../runtime/tool-dispatch/secret-broker.js";
 import { registerMcpRuntimeToolDescriptors } from "./production-runtime-tool-descriptors.js";
 
 type StdioMcpServerConfig = {
   transport: "stdio";
   command: string;
   args?: string[];
-  env?: Record<string, string | undefined>;
+  profileId: string;
+  profile: ExecutionProfile;
+  secretRequirements?: readonly SecretReference[];
 };
 
 type McpJsonSchema = {
@@ -41,7 +49,54 @@ const activeClients: Client[] = [];
 
 export interface LoadMcpToolsOptions {
   descriptorRegistry?: RuntimeToolDescriptorRegistry;
+  profileRegistry?: ExecutionProfileRegistry;
   dispatchPipeline?: RuntimeToolDispatchPipeline;
+  executionProfileEnforcer?: ExecutionProfileEnforcerPort;
+  isExecutionProfileEnforcementEnabled?: () => boolean;
+  loadStdioServerTools?: (
+    serverName: string,
+    config: StdioMcpServerConfig
+  ) => Promise<StructuredToolInterface[]>;
+}
+
+export const BRAVE_SECRET_REFERENCE: SecretReference = {
+  secretRef: "env:BRAVE_API_KEY",
+  secretName: "BRAVE_API_KEY",
+  scope: "mcp:brave_search",
+};
+
+function createMcpProfile(input: {
+  filesystemRoots?: string[];
+  egressDestinations?: string[];
+  allowedVariables?: string[];
+  runtimeImage: string;
+}): ExecutionProfile {
+  return {
+    profileVersion: "1.0",
+    mode: "isolated_process",
+    filesystem: {
+      roots: input.filesystemRoots ?? [],
+      writeMode:
+        input.filesystemRoots && input.filesystemRoots.length > 0
+          ? "scoped_write"
+          : "read_only",
+    },
+    process: { creation: "allow" },
+    resources: {
+      cpuTimeMs: 15_000,
+      memoryBytes: 256 * 1024 * 1024,
+      diskBytes: 64 * 1024 * 1024,
+      wallClockMs: 30_000,
+    },
+    egress: {
+      destinations: input.egressDestinations ?? [],
+      protocols: input.egressDestinations?.length ? ["https"] : [],
+      dns: "resolve_and_connect",
+    },
+    env: { allowedVariables: input.allowedVariables ?? [] },
+    binaries: { allowed: ["node"], runtimeImages: [input.runtimeImage] },
+    output: { maxBytes: 64_000, artifactHandling: "inline" },
+  };
 }
 
 function getNpxCommand(): string {
@@ -99,6 +154,11 @@ function getMcpServerConfigs(): Record<string, StdioMcpServerConfig> {
         transport: "stdio",
         command: getNpxCommand(),
         args: ["-y", "@modelcontextprotocol/server-filesystem", filesystemPath],
+        profileId: "mcp-isolated:filesystem",
+        profile: createMcpProfile({
+          filesystemRoots: [filesystemPath],
+          runtimeImage: "@modelcontextprotocol/server-filesystem@2026.1.14",
+        }),
       };
     }
   }
@@ -108,27 +168,17 @@ function getMcpServerConfigs(): Record<string, StdioMcpServerConfig> {
       transport: "stdio",
       command: getNpxCommand(),
       args: ["-y", "@modelcontextprotocol/server-brave-search"],
-      env: {
-        BRAVE_API_KEY: getEnv("BRAVE_API_KEY"),
-      },
+      profileId: "mcp-isolated:brave_search",
+      profile: createMcpProfile({
+        egressDestinations: ["api.search.brave.com"],
+        allowedVariables: ["BRAVE_API_KEY"],
+        runtimeImage: "@modelcontextprotocol/server-brave-search",
+      }),
+      secretRequirements: [BRAVE_SECRET_REFERENCE],
     };
   }
 
   return configs;
-}
-
-function toProcessEnv(
-  env: Record<string, string | undefined> | undefined
-): Record<string, string> | undefined {
-  if (!env) {
-    return undefined;
-  }
-
-  return Object.fromEntries(
-    Object.entries(env).filter((entry): entry is [string, string] => {
-      return typeof entry[1] === "string" && entry[1].length > 0;
-    })
-  );
 }
 
 function stringifyMcpResult(result: unknown): string {
@@ -274,7 +324,6 @@ async function loadStdioServerTools(
   const transport = new StdioClientTransport({
     command: config.command,
     args: config.args,
-    env: toProcessEnv(config.env),
     stderr: "pipe",
   });
 
@@ -307,6 +356,28 @@ async function loadStdioServerTools(
   });
 }
 
+function createDeclaredServerTools(
+  serverName: string,
+  riskDescriptors: readonly McpToolRiskDescriptorV1[]
+): StructuredToolInterface[] {
+  return riskDescriptors
+    .filter((descriptor) => descriptor.serverName === serverName)
+    .map((descriptor) =>
+      tool(
+        async () => {
+          throw new Error(
+            `MCP tool requires isolated sandbox execution: ${descriptor.toolName}`
+          );
+        },
+        {
+          name: descriptor.toolName,
+          description: `Isolated MCP tool from ${serverName}: ${descriptor.toolName}`,
+          schema: z.record(z.string(), z.unknown()),
+        }
+      )
+    );
+}
+
 export async function loadMcpTools(
   authorization: ToolAuthorizationGovernanceConfig,
   riskDescriptors: readonly McpToolRiskDescriptorV1[],
@@ -319,12 +390,45 @@ export async function loadMcpTools(
     return [];
   }
 
-  const loadedServers = await Promise.all(
-    serverNames.map(async (serverName) => ({
-      serverName,
-      tools: await loadStdioServerTools(serverName, configs[serverName]),
-    }))
-  );
+  const enforcementEnabled =
+    options.isExecutionProfileEnforcementEnabled?.() ?? false;
+  if (
+    enforcementEnabled &&
+    (options.descriptorRegistry === undefined ||
+      options.profileRegistry === undefined ||
+      options.executionProfileEnforcer === undefined)
+  ) {
+    throw new Error(
+      "MCP isolated loading requires descriptor, profile, and enforcement dependencies"
+    );
+  }
+  const stdioLoader = options.loadStdioServerTools ?? loadStdioServerTools;
+  const loadedServers = enforcementEnabled
+    ? serverNames.map((serverName) => ({
+        serverName,
+        tools: createDeclaredServerTools(serverName, riskDescriptors),
+      }))
+    : (
+        await Promise.all(
+          serverNames.map(async (serverName) => {
+            const config = configs[serverName];
+            if (config.secretRequirements?.length) {
+              console.warn(
+                JSON.stringify({
+                  event: "mcp_server_load_blocked",
+                  serverName,
+                  reasonCode: "SECRET_REQUIRES_FINAL_EXECUTION_EDGE",
+                })
+              );
+              return null;
+            }
+            return { serverName, tools: await stdioLoader(serverName, config) };
+          })
+        )
+      ).filter(
+        (server): server is { serverName: string; tools: StructuredToolInterface[] } =>
+          server !== null
+      );
   const exposedServers = loadedServers.map(({ serverName, tools }) => ({
       serverName,
       toolNames: tools.map(({ name }) => name),
@@ -334,10 +438,24 @@ export async function loadMcpTools(
     throw new Error("MCP dispatch pipeline requires a runtime descriptor registry");
   }
   if (options.descriptorRegistry !== undefined) {
+    if (options.profileRegistry === undefined) {
+      throw new Error("MCP runtime descriptors require an execution profile registry");
+    }
     registerMcpRuntimeToolDescriptors(
       options.descriptorRegistry,
       loadedServers,
-      riskDescriptors
+      riskDescriptors,
+      {
+        profileRegistry: options.profileRegistry,
+        serverPolicies: loadedServers.map(({ serverName }) => ({
+          serverName,
+          profileId: configs[serverName].profileId,
+          profile: configs[serverName].profile,
+          ...(configs[serverName].secretRequirements
+            ? { secretRequirements: configs[serverName].secretRequirements }
+            : {}),
+        })),
+      }
     );
   }
   const loadedRiskRegistry = new ToolRiskRegistry(
@@ -350,6 +468,7 @@ export async function loadMcpTools(
     ...authorization,
     riskRegistry: loadedRiskRegistry,
   }, {
+    executionProfileEnforcer: options.executionProfileEnforcer,
     createExecutor:
       dispatchPipeline === undefined
         ? undefined

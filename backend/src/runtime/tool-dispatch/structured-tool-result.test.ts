@@ -54,6 +54,28 @@ const descriptor: RuntimeToolDescriptor<unknown, string> = {
 };
 
 describe("StructuredToolResultEnvelope", () => {
+  it("adds security evidence without changing the existing envelope fields", () => {
+    const envelope = createStructuredToolResultEnvelope({
+      executionContext,
+      descriptor,
+      outcome: { type: "succeeded", result: "ok" },
+      securityEvidence: {
+        executionProfileVersion: "1.0",
+        effectiveCapabilities: { executionMode: "trusted_in_process" },
+        secretRefsUsed: ["env:TAVILY_API_KEY"],
+        egressDecision: { decision: "allow", reasonCode: "POLICY_ALLOWED" },
+      },
+    });
+
+    expect(envelope).toMatchObject({
+      executionProfileVersion: "1.0",
+      effectiveCapabilities: { executionMode: "trusted_in_process" },
+      secretRefsUsed: ["env:TAVILY_API_KEY"],
+      egressDecision: { decision: "allow", reasonCode: "POLICY_ALLOWED" },
+    });
+    expect(JSON.stringify(envelope)).not.toContain("secret-value");
+  });
+
   it("keeps successful output and canonical correlation structured", () => {
     const envelope = createStructuredToolResultEnvelope({
       executionContext,
@@ -79,6 +101,7 @@ describe("StructuredToolResultEnvelope", () => {
         readOnly: true,
       },
       outcome: { type: "succeeded", result: "ok" },
+      terminationCause: "completed",
       emittedAt: "2026-09-23T01:00:00.000Z",
     });
     expect(structuredToolResultEnvelopeSchema.safeParse(envelope).success).toBe(
@@ -102,6 +125,7 @@ describe("StructuredToolResultEnvelope", () => {
       errorCode: "AUTHORIZATION_DENIED",
       decisionId: "decision-1",
     });
+    expect(envelope.terminationCause).toBe("denied_by_authorization");
     expect(toLegacyToolResult(envelope)).toContain("AUTHORIZATION_DENIED");
     expect(tryToLegacyToolResult(envelope)).toContain("AUTHORIZATION_DENIED");
     expect(tryToLegacyToolResult("legacy-result")).toBeUndefined();

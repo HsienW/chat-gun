@@ -78,6 +78,16 @@ WEB_FETCH_ALLOWED_PORTS=80,443,8443
 
 Backend 支援 `HTTPS_PROXY`／`HTTP_PROXY`。Proxy URL 若包含 credential，log 會遮蔽帳號與密碼。
 
+## X25 sandbox、secret broker 與 egress policy 現況
+
+- `TOOL_EXECUTION_PROFILE_ENFORCEMENT_ENABLED=true` 啟用 versioned `ExecutionProfile` enforcement。順序固定為 authorization → profile resolution → capability matching → secret resolution → egress → execution → audit；任一步失敗皆 typed deny，不會回退 host execution。
+- 五個既有 read-only native tools明確使用 `trusted_in_process`；MCP filesystem與Brave tools使用 `isolated_process`。目前 repository沒有 production `SandboxRunnerPort`實作，因此啟用 enforcement後的MCP invocation會回 `SANDBOX_RUNNER_UNAVAILABLE`，不會用一般 `spawn`冒充隔離。
+- `TAVILY_API_KEY`與`BRAVE_API_KEY`只以 `SecretReference`宣告，並由 `SecretBrokerPort`在最終授權執行端解析。secret value以不可序列化的 Symbol context傳遞，不得進入prompt、tool schema、event、checkpoint、log、trace、receipt或error payload。
+- `web_fetch`、`web_search`、Open-Meteo geocoding與weather requests全部經 versioned、deny-by-default egress policy。每次URL與redirect都重新驗證protocol、destination、port與所有DNS results；production transport把核准IP固定到實際socket connect，同時保留TLS server name，以阻斷DNS rebinding。
+- audit與structured tool result會記錄 `executionProfileVersion`、`effectiveCapabilities`、`secretRefsUsed`、`egressDecision`與`terminationCause`；只記secret reference，不記credential value。
+
+Rollout前應先配置並驗證 production sandbox runner，再逐環境開啟 `TOOL_EXECUTION_PROFILE_ENFORCEMENT_ENABLED`。若環境需要MCP而尚無runner，應維持MCP停用，不得以關閉安全檢查作為替代。
+
 ## Filesystem MCP
 
 MCP servers 只有在 `MCP_LOAD_ON_START=true` 時才會載入。Filesystem MCP 的存取範圍由單一工作目錄與 allowed roots 共同決定：

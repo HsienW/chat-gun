@@ -14,7 +14,19 @@ import {
 } from "./tool-governance.js";
 import { ToolRiskRegistry, type ToolRiskPolicy } from "../runtime/authorization/tool-risk.js";
 import { executionContextSchema } from "../runtime/execution-context/execution-context.js";
+import {
+  ExecutionProfileEnforcer,
+  ExecutionProfileRegistry,
+  type ExecutionProfileEnforcerPort,
+  type SandboxRunnerPort,
+} from "../runtime/tool-dispatch/execution-profile.js";
+import {
+  EgressPolicyError,
+  assertHttpUrl,
+  createEgressPolicy,
+} from "../runtime/tool-dispatch/egress-policy.js";
 import { createConfirmationRequiredDescriptor } from "../runtime/authorization/confirmation.js";
+import { auditLogger } from "./observability.js";
 import {
   createNoopOpikTracer,
   setOpikTracerForTests,
@@ -200,6 +212,162 @@ describe("applyToolGovernance", () => {
 });
 
 describe("GovernanceExecutor.executeTyped", () => {
+  it("enforces the execution profile after authorization and before invocation", async () => {
+    const callOrder: string[] = [];
+    const invoked = vi.fn(async () => {
+      callOrder.push("invoke");
+      return "ok";
+    });
+    const sourceTool = tool(invoked, {
+      name: "contract_echo",
+      description: "Enforces a profile before invocation.",
+      schema: z.object({ value: z.string() }),
+    }) as StructuredToolInterface;
+    const authorization = createAuthorizationConfig("allow");
+    authorization.authorize.mockImplementationOnce(async () => {
+      callOrder.push("authorize");
+      return {
+        decisionId: "decision-allow",
+        effect: "allow" as const,
+        reasonCode: "POLICY_ALLOWED" as const,
+      };
+    });
+    const enforcer: ExecutionProfileEnforcerPort = {
+      enforce: vi.fn(async ({ config }) => {
+        callOrder.push("enforce");
+        return {
+          type: "allowed" as const,
+          config,
+          evidence: {
+            executionProfileVersion: "1.0",
+            effectiveCapabilities: {
+              executionMode: "trusted_in_process" as const,
+            },
+            secretRefsUsed: [],
+            egressDecision: null,
+          },
+        };
+      }),
+    };
+    const executor = new GovernanceExecutor(
+      sourceTool,
+      { ...defaultToolPolicy(sourceTool.name), audit: false },
+      authorization.config,
+      enforcer
+    );
+
+    await expect(
+      executor.executeTyped({ value: "valid" })
+    ).resolves.toMatchObject({ type: "succeeded", result: "ok" });
+    expect(callOrder).toEqual(["authorize", "enforce", "invoke"]);
+  });
+
+  it("routes isolated_process execution through the sandbox runner", async () => {
+    const invoked = vi.fn(async () => "host-result");
+    const sourceTool = tool(invoked, {
+      name: "isolated_contract",
+      description: "Must execute only through the sandbox runner.",
+      schema: z.object({ value: z.string() }),
+    }) as StructuredToolInterface;
+    const runner: SandboxRunnerPort = {
+      capabilities: () => ({
+        executionModes: ["isolated_process"],
+        supportsProcessIsolation: true,
+        supportsFilesystemIsolation: true,
+        supportsEgressIsolation: true,
+        supportsResourceLimits: true,
+      }),
+      run: vi.fn(async () => ({
+        type: "succeeded" as const,
+        result: "isolated-result",
+      })),
+    };
+    const profileRegistry = new ExecutionProfileRegistry();
+    profileRegistry.register(
+      { profileId: "isolated-contract", profileVersion: "1.0" },
+      {
+        profileVersion: "1.0",
+        mode: "isolated_process",
+        filesystem: { roots: [], writeMode: "read_only" },
+        process: { creation: "allow" },
+        resources: {
+          cpuTimeMs: 1_000,
+          memoryBytes: 64 * 1024 * 1024,
+          diskBytes: 0,
+          wallClockMs: 5_000,
+        },
+        egress: { destinations: [], protocols: [], dns: "resolve_and_connect" },
+        env: { allowedVariables: [] },
+        binaries: { allowed: ["node"], runtimeImages: ["node:22"] },
+        output: { maxBytes: 24_000, artifactHandling: "inline" },
+      }
+    );
+    const enforcer = new ExecutionProfileEnforcer({
+      descriptorRegistry: {
+        resolve: () => ({
+          executionProfileRef: {
+            profileId: "isolated-contract",
+            profileVersion: "1.0",
+          },
+        }),
+      },
+      profileRegistry,
+      runner,
+      isEnabled: () => true,
+    });
+    const executor = new GovernanceExecutor(
+      sourceTool,
+      { ...defaultToolPolicy(sourceTool.name), audit: false },
+      undefined,
+      enforcer
+    );
+
+    await expect(
+      executor.executeTyped(
+        { value: "valid" },
+        { configurable: { execution_context: executionContext } }
+      )
+    ).resolves.toEqual({ type: "succeeded", result: "isolated-result" });
+    expect(invoked).not.toHaveBeenCalled();
+    expect(runner.run).toHaveBeenCalledOnce();
+
+    vi.mocked(runner.run).mockResolvedValueOnce({
+      type: "failed",
+      errorCode: "SANDBOX_STARTUP_FAILED",
+    });
+    await expect(
+      executor.executeTyped(
+        { value: "valid" },
+        { configurable: { execution_context: executionContext } }
+      )
+    ).resolves.toEqual({
+      type: "failed_not_committed",
+      errorCode: "SANDBOX_STARTUP_FAILED",
+    });
+
+    vi.mocked(runner.run).mockResolvedValueOnce({
+      type: "failed",
+      errorCode: "SANDBOX_TERMINATION_FAILED",
+    });
+    await expect(
+      executor.executeTyped(
+        { value: "valid" },
+        { configurable: { execution_context: executionContext } }
+      )
+    ).resolves.toEqual({
+      type: "failed_not_committed",
+      errorCode: "SANDBOX_TERMINATION_FAILED",
+    });
+
+    vi.mocked(runner.run).mockResolvedValueOnce({ type: "cancelled" });
+    await expect(
+      executor.executeTyped(
+        { value: "valid" },
+        { configurable: { execution_context: executionContext } }
+      )
+    ).resolves.toEqual({ type: "cancelled", dispatchState: "after" });
+    expect(invoked).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     vi.stubEnv("NODE_ENV", "development");
   });
@@ -614,6 +782,105 @@ describe("GovernanceExecutor.executeTyped", () => {
       type: "failed_not_committed",
       errorCode: "PROVIDER_REJECTED",
     });
+  });
+
+  it("preserves typed egress policy denial after tool dispatch", async () => {
+    const sourceTool = tool(
+      async () => {
+        throw new EgressPolicyError(
+          "EGRESS_DENIED",
+          "PRIVATE_ADDRESS",
+          "Egress target was denied"
+        );
+      },
+      {
+        name: "contract_egress_denied",
+        description: "Reports a definitive egress policy denial.",
+        schema: z.object({ value: z.string() }),
+      }
+    ) as StructuredToolInterface;
+    const executor = new GovernanceExecutor(sourceTool, {
+      ...defaultToolPolicy(sourceTool.name),
+      audit: false,
+    });
+
+    await expect(executor.executeTyped({ value: "valid" })).resolves.toEqual({
+      type: "failed_not_committed",
+      errorCode: "EGRESS_DENIED",
+    });
+  });
+
+  it("records execution evidence and canonical identity on failure", async () => {
+    const auditRecord = vi
+      .spyOn(auditLogger, "record")
+      .mockResolvedValue(undefined);
+    const sourceTool = tool(
+      async () => {
+        await assertHttpUrl(
+          "https://denied.example/",
+          createEgressPolicy({
+            destinations: ["allowed.example"],
+            protocols: ["https"],
+          })
+        );
+        return "unexpected";
+      },
+      {
+        name: "contract_evidence_failure",
+        description: "Records security evidence for failed dispatches.",
+        schema: z.object({ value: z.string() }),
+      }
+    ) as StructuredToolInterface;
+    const enforcer: ExecutionProfileEnforcerPort = {
+      enforce: vi.fn(async ({ config }) => ({
+        type: "allowed" as const,
+        config,
+        evidence: {
+          executionProfileVersion: "1.0",
+          effectiveCapabilities: { executionMode: "trusted_in_process" as const },
+          secretRefsUsed: [],
+          egressDecision: null,
+        },
+      })),
+    };
+    const executor = new GovernanceExecutor(
+      sourceTool,
+      { ...defaultToolPolicy(sourceTool.name), audit: true },
+      undefined,
+      enforcer
+    );
+    const correlatedExecutionContext = {
+      ...executionContext,
+      toolCallId: "tool-call-evidence-1",
+    };
+
+    await expect(
+      executor.executeTyped(
+        { value: "valid" },
+        { configurable: { execution_context: correlatedExecutionContext } }
+      )
+    ).resolves.toMatchObject({
+      type: "failed_not_committed",
+      errorCode: "EGRESS_DENIED",
+    });
+    expect(auditRecord).toHaveBeenCalledWith(
+      "tool.invoke.failure",
+      expect.objectContaining({
+        runId: correlatedExecutionContext.runId,
+        taskId: correlatedExecutionContext.taskId,
+        stepId: correlatedExecutionContext.stepId,
+        toolCallId: correlatedExecutionContext.toolCallId,
+        principalId: correlatedExecutionContext.principal.principalId,
+        executionProfileVersion: "1.0",
+        effectiveCapabilities: { executionMode: "trusted_in_process" },
+        egressDecision: {
+          decision: "deny",
+          reasonCode: "DESTINATION_NOT_ALLOWED",
+        },
+        terminationCause: "failed_not_committed",
+      })
+    );
+    auditRecord.mockRestore();
   });
 
   it("treats an unknown error after dispatch as ambiguous", async () => {

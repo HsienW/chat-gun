@@ -28,9 +28,11 @@ import type {
   ToolExecutionRecord,
   ToolExecutionStatus,
 } from "./business-effect-ledger.js";
-import type {
-  GovernedToolExecutor,
-  GovernedToolOutcome,
+import {
+  getToolExecutionTerminationCause,
+  type GovernedToolExecutor,
+  type GovernedToolOutcome,
+  type ToolExecutionTerminationCause,
 } from "./governed-outcome.js";
 import {
   createReplayKey,
@@ -42,6 +44,7 @@ import {
 import { decideReconciliationAction } from "./reconciler.js";
 import type { ResultReferenceStore } from "./result-reference-store.js";
 import type { SideEffectToolDescriptor } from "./side-effect-descriptor.js";
+import type { ExecutionProfileEvidence } from "../tool-dispatch/execution-profile.js";
 
 export type ToolExecutionRunResult<TResult> =
   | {
@@ -91,6 +94,7 @@ export interface ToolExecutionRunInput<TInput, TResult> {
   requestId?: string;
   threadId?: string;
   taskId?: string;
+  securityEvidence?: ExecutionProfileEvidence;
 }
 
 export interface ToolExecutionRunnerObservability {
@@ -357,6 +361,7 @@ export class ToolExecutionRunner {
       scope: input.scope,
       replayKey,
       requestHash: input.requestHash,
+      ...(input.securityEvidence ? { securityEvidence: input.securityEvidence } : {}),
       ...(input.requestId ? { requestId: input.requestId } : {}),
       ...(input.threadId ? { threadId: input.threadId } : {}),
       runId: input.identity.runId,
@@ -537,7 +542,12 @@ export class ToolExecutionRunner {
       let executeAttempt = input.executor.executeTyped.bind(input.executor);
       if (input.executor.authorizeTyped !== undefined) {
         if (input.executor.executeAuthorizedTyped === undefined) {
-          await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+          await this.transitionOrDefer(
+            toolExecutionId,
+            "executing",
+            "failed",
+            "failed_not_committed"
+          );
           return {
             type: "failed",
             errorCode: "AUTHORIZATION_UNAVAILABLE",
@@ -553,7 +563,12 @@ export class ToolExecutionRunner {
             executionConfig
           );
         } catch {
-          await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+          await this.transitionOrDefer(
+            toolExecutionId,
+            "executing",
+            "failed",
+            "failed_not_committed"
+          );
           return {
             type: "failed",
             errorCode: "AUTHORIZATION_UNAVAILABLE",
@@ -568,7 +583,12 @@ export class ToolExecutionRunner {
         }
 
         if (authorizationOutcome.decisionId === undefined) {
-          await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+          await this.transitionOrDefer(
+            toolExecutionId,
+            "executing",
+            "failed",
+            "failed_not_committed"
+          );
           return {
             type: "failed",
             errorCode: "AUTHORIZATION_UNAVAILABLE",
@@ -588,7 +608,12 @@ export class ToolExecutionRunner {
           };
         }
         if (authorizationOutcome.type === "denied_by_authorization") {
-          await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+          await this.transitionOrDefer(
+            toolExecutionId,
+            "executing",
+            "failed",
+            getToolExecutionTerminationCause(authorizationOutcome)
+          );
           return {
             type: "failed",
             errorCode: authorizationOutcome.errorCode,
@@ -597,7 +622,12 @@ export class ToolExecutionRunner {
           };
         }
         if (authorizationOutcome.type === "confirmation_required") {
-          await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+          await this.transitionOrDefer(
+            toolExecutionId,
+            "executing",
+            "failed",
+            getToolExecutionTerminationCause(authorizationOutcome)
+          );
           return {
             type: "failed",
             errorCode: "REQUIRES_CONFIRMATION",
@@ -680,11 +710,21 @@ export class ToolExecutionRunner {
         );
       }
       if (outcome.type === "rejected_before_dispatch") {
-        await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+        await this.transitionOrDefer(
+          toolExecutionId,
+          "executing",
+          "failed",
+          getToolExecutionTerminationCause(outcome)
+        );
         return { type: "failed", errorCode: outcome.errorCode, toolExecutionId };
       }
       if (outcome.type === "denied_by_authorization") {
-        await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+        await this.transitionOrDefer(
+          toolExecutionId,
+          "executing",
+          "failed",
+          getToolExecutionTerminationCause(outcome)
+        );
         return {
           type: "failed",
           errorCode: outcome.errorCode,
@@ -693,7 +733,12 @@ export class ToolExecutionRunner {
         };
       }
       if (outcome.type === "confirmation_required") {
-        await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+        await this.transitionOrDefer(
+          toolExecutionId,
+          "executing",
+          "failed",
+          getToolExecutionTerminationCause(outcome)
+        );
         return {
           type: "failed",
           errorCode: "REQUIRES_CONFIRMATION",
@@ -722,14 +767,29 @@ export class ToolExecutionRunner {
             normalizeRetryAfterMs(outcome.retryAfterMs)
           );
           if (didWait) continue;
-          await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+          await this.transitionOrDefer(
+            toolExecutionId,
+            "executing",
+            "failed",
+            "cancelled_before_dispatch"
+          );
           return { type: "failed", errorCode: "USER_CANCELLED", toolExecutionId };
         }
-        await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+        await this.transitionOrDefer(
+          toolExecutionId,
+          "executing",
+          "failed",
+          getToolExecutionTerminationCause(outcome)
+        );
         return { type: "failed", errorCode: outcome.errorCode, toolExecutionId };
       }
       if (outcome.type === "cancelled" && outcome.dispatchState === "before") {
-        await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+        await this.transitionOrDefer(
+          toolExecutionId,
+          "executing",
+          "failed",
+          getToolExecutionTerminationCause(outcome)
+        );
         return {
           type: "cancelled",
           dispatchState: outcome.dispatchState,
@@ -763,7 +823,12 @@ export class ToolExecutionRunner {
           retryBudget?.attempts ?? executionAttempt
         );
         if (didWait) continue;
-        await this.transitionOrDefer(toolExecutionId, "executing", "failed");
+        await this.transitionOrDefer(
+          toolExecutionId,
+          "executing",
+          "failed",
+          "cancelled_before_dispatch"
+        );
         return { type: "failed", errorCode: "USER_CANCELLED", toolExecutionId };
       }
       return reconciled.result;
@@ -786,7 +851,8 @@ export class ToolExecutionRunner {
       await this.transitionOrDefer(
         toolExecutionId,
         "unknown",
-        "manual_intervention_required"
+        "manual_intervention_required",
+        "ambiguous_after_dispatch"
       );
       return {
         type: "done",
@@ -865,7 +931,8 @@ export class ToolExecutionRunner {
     await this.transitionOrDefer(
       toolExecutionId,
       "unknown",
-      "manual_intervention_required"
+      "manual_intervention_required",
+      "ambiguous_after_dispatch"
     );
     return {
       type: "done",
@@ -901,6 +968,7 @@ export class ToolExecutionRunner {
         toolExecutionId,
         expectedExecutionStatus,
         resultRef: reference.resultRefId,
+        terminationCause: "completed",
         businessEffectId,
         expectedEffectState,
         ...(reference.externalSystemNamespace
@@ -985,13 +1053,15 @@ export class ToolExecutionRunner {
   private async transitionOrDefer(
     toolExecutionId: string,
     expectedStatus: ToolExecutionStatus,
-    nextStatus: ToolExecutionStatus
+    nextStatus: ToolExecutionStatus,
+    terminationCause?: ToolExecutionTerminationCause
   ): Promise<boolean> {
     try {
       await this.ledger.transitionExecution({
         toolExecutionId,
         expectedStatus,
         nextStatus,
+        ...(terminationCause ? { terminationCause } : {}),
       });
       return true;
     } catch {

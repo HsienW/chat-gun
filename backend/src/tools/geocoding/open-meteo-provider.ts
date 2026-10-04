@@ -2,6 +2,8 @@
 // Wraps Open-Meteo Geocoding API calls behind the GeocodingProvider interface.
 
 import { GeocodingProvider, GeocodingSearchQuery, LocationCandidate } from "../weather-types.js";
+import { fetchWithValidatedRedirects } from "../../runtime/tool-dispatch/egress-policy.js";
+import { WEATHER_EGRESS_POLICY } from "../../runtime/tool-dispatch/production-egress-policies.js";
 
 const GEOCODING_BASE_URL = "https://geocoding-api.open-meteo.com/v1/search";
 
@@ -35,12 +37,16 @@ export class OpenMeteoGeocodingProvider implements GeocodingProvider {
     const signal = this.mergeSignals(query.signal, this.defaultTimeoutMs);
 
     try {
-      const response = await fetch(url.toString(), {
-        signal,
-        headers: {
-          "User-Agent": "chat-gun/0.1",
+      const response = await fetchWithValidatedRedirects(
+        url,
+        {
+          signal,
+          headers: {
+            "User-Agent": "chat-gun/0.1",
+          },
         },
-      });
+        WEATHER_EGRESS_POLICY
+      );
 
       if (!response.ok) {
         throw new Error(

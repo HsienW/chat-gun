@@ -23,6 +23,31 @@ export type GovernedToolOutcome<TResult> =
   | { type: "ambiguous_after_dispatch"; errorCode: string }
   | { type: "cancelled"; dispatchState: DispatchState };
 
+export type ToolExecutionTerminationCause =
+  | "completed"
+  | "rejected_before_dispatch"
+  | "denied_by_authorization"
+  | "confirmation_required"
+  | "failed_not_committed"
+  | "ambiguous_after_dispatch"
+  | "cancelled_before_dispatch"
+  | "cancelled_after_dispatch"
+  | "cancelled_unknown_dispatch"
+  | "profile_missing"
+  | "profile_version_unsupported"
+  | "profile_invalid"
+  | "unsupported"
+  | "capability_mismatch"
+  | "secret_unresolvable";
+
+export function getToolExecutionTerminationCause(
+  outcome: GovernedToolOutcome<unknown>
+): ToolExecutionTerminationCause {
+  if (outcome.type === "succeeded") return "completed";
+  if (outcome.type !== "cancelled") return outcome.type;
+  return `cancelled_${outcome.dispatchState}_dispatch`;
+}
+
 export type GovernedAuthorizationOutcome =
   | { type: "authorized"; decisionId?: string }
   | Extract<

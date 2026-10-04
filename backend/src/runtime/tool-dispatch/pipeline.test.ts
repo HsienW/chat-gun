@@ -15,6 +15,7 @@ import {
   type ToolDispatchTaskStepAdapter,
 } from "./pipeline.js";
 import { ToolSchedulingError } from "./scheduler.js";
+import type { ExecutionProfileEnforcerPort } from "./execution-profile.js";
 
 const executionContext = {
   requestId: "request-1",
@@ -199,6 +200,61 @@ afterEach(() => {
 });
 
 describe("RuntimeToolDispatchPipeline", () => {
+  it("uses the shared profile enforcer for a direct pipeline executor", async () => {
+    const descriptor = createDescriptor(true);
+    const dependencies = createDependencies(createRegistry(descriptor));
+    const enforcer: ExecutionProfileEnforcerPort = {
+      enforce: vi.fn(async ({ config }) => ({
+        type: "allowed" as const,
+        config,
+        evidence: {
+          executionProfileVersion: "1.0",
+          effectiveCapabilities: {
+            executionMode: "trusted_in_process" as const,
+          },
+          secretRefsUsed: [],
+          egressDecision: null,
+        },
+      })),
+    };
+    const executor = createRuntimeToolDispatchPipeline({
+      ...dependencies,
+      executionProfileEnforcer: enforcer,
+    }).createExecutor(descriptor.toolName, createSourceExecutor());
+
+    await expect(
+      executor.executeTyped({ value: "x" }, runnableConfig)
+    ).resolves.toMatchObject({ type: "succeeded" });
+    expect(enforcer.enforce).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: descriptor.toolName })
+    );
+  });
+
+  it("stops direct pipeline dispatch when shared profile enforcement denies", async () => {
+    const descriptor = createDescriptor(true);
+    const dependencies = createDependencies(createRegistry(descriptor));
+    const sourceExecutor = createSourceExecutor();
+    const enforcer: ExecutionProfileEnforcerPort = {
+      enforce: vi.fn(async () => ({
+        type: "denied" as const,
+        errorCode: "EXECUTION_PROFILE_MISSING" as const,
+        terminationCause: "profile_missing" as const,
+      })),
+    };
+    const executor = createRuntimeToolDispatchPipeline({
+      ...dependencies,
+      executionProfileEnforcer: enforcer,
+    }).createExecutor(descriptor.toolName, sourceExecutor);
+
+    const outcome = await executor.executeTyped({ value: "x" }, runnableConfig);
+
+    expect(outcome).toEqual({
+      type: "rejected_before_dispatch",
+      errorCode: "EXECUTION_PROFILE_MISSING",
+    });
+    expect(sourceExecutor.executeTyped).not.toHaveBeenCalled();
+    expect(sourceExecutor.executeAuthorizedTyped).not.toHaveBeenCalled();
+  });
   it("denies an unregistered tool before any physical dispatch", async () => {
     const dependencies = createDependencies(createRegistry());
     const pipeline = createRuntimeToolDispatchPipeline(dependencies);
