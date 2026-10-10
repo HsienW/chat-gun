@@ -1,3 +1,5 @@
+import ts from "typescript";
+
 import { EXECUTION_PROFILE_ENFORCEMENT_MARKER } from "../runtime/tool-dispatch/execution-profile.js";
 
 export const ARCHITECTURE_CHECK_IDS = [
@@ -10,6 +12,9 @@ export const ARCHITECTURE_CHECK_IDS = [
   "unversioned-runtime-event-producer",
   "agent-legacy-context-assembly",
   "client-controlled-trusted-identity",
+  "harness-forbidden-dependency",
+  "harness-cycle",
+  "chat-gun-parallel-local-definition",
 ] as const;
 
 export type ArchitectureCheckId = (typeof ARCHITECTURE_CHECK_IDS)[number];
@@ -44,9 +49,266 @@ interface ParsedOverride {
   expiry: string;
 }
 
+const HARNESS_PACKAGE_NAMES = [
+  "@gun-ai/harness-contracts",
+  "@gun-ai/harness-kernel",
+  "@gun-ai/harness-testkit",
+] as const;
+
+type HarnessPackageName = (typeof HARNESS_PACKAGE_NAMES)[number];
+
+interface ParsedArchitectureSource extends ArchitectureSource {
+  declaredSymbols: ReadonlySet<string>;
+  harnessPackage?: HarnessPackageName;
+  importedContractSymbols: ReadonlySet<string>;
+  moduleSpecifiers: readonly string[];
+}
+
+const HARNESS_ALLOWED_DEPENDENCIES: Readonly<
+  Record<HarnessPackageName, ReadonlySet<HarnessPackageName>>
+> = {
+  "@gun-ai/harness-contracts": new Set(),
+  "@gun-ai/harness-kernel": new Set(["@gun-ai/harness-contracts"]),
+  "@gun-ai/harness-testkit": new Set([
+    "@gun-ai/harness-contracts",
+    "@gun-ai/harness-kernel",
+  ]),
+};
+
+const FORBIDDEN_HARNESS_DEPENDENCIES = [
+  "@anthropic-ai/sdk",
+  "@google/generative-ai",
+  "@langchain",
+  "@modelcontextprotocol",
+  "chat-gun",
+  "express",
+  "ioredis",
+  "langchain",
+  "openai",
+  "pg",
+  "react",
+  "react-dom",
+] as const;
+
 const MAX_OVERRIDE_TTL_MS = 24 * 60 * 60 * 1_000;
 const MACHINE_IDENTIFIER = /^[a-z][a-z0-9-]{2,63}$/;
 const REASON_CODE = /^[A-Z][A-Z0-9_]{2,63}$/;
+
+function harnessPackageFromSpecifier(
+  moduleSpecifier: string
+): HarnessPackageName | undefined {
+  return HARNESS_PACKAGE_NAMES.find(
+    (packageName) =>
+      moduleSpecifier === packageName ||
+      moduleSpecifier.startsWith(`${packageName}/`)
+  );
+}
+
+function harnessPackageFromPath(path: string): HarnessPackageName | undefined {
+  const normalizedPath = path.replaceAll("\\", "/");
+  const scopedMatch = /(?:^|\/)@gun-ai\/harness-(contracts|kernel|testkit)(?:\/|$)/u.exec(
+    normalizedPath
+  );
+  const packageMatch = /(?:^|\/)packages\/(contracts|kernel|testkit)(?:\/|$)/u.exec(
+    normalizedPath
+  );
+  const packageSegment = scopedMatch?.[1] ?? packageMatch?.[1];
+  return packageSegment === undefined
+    ? undefined
+    : (`@gun-ai/harness-${packageSegment}` as HarnessPackageName);
+}
+
+function moduleName(node: ts.ImportDeclaration | ts.ExportDeclaration): string | undefined {
+  return node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier)
+    ? node.moduleSpecifier.text
+    : undefined;
+}
+
+function collectDeclaredBindingNames(
+  name: ts.BindingName,
+  declaredSymbols: Set<string>
+): void {
+  if (ts.isIdentifier(name)) {
+    declaredSymbols.add(name.text);
+    return;
+  }
+  for (const element of name.elements) {
+    if (!ts.isOmittedExpression(element)) {
+      collectDeclaredBindingNames(element.name, declaredSymbols);
+    }
+  }
+}
+
+function parseArchitectureSource(source: ArchitectureSource): ParsedArchitectureSource {
+  const sourceFile = ts.createSourceFile(
+    source.path,
+    source.source,
+    ts.ScriptTarget.ES2022,
+    true,
+    ts.ScriptKind.TS
+  );
+  const declaredSymbols = new Set<string>();
+  const importedContractSymbols = new Set<string>();
+  const moduleSpecifiers: string[] = [];
+
+  for (const statement of sourceFile.statements) {
+    if (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) {
+      const specifier = moduleName(statement);
+      if (specifier !== undefined) moduleSpecifiers.push(specifier);
+    }
+    if (
+      ts.isImportDeclaration(statement) &&
+      harnessPackageFromSpecifier(moduleName(statement) ?? "") ===
+        "@gun-ai/harness-contracts" &&
+      statement.importClause?.namedBindings !== undefined &&
+      ts.isNamedImports(statement.importClause.namedBindings)
+    ) {
+      for (const element of statement.importClause.namedBindings.elements) {
+        importedContractSymbols.add((element.propertyName ?? element.name).text);
+      }
+    }
+    if (
+      ts.isInterfaceDeclaration(statement) ||
+      ts.isTypeAliasDeclaration(statement) ||
+      ts.isClassDeclaration(statement) ||
+      ts.isEnumDeclaration(statement) ||
+      ts.isFunctionDeclaration(statement)
+    ) {
+      if (statement.name !== undefined) declaredSymbols.add(statement.name.text);
+      continue;
+    }
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        collectDeclaredBindingNames(declaration.name, declaredSymbols);
+      }
+    }
+  }
+
+  const harnessPackage = harnessPackageFromPath(source.path);
+  return {
+    ...source,
+    ...(harnessPackage === undefined ? {} : { harnessPackage }),
+    declaredSymbols,
+    importedContractSymbols,
+    moduleSpecifiers,
+  };
+}
+
+function isForbiddenHarnessDependency(
+  owner: HarnessPackageName,
+  moduleSpecifier: string
+): boolean {
+  const harnessDependency = harnessPackageFromSpecifier(moduleSpecifier);
+  if (harnessDependency !== undefined) {
+    return (
+      harnessDependency !== owner &&
+      !HARNESS_ALLOWED_DEPENDENCIES[owner].has(harnessDependency)
+    );
+  }
+  if (moduleSpecifier.startsWith(".")) {
+    const pathSegments = moduleSpecifier.replaceAll("\\", "/").split("/");
+    return pathSegments.some((segment) =>
+      ["backend", "bff", "frontend", "chat-gun"].includes(segment)
+    );
+  }
+  return FORBIDDEN_HARNESS_DEPENDENCIES.some(
+    (dependency) =>
+      moduleSpecifier === dependency ||
+      moduleSpecifier.startsWith(`${dependency}/`)
+  );
+}
+
+function packageParticipatesInCycle(
+  packageName: HarnessPackageName,
+  packageDependencies: ReadonlyMap<HarnessPackageName, ReadonlySet<HarnessPackageName>>
+): boolean {
+  const visit = (
+    current: HarnessPackageName,
+    visited: ReadonlySet<HarnessPackageName>
+  ): boolean => {
+    for (const dependency of packageDependencies.get(current) ?? []) {
+      if (dependency === packageName) return true;
+      if (visited.has(dependency)) continue;
+      const nextVisited = new Set(visited);
+      nextVisited.add(dependency);
+      if (visit(dependency, nextVisited)) return true;
+    }
+    return false;
+  };
+  return visit(packageName, new Set([packageName]));
+}
+
+function runHarnessProjectChecks(
+  sources: readonly ArchitectureSource[]
+): ArchitectureFinding[] {
+  const parsedSources = sources.map(parseArchitectureSource);
+  const findings: ArchitectureFinding[] = [];
+
+  for (const source of parsedSources) {
+    const harnessPackage = source.harnessPackage;
+    if (
+      harnessPackage !== undefined &&
+      source.moduleSpecifiers.some((moduleSpecifier) =>
+        isForbiddenHarnessDependency(harnessPackage, moduleSpecifier)
+      )
+    ) {
+      findings.push({
+        checkId: "harness-forbidden-dependency",
+        path: source.path,
+        reasonCode: "HARNESS_FORBIDDEN_DEPENDENCY",
+      });
+    }
+  }
+
+  const packageDependencies = new Map<
+    HarnessPackageName,
+    Set<HarnessPackageName>
+  >();
+  for (const source of parsedSources) {
+    if (source.harnessPackage === undefined) continue;
+    const dependencies = packageDependencies.get(source.harnessPackage) ?? new Set();
+    for (const moduleSpecifier of source.moduleSpecifiers) {
+      const dependency = harnessPackageFromSpecifier(moduleSpecifier);
+      if (dependency !== undefined) dependencies.add(dependency);
+    }
+    packageDependencies.set(source.harnessPackage, dependencies);
+  }
+  const cyclePackages = new Set(
+    HARNESS_PACKAGE_NAMES.filter((packageName) =>
+      packageParticipatesInCycle(packageName, packageDependencies)
+    )
+  );
+  for (const source of parsedSources) {
+    if (source.harnessPackage !== undefined && cyclePackages.has(source.harnessPackage)) {
+      findings.push({
+        checkId: "harness-cycle",
+        path: source.path,
+        reasonCode: "HARNESS_PACKAGE_CYCLE",
+      });
+    }
+  }
+
+  const consumedContractSymbols = new Set(
+    parsedSources
+      .filter((source) => source.harnessPackage === undefined)
+      .flatMap((source) => [...source.importedContractSymbols])
+  );
+  for (const source of parsedSources) {
+    if (source.harnessPackage !== undefined) continue;
+    const parallelSymbols = [...source.declaredSymbols].filter((symbolName) =>
+      consumedContractSymbols.has(symbolName)
+    );
+    if (parallelSymbols.length > 0) {
+      findings.push({
+        checkId: "chat-gun-parallel-local-definition",
+        path: source.path,
+        reasonCode: "CHAT_GUN_PARALLEL_LOCAL_DEFINITION",
+      });
+    }
+  }
+
+  return findings;
+}
 
 function hasObjectWithoutField(
   source: string,
@@ -184,15 +446,18 @@ export function runArchitectureChecks(input: {
   overrideConfig?: string;
   now?: Date;
 }): ArchitectureCheckResult {
-  const findings = input.sources.flatMap(({ path, source }) =>
-    CHECKS.filter((check) =>
-      check.detects(source, input.runtimeSymbols ?? [])
-    ).map((check) => ({
-      checkId: check.checkId,
-      path,
-      reasonCode: check.reasonCode,
-    }))
-  );
+  const findings = [
+    ...input.sources.flatMap(({ path, source }) =>
+      CHECKS.filter((check) =>
+        check.detects(source, input.runtimeSymbols ?? [])
+      ).map((check) => ({
+        checkId: check.checkId,
+        path,
+        reasonCode: check.reasonCode,
+      }))
+    ),
+    ...runHarnessProjectChecks(input.sources),
+  ];
   const nowMs = (input.now ?? new Date()).getTime();
   const overrideAudit: ArchitectureOverrideAudit[] = [];
   const overrides = new Map<ArchitectureCheckId, ParsedOverride>();
