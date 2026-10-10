@@ -1,71 +1,33 @@
 import { randomUUID } from "node:crypto";
 
+import {
+  AUTHORIZATION_EFFECTS,
+  AUTHORIZATION_REASON_CODES,
+  type AuthorizationDecision,
+  type AuthorizationEffect,
+  type AuthorizationPolicy,
+  type AuthorizationReasonCode,
+  type AuthorizationRequest,
+  type PolicyEffect,
+  type ScopeAccess,
+} from "@gun-ai/harness-contracts";
+
 import type { GrantStore, StoredPermissionGrant } from "./grant-store.js";
 import type { PrincipalContext } from "./principal.js";
 import type { ResourceRef } from "./resource-ref.js";
 import { isActiveScopePresent } from "./scope.js";
 import type { RuntimeScope } from "./scope.js";
 
-export const AUTHORIZATION_EFFECTS = [
-  "allow",
-  "deny",
-  "require_confirmation",
-] as const;
-
-export type AuthorizationEffect = (typeof AUTHORIZATION_EFFECTS)[number];
-
-export const AUTHORIZATION_REASON_CODES = [
-  "POLICY_ALLOWED",
-  "EXPLICIT_GRANT_ALLOWED",
-  "CROSS_TENANT_DENIED",
-  "MISSING_ACTIVE_SCOPE",
-  "SCOPE_NOT_VISIBLE",
-  "SCOPE_NOT_WRITABLE",
-  "ACTION_NOT_ALLOWED",
-  "MISSING_ROLE_SCOPE_GRANT",
-  "RESOURCE_OWNERSHIP_MISMATCH",
-  "CONTEXT_LIMIT_EXCEEDED",
-  "TOOL_RISK_DENIED",
-  "REQUIRES_CONFIRMATION",
-  "CONFIRMATION_APPROVED",
-  "CONFIRMATION_TIMEOUT",
-  "CONFIRMATION_CANCELLED",
-  "AUTHORIZATION_UNAVAILABLE",
-] as const;
-
-export type AuthorizationReasonCode =
-  (typeof AUTHORIZATION_REASON_CODES)[number];
-
-export interface AuthorizationRequest {
-  principal: PrincipalContext;
-  scope: RuntimeScope;
-  action: string;
-  resource: ResourceRef;
-  context?: Record<string, unknown>;
-}
-
-export interface AuthorizationDecision {
-  decisionId: string;
-  effect: AuthorizationEffect;
-  reasonCode: AuthorizationReasonCode;
-  matchedPolicy?: string;
-  matchedGrantId?: string;
-  createdAt: string;
-}
-
-export type ScopeAccess = "none" | "visible" | "writable";
-export type PolicyEffect = "allow" | "deny" | "require_confirmation";
-
-export interface AuthorizationPolicy {
-  policyId: string;
-  actions: readonly string[];
-  access: "read" | "write";
-  allowedRoles?: readonly string[];
-  allowedPrincipalScopes?: readonly string[];
-  evaluateContext?: (
-    context: Readonly<Record<string, unknown>> | undefined
-  ) => PolicyEffect;
-}
+export { AUTHORIZATION_EFFECTS, AUTHORIZATION_REASON_CODES } from "@gun-ai/harness-contracts";
+export type {
+  AuthorizationDecision,
+  AuthorizationEffect,
+  AuthorizationPolicy,
+  AuthorizationReasonCode,
+  AuthorizationRequest,
+  PolicyEffect,
+  ScopeAccess,
+} from "@gun-ai/harness-contracts";
 
 export interface AuthorizationEvaluationInput {
   policy: AuthorizationPolicy | null;

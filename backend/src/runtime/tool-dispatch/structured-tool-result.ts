@@ -1,6 +1,8 @@
-import { z } from "zod";
+import {
+  structuredToolResultEnvelopeSchema,
+  type StructuredToolResultEnvelope,
+} from "@gun-ai/harness-contracts";
 
-import { TOOL_RISK_TIERS } from "../authorization/tool-risk.js";
 import {
   executionContextSchema,
   type ExecutionContext,
@@ -9,112 +11,11 @@ import {
   getToolExecutionTerminationCause,
   type GovernedToolOutcome,
 } from "../side-effect/governed-outcome.js";
-import type { RuntimeToolDescriptor } from "./runtime-tool-descriptor.js";
 import type { ExecutionProfileEvidence, ExecutionProfileTerminationCause } from "./execution-profile.js";
+import type { RuntimeToolDescriptor } from "./runtime-tool-descriptor.js";
 
-const dispatchStateSchema = z.enum(["before", "after", "unknown"]);
-
-const governedToolOutcomeSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("succeeded"), result: z.unknown() }).strict(),
-  z
-    .object({
-      type: z.literal("rejected_before_dispatch"),
-      errorCode: z.string().min(1),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("denied_by_authorization"),
-      errorCode: z.string().min(1),
-      decisionId: z.string().min(1),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("confirmation_required"),
-      decisionId: z.string().min(1),
-      descriptor: z.unknown(),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("failed_not_committed"),
-      errorCode: z.string().min(1),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("ambiguous_after_dispatch"),
-      errorCode: z.string().min(1),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("cancelled"),
-      dispatchState: dispatchStateSchema,
-    })
-    .strict(),
-]);
-
-export const structuredToolResultEnvelopeSchema = z
-  .object({
-    schemaVersion: z.literal("1.0"),
-    kind: z.literal("tool_result"),
-    correlation: z
-      .object({
-        requestId: z.string().min(1),
-        threadId: z.string().min(1),
-        runId: z.string().min(1),
-        toolCallId: z.string().min(1),
-        stepId: z.string().min(1).optional(),
-      })
-      .strict(),
-    tool: z
-      .object({
-        name: z.string().min(1),
-        version: z.string().min(1),
-        riskTier: z.enum(TOOL_RISK_TIERS),
-        readOnly: z.boolean(),
-      })
-      .strict(),
-    outcome: governedToolOutcomeSchema,
-    executionProfileVersion: z.string().min(1).nullable().optional(),
-    effectiveCapabilities: z.record(z.unknown()).nullable().optional(),
-    secretRefsUsed: z.array(z.string()).nullable().optional(),
-    egressDecision: z
-      .object({ decision: z.enum(["allow", "deny"]), reasonCode: z.string() })
-      .strict()
-      .nullable()
-      .optional(),
-    terminationCause: z.string().nullable().optional(),
-    emittedAt: z.string().datetime(),
-  })
-  .strict();
-
-export interface StructuredToolResultEnvelope<TResult = unknown> {
-  schemaVersion: "1.0";
-  kind: "tool_result";
-  correlation: {
-    requestId: string;
-    threadId: string;
-    runId: string;
-    toolCallId: string;
-    stepId?: string;
-  };
-  tool: {
-    name: string;
-    version: string;
-    riskTier: RuntimeToolDescriptor["riskTier"];
-    readOnly: boolean;
-  };
-  outcome: GovernedToolOutcome<TResult>;
-  executionProfileVersion?: string | null;
-  effectiveCapabilities?: ExecutionProfileEvidence["effectiveCapabilities"] | null;
-  secretRefsUsed?: string[] | null;
-  egressDecision?: ExecutionProfileEvidence["egressDecision"];
-  terminationCause?: ExecutionProfileTerminationCause | null;
-  emittedAt: string;
-}
+export { structuredToolResultEnvelopeSchema } from "@gun-ai/harness-contracts";
+export type { StructuredToolResultEnvelope } from "@gun-ai/harness-contracts";
 
 export interface CreateStructuredToolResultInput<TResult> {
   executionContext: ExecutionContext;
@@ -129,9 +30,7 @@ export function createStructuredToolResultEnvelope<TResult>(
   input: CreateStructuredToolResultInput<TResult>
 ): StructuredToolResultEnvelope<TResult> {
   const context = executionContextSchema.parse(input.executionContext);
-  if (context.toolCallId === undefined) {
-    throw new Error("Structured tool result requires toolCallId");
-  }
+  if (context.toolCallId === undefined) throw new Error("Structured tool result requires toolCallId");
 
   const envelope: StructuredToolResultEnvelope<TResult> = {
     schemaVersion: "1.0",
@@ -150,55 +49,37 @@ export function createStructuredToolResultEnvelope<TResult>(
       readOnly: input.descriptor.isReadOnly,
     },
     outcome: input.outcome,
-    ...(input.securityEvidence
-      ? {
-          executionProfileVersion: input.securityEvidence.executionProfileVersion,
-          effectiveCapabilities: input.securityEvidence.effectiveCapabilities,
-          secretRefsUsed: input.securityEvidence.secretRefsUsed,
-          egressDecision: input.securityEvidence.egressDecision,
-        }
-      : {}),
-    terminationCause:
-      input.terminationCause ?? getToolExecutionTerminationCause(input.outcome),
+    ...(input.securityEvidence ? {
+      executionProfileVersion: input.securityEvidence.executionProfileVersion,
+      effectiveCapabilities: input.securityEvidence.effectiveCapabilities,
+      secretRefsUsed: input.securityEvidence.secretRefsUsed,
+      egressDecision: input.securityEvidence.egressDecision,
+    } : {}),
+    terminationCause: input.terminationCause ?? getToolExecutionTerminationCause(input.outcome),
     emittedAt: input.emittedAt ?? new Date().toISOString(),
   };
-
   structuredToolResultEnvelopeSchema.parse(envelope);
   return envelope;
 }
 
 function outcomeErrorCode<TResult>(
-  outcome: Exclude<GovernedToolOutcome<TResult>, { type: "succeeded" }>
+  outcome: Exclude<StructuredToolResultEnvelope<TResult>["outcome"], { type: "succeeded" }>
 ): string {
-  if (outcome.type === "cancelled") {
-    return `TOOL_EXECUTION_CANCELLED_${outcome.dispatchState.toUpperCase()}`;
-  }
-  return outcome.type === "confirmation_required"
-    ? "REQUIRES_CONFIRMATION"
-    : outcome.errorCode;
+  if (outcome.type === "cancelled") return `TOOL_EXECUTION_CANCELLED_${outcome.dispatchState.toUpperCase()}`;
+  return outcome.type === "confirmation_required" ? "REQUIRES_CONFIRMATION" : outcome.errorCode;
 }
 
-export function toLegacyToolResult<TResult>(
-  envelope: StructuredToolResultEnvelope<TResult>
-): string {
+export function toLegacyToolResult<TResult>(envelope: StructuredToolResultEnvelope<TResult>): string {
   if (envelope.outcome.type === "succeeded") {
     return typeof envelope.outcome.result === "string"
       ? envelope.outcome.result
       : JSON.stringify(envelope.outcome.result);
   }
-  return `Error: ${envelope.tool.name} failed - ${outcomeErrorCode(
-    envelope.outcome
-  )}`;
+  return `Error: ${envelope.tool.name} failed - ${outcomeErrorCode(envelope.outcome)}`;
 }
 
 export function tryToLegacyToolResult(value: unknown): string | undefined {
   const parsed = structuredToolResultEnvelopeSchema.safeParse(value);
-  if (!parsed.success) {
-    return undefined;
-  }
-  // Zod infers `z.unknown()` object properties as optional. The domain
-  // assertion stays here, immediately after strict runtime validation.
-  return toLegacyToolResult(
-    parsed.data as StructuredToolResultEnvelope<unknown>
-  );
+  if (!parsed.success) return undefined;
+  return toLegacyToolResult(parsed.data as StructuredToolResultEnvelope<unknown>);
 }

@@ -1,24 +1,21 @@
-import type { TaskStatus } from "./types.js";
+import {
+  RUN_TERMINAL_STATUSES,
+  type RunStatus,
+  type RunStatusTransition,
+  type RunTerminalStatus,
+  type TaskStatus,
+} from "@gun-ai/harness-contracts";
 
-export const RUN_TERMINAL_STATUSES = [
-  "completed",
-  "failed",
-  "cancelled",
-  "timed_out",
-  "crashed",
-  "budget_exhausted",
-  "superseded",
-] as const;
-
-export type RunTerminalStatus = (typeof RUN_TERMINAL_STATUSES)[number];
-
-export const RUN_WAITING_STATUSES = [
-  "needs_user",
-  "manual_intervention_required",
-] as const;
-
-export type RunWaitingStatus = (typeof RUN_WAITING_STATUSES)[number];
-export type RunStatus = "running" | RunWaitingStatus | RunTerminalStatus;
+export {
+  RUN_TERMINAL_STATUSES,
+  RUN_WAITING_STATUSES,
+} from "@gun-ai/harness-contracts";
+export type {
+  RunStatus,
+  RunStatusTransition,
+  RunTerminalStatus,
+  RunWaitingStatus,
+} from "@gun-ai/harness-contracts";
 
 const TASK_STATUS_TO_RUN_STATUS: Record<TaskStatus, RunStatus> = {
   created: "running",
@@ -36,17 +33,7 @@ const TASK_STATUS_TO_RUN_STATUS: Record<TaskStatus, RunStatus> = {
   manual_intervention_required: "manual_intervention_required",
 };
 
-export type RunStatusTransition =
-  | { accepted: true; status: RunStatus }
-  | {
-      accepted: false;
-      status: RunTerminalStatus;
-      reasonCode: "RUN_TERMINAL_MONOTONICITY";
-    };
-
-export function isRunTerminalStatus(
-  value: string
-): value is RunTerminalStatus {
+export function isRunTerminalStatus(value: string): value is RunTerminalStatus {
   return RUN_TERMINAL_STATUSES.some((status) => status === value);
 }
 
@@ -55,21 +42,12 @@ export function runStatusOf(taskStatus: TaskStatus): RunStatus {
 }
 
 export function runStatusReasonOf(taskStatus: TaskStatus): string | undefined {
-  return taskStatus === "cancelled_after_commit"
-    ? "cancelled_after_commit"
-    : undefined;
+  return taskStatus === "cancelled_after_commit" ? "cancelled_after_commit" : undefined;
 }
 
-export function transitionRunStatus(
-  current: RunStatus,
-  next: RunStatus
-): RunStatusTransition {
+export function transitionRunStatus(current: RunStatus, next: RunStatus): RunStatusTransition {
   if (isRunTerminalStatus(current) && next !== current) {
-    return {
-      accepted: false,
-      status: current,
-      reasonCode: "RUN_TERMINAL_MONOTONICITY",
-    };
+    return { accepted: false, status: current, reasonCode: "RUN_TERMINAL_MONOTONICITY" };
   }
   return { accepted: true, status: next };
 }
