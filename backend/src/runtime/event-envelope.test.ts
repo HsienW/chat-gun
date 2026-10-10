@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ExecutionContext } from "./execution-context/execution-context.js";
+import { createExecutionContextFixture } from "@gun-ai/harness-testkit";
 import {
   RUNTIME_EVENT_SCHEMA_VERSION,
   parseRuntimeEventEnvelope,
@@ -8,11 +8,7 @@ import {
   projectExecutionEventContext,
 } from "./event-envelope.js";
 
-const executionContext: ExecutionContext = {
-  requestId: "request-1",
-  threadId: "thread-1",
-  runId: "run-1",
-  taskId: "task-1",
+const executionContext = createExecutionContextFixture({
   stepId: "step-1",
   toolCallId: "tool-call-1",
   toolExecutionId: "tool-execution-1",
@@ -20,20 +16,11 @@ const executionContext: ExecutionContext = {
   agentId: "agent-1",
   attempt: 2,
   principal: {
-    principalId: "principal-1",
-    principalType: "user",
-    tenantId: "tenant-1",
     roles: ["operator"],
     scopes: ["tool:execute"],
-    authSource: "trusted_gateway",
     authenticatedAt: "2026-09-27T00:00:00.000Z",
   },
-  scope: {
-    scopeId: "scope-1",
-    scopeType: "tenant",
-    tenantId: "tenant-1",
-  },
-};
+});
 
 function createEnvelope(): Record<string, unknown> {
   return {

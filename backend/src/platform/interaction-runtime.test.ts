@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ActiveRunOwnership } from "../runtime/interaction/ownership.js";
 import type { InputClassificationResult } from "../runtime/interaction/classify.js";
 import type { InteractionTaskEvent } from "../runtime/interaction/events.js";
+import { IDEMPOTENCY_RECORD_SCHEMA_VERSION } from "../runtime/idempotency/idempotency-key.js";
 import {
   applyInteractionGovernance,
   createInteractionOrchestrator,
@@ -477,6 +478,7 @@ describe("interaction runtime production wrapper", () => {
         acquired: false as const,
         reason: "already_completed" as const,
         existing: {
+          schemaVersion: IDEMPOTENCY_RECORD_SCHEMA_VERSION,
           key: "interaction_input:key:v1",
           status: "completed" as const,
           result: { cached: true },
@@ -548,6 +550,7 @@ describe("interaction runtime production wrapper", () => {
         acquired: false as const,
         reason: "already_locked" as const,
         existing: {
+          schemaVersion: IDEMPOTENCY_RECORD_SCHEMA_VERSION,
           key: "interaction_input:key:v1",
           status: "locked" as const,
           createdAt: "2026-09-26T00:00:00.000Z",
@@ -646,6 +649,7 @@ describe("interaction runtime production wrapper", () => {
       acquire: vi.fn(async () => ({
         acquired: true as const,
         record: {
+          schemaVersion: IDEMPOTENCY_RECORD_SCHEMA_VERSION,
           key: "interaction_input:key:v1",
           status: "locked" as const,
           createdAt: "2026-09-26T00:00:00.000Z",
