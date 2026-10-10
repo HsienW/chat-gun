@@ -1,4 +1,5 @@
 export {
+  IDEMPOTENCY_RECORD_SCHEMA_VERSION,
   parseKey,
   serializeKey,
   type IdempotencyKey,

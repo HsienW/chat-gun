@@ -1,13 +1,6 @@
-import type { BackoffStrategy } from "./backoff.js";
-import type { ErrorCategory } from "./error-classification.js";
+import type { RetryPolicy } from "@gun-ai/harness-contracts";
 
-export interface RetryPolicy {
-  maxAttempts: number;
-  maxElapsedMs: number;
-  retryableCategories: ErrorCategory[];
-  backoffStrategy: BackoffStrategy;
-  jitter: boolean;
-}
+export type { RetryPolicy } from "@gun-ai/harness-contracts";
 
 export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   maxAttempts: 3,

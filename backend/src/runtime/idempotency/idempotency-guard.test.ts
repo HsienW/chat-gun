@@ -104,6 +104,7 @@ describe("PgIdempotencyGuard", () => {
 
     expect(acquired.acquired).toBe(true);
     if (acquired.acquired) {
+      expect(acquired.record.schemaVersion).toBe("1.0");
       expect(acquired.record.status).toBe("locked");
       expect(new Date(acquired.record.expiresAt).getTime()).toBeGreaterThan(
         Date.now()
