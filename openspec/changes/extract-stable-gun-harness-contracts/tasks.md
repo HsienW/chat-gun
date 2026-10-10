@@ -217,7 +217,7 @@ npm view @gun-ai/harness-testkit@0.1.0-alpha.1 version dist-tags --registry=http
 
 - [x] backend 三項依賴由開發期 `file:` 改為精確 `0.1.0-alpha.1` registry 版本，更新 lockfile；`npm ls` 與實際 package 路徑證明來源為 registry package。
 - [x] 在沒有 sibling `gun-harness` 目錄的隔離環境執行 `npm ci`、lint、完整 test、build、boundary／cycle／parallel-definition、API surface 與 rollback compatibility 驗證。
-- [ ] 從包含本 consumer 實作（package.json／lockfile）與本 OpenSpec change（proposal／design／tasks／五份 delta specs）的已提交本地 SHA，以 `git clone --no-local` 建立獨立 clone，重跑全部驗證、OpenSpec strict 與 `git diff --check`；不要求 remote push。此 SHA 通過後，才交 Qwen 對新範圍唯讀 review-result。最後一項在新修訂驗證完成前保持未勾選。
+- [x] 從包含本 consumer 實作（package.json／lockfile）與本 OpenSpec change（proposal／design／tasks／五份 delta specs）的已提交本地 SHA `8d2e2710394aa3c1154862ce993f63f4af285f7c`，以 `git clone --no-local` 建立獨立 clone，全部驗證、OpenSpec strict 與 `git diff --check` 通過；未 remote push。完整測試 1602 通過／46 跳過，邊界／API／回滾定向測試 22 通過；證據見 `evidence/final-validation-summary.json`。交 CCR 核實並路由新的 Qwen 唯讀 review-result，尚未宣告 review/readiness 通過。
 
 > 驗收後若需更新 checkbox、evidence 或 archive，屬後續文件修訂；驗收證據錨定實際驗收 SHA，不要求該 SHA 預先包含自身通過證據（避免無限重提交）。若驗收後修改 executable code、依賴或實質規格，才重新評估受影響驗證。
 
