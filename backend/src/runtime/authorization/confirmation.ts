@@ -1,97 +1,34 @@
 import { randomBytes } from "node:crypto";
 
-import { z } from "zod";
+import {
+  AUTHORIZATION_CONFIRMATION_SCHEMA_VERSION,
+  confirmationInterruptPayloadSchema,
+  confirmationRequiredDescriptorSchema,
+  confirmationResumeSchema,
+  type ConfirmationConsumeFailureReason,
+  type ConfirmationConsumeResult,
+  type ConfirmationInterruptPayload,
+  type ConfirmationRequiredDescriptor,
+  type ConfirmationResume,
+} from "@gun-ai/harness-contracts";
 
 import type { ExecutionContext } from "../execution-context/execution-context.js";
 import type { Queryable } from "../persistence/rows.js";
 import type { ResourceRef } from "./resource-ref.js";
 
-export const AUTHORIZATION_CONFIRMATION_SCHEMA_VERSION = "1.0" as const;
-
-const identifierSchema = z.string().trim().min(1).max(256);
-const approvalIdSchema = z.string().regex(/^[a-f0-9]{64}$/);
-const resourceSchema = z
-  .object({
-    resourceType: identifierSchema,
-    resourceId: identifierSchema,
-    tenantId: identifierSchema,
-    ownerScopeId: identifierSchema.optional(),
-  })
-  .strict();
-const scopeSchema = z
-  .object({
-    scopeId: identifierSchema,
-    scopeType: z.enum(["principal", "tenant", "team", "conversation"]),
-    tenantId: identifierSchema,
-  })
-  .strict();
-const confirmationResumeCompatibilitySchema = z
-  .object({
-    type: z.literal("tool_authorization_confirmation"),
-    schemaVersion: z.literal(AUTHORIZATION_CONFIRMATION_SCHEMA_VERSION),
-    decisions: z.tuple([z.literal("approve"), z.literal("deny")]),
-  })
-  .strict();
-
-export const confirmationRequiredDescriptorSchema = z
-  .object({
-    type: z.literal("confirmation_required"),
-    schemaVersion: z.literal(AUTHORIZATION_CONFIRMATION_SCHEMA_VERSION),
-    decisionId: identifierSchema,
-    approvalId: approvalIdSchema,
-    requestId: identifierSchema,
-    threadId: identifierSchema,
-    runId: identifierSchema,
-    taskId: identifierSchema,
-    stepId: identifierSchema.optional(),
-    toolCallId: identifierSchema.optional(),
-    scope: scopeSchema,
-    resource: resourceSchema,
-    policyVersion: identifierSchema,
-    expiresAt: z.string().datetime(),
-    allowedApproverPrincipalIds: z.array(identifierSchema).min(1),
-    resumeCompatibility: confirmationResumeCompatibilitySchema,
-    summary: z
-      .object({
-        toolName: identifierSchema,
-        action: identifierSchema,
-        resourceType: identifierSchema,
-      })
-      .strict(),
-  })
-  .strict();
-
-export type ConfirmationRequiredDescriptor = z.infer<
-  typeof confirmationRequiredDescriptorSchema
->;
-
-export const confirmationResumeSchema = z
-  .object({
-    type: z.literal("tool_authorization_confirmation"),
-    schemaVersion: z.literal(AUTHORIZATION_CONFIRMATION_SCHEMA_VERSION),
-    approvalId: approvalIdSchema,
-    decisionId: identifierSchema,
-    decision: z.enum(["approve", "deny"]),
-  })
-  .strict();
-
-export type ConfirmationResume = z.infer<typeof confirmationResumeSchema>;
-
-export const confirmationInterruptPayloadSchema = z
-  .object({
-    type: z.literal("tool_authorization_confirmation"),
-    schemaVersion: z.literal(AUTHORIZATION_CONFIRMATION_SCHEMA_VERSION),
-    approvalId: approvalIdSchema,
-    decisionId: identifierSchema,
-    expiresAt: z.string().datetime(),
-    resumeCompatibility: confirmationResumeCompatibilitySchema,
-    summary: confirmationRequiredDescriptorSchema.shape.summary,
-  })
-  .strict();
-
-export type ConfirmationInterruptPayload = z.infer<
-  typeof confirmationInterruptPayloadSchema
->;
+export {
+  AUTHORIZATION_CONFIRMATION_SCHEMA_VERSION,
+  confirmationInterruptPayloadSchema,
+  confirmationRequiredDescriptorSchema,
+  confirmationResumeSchema,
+} from "@gun-ai/harness-contracts";
+export type {
+  ConfirmationConsumeFailureReason,
+  ConfirmationConsumeResult,
+  ConfirmationInterruptPayload,
+  ConfirmationRequiredDescriptor,
+  ConfirmationResume,
+} from "@gun-ai/harness-contracts";
 
 export interface CreateConfirmationRequiredDescriptorInput {
   decisionId: string;
@@ -168,15 +105,6 @@ export function toConfirmationInterruptPayload(
 export function parseConfirmationResume(value: unknown): ConfirmationResume {
   return confirmationResumeSchema.parse(value);
 }
-
-export type ConfirmationConsumeFailureReason =
-  | "CONFIRMATION_BINDING_MISMATCH"
-  | "CONFIRMATION_TIMEOUT"
-  | "CONFIRMATION_REPLAYED_OR_EXPIRED";
-
-export type ConfirmationConsumeResult =
-  | { ok: true; status: "approved" | "denied" }
-  | { ok: false; reasonCode: ConfirmationConsumeFailureReason };
 
 export interface ConsumeConfirmationInput {
   descriptor: ConfirmationRequiredDescriptor;

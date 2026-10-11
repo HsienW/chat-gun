@@ -18,6 +18,9 @@
     "operations:rolling-deploy": "tsx src/operations/rolling-deploy.cli.ts"
   },
   "dependencies": {
+    "@gun-ai/harness-contracts": "0.1.0-alpha.1",
+    "@gun-ai/harness-kernel": "0.1.0-alpha.1",
+    "@gun-ai/harness-testkit": "0.1.0-alpha.1",
     "@langchain/core": "1.2.10",
     "@langchain/langgraph": "1.4.14",
     "@langchain/langgraph-checkpoint": "1.1.5",

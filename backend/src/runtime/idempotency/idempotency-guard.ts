@@ -1,5 +1,6 @@
 import type { Queryable } from "../persistence/rows.js";
 import {
+  IDEMPOTENCY_RECORD_SCHEMA_VERSION,
   serializeKey,
   type IdempotencyKey,
   type IdempotencyRecord,
@@ -54,6 +55,7 @@ function mapRecord(row: IdempotencyRecordRow): IdempotencyRecord {
   }
 
   return {
+    schemaVersion: IDEMPOTENCY_RECORD_SCHEMA_VERSION,
     key: row.key,
     status: row.status,
     ...(row.result !== null ? { result: row.result } : {}),

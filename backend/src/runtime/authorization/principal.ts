@@ -1,19 +1,10 @@
-export const PRINCIPAL_TYPES = [
-  "user",
-  "merchant_staff",
-  "platform_staff",
-  "service",
-] as const;
-
-export const AUTH_SOURCES = [
-  "trusted_gateway",
-  "oidc",
-  "service_token",
-  "development",
-] as const;
-
-export type PrincipalType = (typeof PRINCIPAL_TYPES)[number];
-export type AuthSource = (typeof AUTH_SOURCES)[number];
+import {
+  AUTH_SOURCES,
+  PRINCIPAL_TYPES,
+  type AuthSource,
+  type PrincipalContext,
+  type PrincipalType,
+} from "@gun-ai/harness-contracts";
 
 import {
   opaqueIdentityIdSchema,
@@ -22,19 +13,12 @@ import {
   type PrincipalKind,
 } from "./consumer-identity.js";
 
-export interface PrincipalContext {
-  principalId: string;
-  principalType: PrincipalType;
-  principalKind?: PrincipalKind;
-  tenantId: string;
-  accountId?: string;
-  sessionId?: string;
-  deviceId?: string;
-  roles: string[];
-  scopes: string[];
-  authSource: AuthSource;
-  authenticatedAt: string;
-}
+export { AUTH_SOURCES, PRINCIPAL_TYPES } from "@gun-ai/harness-contracts";
+export type {
+  AuthSource,
+  PrincipalContext,
+  PrincipalType,
+} from "@gun-ai/harness-contracts";
 
 const TRUSTED_PRINCIPAL_HEADERS = {
   principalId: "x-bff-principal-id",

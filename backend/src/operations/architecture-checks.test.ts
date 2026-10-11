@@ -7,33 +7,108 @@ import { RuntimeToolDescriptorRegistry } from "../runtime/tool-dispatch/runtime-
 import { runArchitectureChecks } from "./architecture-checks.js";
 import { EXECUTION_PROFILE_ENFORCEMENT_MARKER } from "../runtime/tool-dispatch/execution-profile.js";
 
+const CONTRACT_API_SURFACE = JSON.parse(readFileSync(
+  new URL("../../node_modules/@gun-ai/harness-contracts/api-surface.json", import.meta.url),
+  "utf8"
+)) as { runtime: string[]; types: string[] };
+
 const DELIBERATE_BYPASSES = [
-  ["profile-missing-dispatch", "sourceTool.invoke(input)"],
-  ["egress-bypass", "const response = await fetch(url)"],
-  ["secret-into-context", "const secret = configurable.apiKey"],
-  ["direct-protected-tool-invocation", "protectedTool.invoke(input)"],
-  [
-    "mutation-descriptor-missing",
-    "const descriptor = { isReadOnly: false, toolName: 'write' };",
-  ],
-  [
-    "production-registry-authorization-missing",
-    "createProductionRegistry({ authorization: undefined });",
-  ],
-  [
-    "unversioned-runtime-event-producer",
-    "const item = { runtimeEvent: true, type: 'run.started' };",
-  ],
-  ["agent-legacy-context-assembly", "buildConversationContext(messages);"],
-  [
-    "client-controlled-trusted-identity",
-    "const principal = configurable.principalId;",
-  ],
+  {
+    checkId: "profile-missing-dispatch",
+    sources: [{ path: "deliberate-regression.ts", source: "sourceTool.invoke(input)" }],
+  },
+  {
+    checkId: "egress-bypass",
+    sources: [{ path: "deliberate-regression.ts", source: "const response = await fetch(url)" }],
+  },
+  {
+    checkId: "secret-into-context",
+    sources: [{ path: "deliberate-regression.ts", source: "const secret = configurable.apiKey" }],
+  },
+  {
+    checkId: "direct-protected-tool-invocation",
+    sources: [{ path: "deliberate-regression.ts", source: "protectedTool.invoke(input)" }],
+  },
+  {
+    checkId: "mutation-descriptor-missing",
+    sources: [{
+      path: "deliberate-regression.ts",
+      source: "const descriptor = { isReadOnly: false, toolName: 'write' };",
+    }],
+  },
+  {
+    checkId: "production-registry-authorization-missing",
+    sources: [{
+      path: "deliberate-regression.ts",
+      source: "createProductionRegistry({ authorization: undefined });",
+    }],
+  },
+  {
+    checkId: "unversioned-runtime-event-producer",
+    sources: [{
+      path: "deliberate-regression.ts",
+      source: "const item = { runtimeEvent: true, type: 'run.started' };",
+    }],
+  },
+  {
+    checkId: "agent-legacy-context-assembly",
+    sources: [{
+      path: "deliberate-regression.ts",
+      source: "buildConversationContext(messages);",
+    }],
+  },
+  {
+    checkId: "client-controlled-trusted-identity",
+    sources: [{
+      path: "deliberate-regression.ts",
+      source: "const principal = configurable.principalId;",
+    }],
+  },
+  {
+    checkId: "harness-forbidden-dependency",
+    sources: [{
+      path: "packages/contracts/src/index.ts",
+      source: 'import type { RunnableConfig } from "@langchain/core/runnables";',
+    }],
+  },
+  {
+    checkId: "harness-forbidden-dependency",
+    sources: [{
+      path: "packages/contracts/src/index.ts",
+      source: 'import type { AgentTask } from "../../../backend/src/runtime/types.js";',
+    }],
+  },
+  {
+    checkId: "harness-cycle",
+    sources: [
+      {
+        path: "packages/contracts/src/index.ts",
+        source: 'export type { KernelValue } from "@gun-ai/harness-kernel";',
+      },
+      {
+        path: "packages/kernel/src/index.ts",
+        source: 'import type { ExecutionContext } from "@gun-ai/harness-contracts";',
+      },
+    ],
+  },
+  {
+    checkId: "chat-gun-parallel-local-definition",
+    sources: [
+      {
+        path: "backend/src/consumer.ts",
+        source: 'import type { ExecutionContext } from "@gun-ai/harness-contracts/execution";',
+      },
+      {
+        path: "backend/src/runtime/execution-context/execution-context.ts",
+        source: "export interface ExecutionContext { runId: string }",
+      },
+    ],
+  },
 ] as const;
 
 describe("production runtime architecture checks", () => {
   it("does not report the current production Agent/runtime sources", () => {
-    const sources = [
+    const productionPaths = [
       "../agents/chatbot.ts",
       "../agents/math-agent.ts",
       "../agents/mcp-agent.ts",
@@ -46,10 +121,65 @@ describe("production runtime architecture checks", () => {
       "../platform/tool-governance.ts",
       "../runtime/tool-dispatch/pipeline.ts",
       "../runtime/event-envelope.ts",
-    ].map((path) => ({
+      "../runtime/event-payloads.ts",
+      "../runtime/event-sequence.ts",
+      "../runtime/types.ts",
+      "../runtime/run-status.ts",
+      "../runtime/execution-context/execution-context.ts",
+      "../runtime/authorization/principal.ts",
+      "../runtime/authorization/scope.ts",
+      "../runtime/authorization/consumer-identity.ts",
+      "../runtime/authorization/authorization.ts",
+      "../runtime/authorization/confirmation.ts",
+      "../runtime/side-effect/identity.ts",
+      "../runtime/side-effect/governed-outcome.ts",
+      "../runtime/retry/error-classification.ts",
+      "../runtime/retry/retry-policy.ts",
+      "../runtime/retry/backoff.ts",
+      "../runtime/retry/retry-budget.ts",
+      "../runtime/idempotency/idempotency-key.ts",
+      "../runtime/recovery/interrupt-manifest.ts",
+      "../runtime/persistence/version-compatibility.ts",
+      "../runtime/tool-dispatch/runtime-tool-descriptor.ts",
+      "../runtime/tool-dispatch/structured-tool-result.ts",
+    ];
+    const harnessPaths = [
+      "@gun-ai/harness-contracts/src/authorization.ts",
+      "@gun-ai/harness-contracts/src/events.ts",
+      "@gun-ai/harness-contracts/src/identity.ts",
+      "@gun-ai/harness-contracts/src/index.ts",
+      "@gun-ai/harness-contracts/src/lifecycle.ts",
+      "@gun-ai/harness-contracts/src/recovery.ts",
+      "@gun-ai/harness-contracts/src/retry.ts",
+      "@gun-ai/harness-contracts/src/side-effect.ts",
+      "@gun-ai/harness-contracts/src/tool.ts",
+      "@gun-ai/harness-kernel/src/authorization.ts",
+      "@gun-ai/harness-kernel/src/events.ts",
+      "@gun-ai/harness-kernel/src/idempotency.ts",
+      "@gun-ai/harness-kernel/src/index.ts",
+      "@gun-ai/harness-kernel/src/retry.ts",
+      "@gun-ai/harness-kernel/src/side-effect.ts",
+      "@gun-ai/harness-kernel/src/version-compatibility.ts",
+      "@gun-ai/harness-testkit/src/deterministic.ts",
+      "@gun-ai/harness-testkit/src/failures.ts",
+      "@gun-ai/harness-testkit/src/fixtures.ts",
+      "@gun-ai/harness-testkit/src/index.ts",
+    ];
+    const sources = productionPaths.map((path) => ({
       path,
       source: readFileSync(new URL(path, import.meta.url), "utf8"),
-    }));
+    })).concat(harnessPaths.map((path) => ({
+      path: `node_modules/${path}`,
+      source: readFileSync(
+        new URL(`../../node_modules/${path}`, import.meta.url),
+        "utf8"
+      ),
+    }))).concat({
+      path: "backend/src/harness-contract-consumer.ts",
+      source: `import {
+        ${[...CONTRACT_API_SURFACE.runtime, ...CONTRACT_API_SURFACE.types].join(",\n")}
+      } from "@gun-ai/harness-contracts";`,
+    });
 
     expect(runArchitectureChecks({
       sources,
@@ -61,16 +191,16 @@ describe("production runtime architecture checks", () => {
   });
 
   it.each(DELIBERATE_BYPASSES)(
-    "fails for deliberate %s bypass",
-    (checkId, source) => {
+    "fails for deliberate $checkId bypass",
+    ({ checkId, sources }) => {
       const result = runArchitectureChecks({
-        sources: [{ path: "deliberate-regression.ts", source }],
+        sources,
       });
 
       expect(result.status).toBe("failed");
-      expect(result.findings).toEqual([
-        expect.objectContaining({ checkId, path: "deliberate-regression.ts" }),
-      ]);
+      expect(result.findings).toContainEqual(
+        expect.objectContaining({ checkId }),
+      );
     }
   );
 
