@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ChevronRight, CircleAlert, ShieldCheck } from 'lucide-react';
 
 import {
   requestSubjectRight,
@@ -20,6 +21,8 @@ const PART_LABELS: Readonly<Record<ReceiptPartStatus, string>> = {
   retained_by_policy: '依政策保留',
   failed: '失敗',
 };
+
+const LABELS = { title: '資料權利' } as const;
 
 export function SubjectRightsPanel({
   fetchImpl = fetch,
@@ -65,33 +68,42 @@ export function SubjectRightsPanel({
   };
 
   return (
-    <section className="mx-4 mt-3 rounded-lg border border-border bg-card px-4 py-3 text-sm" aria-label="資料權利">
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 className="mr-auto font-medium">資料權利</h2>
-        <button type="button" className="rounded-md border px-3 py-1 disabled:opacity-50" disabled={pending}
-          onClick={() => void submit('export')}>匯出我的資料</button>
-        <button type="button" className="rounded-md border border-red-300 px-3 py-1 text-red-700 disabled:opacity-50"
-          disabled={pending} onClick={() => {
-            if (confirmAction('確定提出資料刪除要求？')) void submit('deletion');
-          }}>刪除我的資料</button>
-        <button type="button" role="switch" aria-checked={consentGranted}
-          className="rounded-md border px-3 py-1 disabled:opacity-50" disabled={pending}
-          onClick={() => void toggleConsent()}>個人化同意：{consentGranted ? '開啟' : '關閉'}</button>
-      </div>
-      {pending && <p className="mt-2" role="status">正在送出要求…</p>}
-      {error && <p className="mt-2 text-red-700" role="alert">目前無法處理資料權利要求，請稍後再試。</p>}
-      {workflow && (
-        <div className="mt-3" aria-live="polite">
-          <p>處理狀態：{STATUS_LABELS[workflow.status]}</p>
-          {workflow.receipt && (
-            <ul className="mt-2 space-y-1">
-              {workflow.receipt.parts.map((part) => (
-                <li key={part.storeId}>{part.storeId}：{PART_LABELS[part.status]}</li>
-              ))}
-            </ul>
-          )}
+    <details className="group text-sm">
+      <summary className="flex cursor-pointer list-none items-center gap-3 rounded-lg px-3 py-3 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+        <ShieldCheck className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <span className="flex-1">{LABELS.title}</span>
+        <ChevronRight className="size-4 shrink-0 transition-transform group-open:rotate-90 motion-reduce:transition-none" aria-hidden="true" />
+      </summary>
+      <div className="mx-3 mb-3 mt-1 rounded-lg border border-border bg-background p-3">
+        <div className="flex flex-col items-stretch gap-2">
+          <button type="button" className="rounded-md border px-3 py-1 disabled:opacity-50" disabled={pending}
+            onClick={() => void submit('export')}>匯出我的資料</button>
+          <button type="button" role="switch" aria-checked={consentGranted}
+            className="rounded-md border px-3 py-1 disabled:opacity-50" disabled={pending}
+            onClick={() => void toggleConsent()}>個人化同意：{consentGranted ? '開啟' : '關閉'}</button>
+          <button type="button" className="flex items-center justify-center gap-2 rounded-md border border-border px-3 py-1 text-white disabled:opacity-50"
+            disabled={pending} onClick={() => {
+              if (confirmAction('確定提出資料刪除要求？')) void submit('deletion');
+            }}>
+            <CircleAlert className="size-4 shrink-0" aria-hidden="true" />
+            刪除我的資料
+          </button>
         </div>
-      )}
-    </section>
+        {pending && <p className="mt-2" role="status">正在送出要求…</p>}
+        {error && <p className="mt-2 text-red-700" role="alert">目前無法處理資料權利要求，請稍後再試。</p>}
+        {workflow && (
+          <div className="mt-3" aria-live="polite">
+            <p>處理狀態：{STATUS_LABELS[workflow.status]}</p>
+            {workflow.receipt && (
+              <ul className="mt-2 space-y-1">
+                {workflow.receipt.parts.map((part) => (
+                  <li key={part.storeId}>{part.storeId}：{PART_LABELS[part.status]}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+    </details>
   );
 }

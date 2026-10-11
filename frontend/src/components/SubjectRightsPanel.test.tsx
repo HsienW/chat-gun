@@ -25,6 +25,7 @@ describe('SubjectRightsPanel', () => {
   it('submits export and renders typed workflow status', async () => {
     const fetchImpl = vi.fn(async () => response('export'));
     render(<SubjectRightsPanel fetchImpl={fetchImpl} />);
+    fireEvent.click(screen.getByText('資料權利'));
     fireEvent.click(screen.getByRole('button', { name: '匯出我的資料' }));
     await waitFor(() => expect(screen.getByText('處理狀態：已完成')).toBeInTheDocument());
     expect(fetchImpl).toHaveBeenCalledWith('/api/subject-rights/export', expect.any(Object));
@@ -33,6 +34,7 @@ describe('SubjectRightsPanel', () => {
   it('confirms deletion and displays all receipt statuses from typed fields', async () => {
     const fetchImpl = vi.fn(async () => response('deletion', true));
     render(<SubjectRightsPanel fetchImpl={fetchImpl} confirmAction={() => true} />);
+    fireEvent.click(screen.getByText('資料權利'));
     fireEvent.click(screen.getByRole('button', { name: '刪除我的資料' }));
     await waitFor(() => expect(screen.getByText('runtime.tasks：已完成')).toBeInTheDocument());
     expect(screen.getByText('runtime.audit：依政策保留')).toBeInTheDocument();
@@ -42,6 +44,7 @@ describe('SubjectRightsPanel', () => {
     const fetchImpl = vi.fn(async () => response('consent'));
     const confirmAction = vi.fn(() => false);
     render(<SubjectRightsPanel fetchImpl={fetchImpl} confirmAction={confirmAction} />);
+    fireEvent.click(screen.getByText('資料權利'));
     const toggle = screen.getByRole('switch');
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));

@@ -323,16 +323,16 @@ export const InputForm: React.FC<InputFormProps> = ({
       )}
 
       <div
-        className={`flex flex-row items-center justify-between rounded-3xl rounded-bl-sm ${
+        className={`flex flex-row items-center gap-2 rounded-3xl rounded-bl-sm ${
           hasHistory ? 'rounded-br-sm' : ''
-        } min-h-7 bg-card/95 border border-border px-4 pt-3 text-[#F8F1E7] shadow-lg shadow-black/10`}
+        } bg-card/95 border border-border px-4 py-3 text-[#F8F1E7] shadow-lg shadow-black/10`}
       >
         <Textarea
           value={internalInputValue}
           onChange={(event) => setInternalInputValue(event.target.value)}
           onKeyDown={handleInternalKeyDown}
           placeholder="輸入你的問題..."
-          className="w-full resize-none border-0 bg-transparent text-[#F8F1E7] placeholder:text-[#E7D9C1]/45 focus:outline-none focus:ring-0 focus-visible:ring-0 shadow-none md:text-base min-h-[56px] max-h-[200px]"
+          className="min-w-0 flex-1 resize-none border-0 bg-transparent py-2 text-[#F8F1E7] placeholder:text-[#E7D9C1]/45 focus:outline-none focus:ring-0 focus-visible:ring-0 shadow-none md:text-base leading-6 min-h-10 max-h-[200px]"
           rows={1}
         />
         {supportsImageUpload && (
@@ -358,7 +358,7 @@ export const InputForm: React.FC<InputFormProps> = ({
             </Button>
           </>
         )}
-        <div className="-mt-3">
+        <div className="flex shrink-0 items-center">
           {isLoading ? (
             <Button
               type="button"
@@ -373,6 +373,7 @@ export const InputForm: React.FC<InputFormProps> = ({
             <Button
               type="submit"
               variant="ghost"
+              size="icon"
               className={`${
                 isSubmitDisabled
                   ? 'text-[#E7D9C1]/35'

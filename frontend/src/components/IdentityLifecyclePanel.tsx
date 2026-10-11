@@ -1,4 +1,5 @@
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
+import { ChevronRight, Link2 } from 'lucide-react';
 
 import {
   classifyIdentityFailure,
@@ -44,6 +45,7 @@ export function IdentityLifecyclePanel({
 }) {
   const [migrationState, setMigrationState] = useState<'idle' | 'pending' | 'success' | 'error'>('idle');
   const [migrationFormOpen, setMigrationFormOpen] = useState(false);
+  const migrationFormId = useId();
   const recoveryAction = classifyIdentityFailure(identityFailure);
 
   const handleMigration = async () => {
@@ -81,28 +83,32 @@ export function IdentityLifecyclePanel({
   };
 
   return (
-    <section className="mx-4 mt-3 rounded-lg border border-border bg-card px-4 py-3 text-sm" aria-label="身份與帳號狀態">
+    <section className="text-sm" aria-label="身份與帳號狀態">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         {accountStatus && <span>帳號狀態：{ACCOUNT_LABELS[accountStatus]}</span>}
         {sessionStatus && <span>Session 狀態：{SESSION_LABELS[sessionStatus]}</span>}
         <button
           type="button"
-          className="rounded-md border px-3 py-1 disabled:opacity-50"
+          className="flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          aria-expanded={onMigrate ? undefined : migrationFormOpen}
+          aria-controls={onMigrate ? undefined : migrationFormId}
           disabled={migrationState === 'pending'}
           onClick={() => onMigrate
             ? void handleMigration()
             : setMigrationFormOpen((open) => !open)}
         >
-          {migrationState === 'pending' ? '遷移中…' : '連結匿名資料'}
+          <Link2 className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="flex-1">{migrationState === 'pending' ? '遷移中…' : '連結匿名資料'}</span>
+          {!onMigrate && <ChevronRight className={`size-4 shrink-0 transition-transform motion-reduce:transition-none ${migrationFormOpen ? 'rotate-90' : ''}`} aria-hidden="true" />}
         </button>
       </div>
       {migrationFormOpen && !onMigrate && (
-        <form className="mt-3 grid gap-2 sm:grid-cols-2" onSubmit={(event) => void handleMigrationSubmit(event)}>
+        <form id={migrationFormId} className="mx-3 mb-3 mt-1 grid gap-3 rounded-lg border border-border bg-background p-3 [&_input]:min-w-0 [&_input]:bg-background" onSubmit={(event) => void handleMigrationSubmit(event)}>
           <label className="grid gap-1">匿名 ID<input name="anonymousId" required className="rounded border px-2 py-1" /></label>
           <label className="grid gap-1">匿名 Session ID<input name="anonymousSessionId" required className="rounded border px-2 py-1" /></label>
           <label className="grid gap-1">匿名 Device ID<input name="anonymousDeviceId" required className="rounded border px-2 py-1" /></label>
           <label className="grid gap-1">匿名 Credential<input name="anonymousCredential" type="password" required autoComplete="off" className="rounded border px-2 py-1" /></label>
-          <button type="submit" className="rounded-md border px-3 py-1 sm:col-span-2">確認連結</button>
+          <button type="submit" className="rounded-md border px-3 py-1">確認連結</button>
         </form>
       )}
       {recoveryAction === 'reauth' && <p className="mt-2 text-amber-700">請重新登入以繼續。</p>}

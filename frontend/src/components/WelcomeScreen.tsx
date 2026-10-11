@@ -34,7 +34,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
           ChatGun AI Agent
         </h1>
         <p className="text-xl md:text-2xl text-[#E7D9C1]/80">
-          TypeScript + LangGraph 的 AI Agent
+          Where would you like to begin?
         </p>
       </div>
     </div>
@@ -49,7 +49,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
       />
     </div>
     <p className="text-xs text-[#E7D9C1]/50">
-      Powered by LangChain and LangGraph.
+      Try Chatting with It to Get an Answer
     </p>
   </div>
 );

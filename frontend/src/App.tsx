@@ -4,8 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, useReducer } from 'r
 
 import { WelcomeScreen } from '@/components/WelcomeScreen';
 import { ChatMessagesView } from '@/components/ChatMessagesView';
-import { IdentityLifecyclePanel } from '@/components/IdentityLifecyclePanel';
-import { SubjectRightsPanel } from '@/components/SubjectRightsPanel';
+import { ChatSettings } from '@/components/ChatSettings';
 import {
   extractAgentRuntimeEvents,
   extractClarificationInterruptId,
@@ -611,8 +610,8 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-background text-foreground font-sans antialiased">
-      <main className="flex-1 flex flex-col max-w-4xl mx-auto w-full min-h-0">
-        <IdentityLifecyclePanel
+      <main className="flex-1 flex flex-col max-w-4xl mx-auto w-full min-h-0 pb-16">
+        <ChatSettings
           identityFailure={identityFailure}
           accountStatus={identityFailure?.code === 'IDENTITY_ACCOUNT_SUSPENDED'
             ? 'suspended'
@@ -625,7 +624,6 @@ export default function App() {
               ? 'revoked'
               : undefined}
         />
-        <SubjectRightsPanel />
         <div
           className={`flex-1 min-h-0 ${
             displayMessages.length === 0 ? 'flex' : ''
