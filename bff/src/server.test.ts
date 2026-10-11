@@ -34,6 +34,27 @@ type StartedServer = {
   close: () => Promise<void>;
 };
 
+describe("trusted runtime configuration boundary", () => {
+  it("rejects forged execution context before forwarding to LangGraph", async () => {
+    let forwarded = false;
+    await withServer((_req, res) => {
+      forwarded = true;
+      res.end("{}");
+    }, async (upstream) => {
+      await withBff(createTestConfig(upstream.url), async (bff) => {
+        const response = await fetch(`${bff.url}/api/langgraph/threads/thread-1/runs/stream`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ input: { messages: [] }, config: { configurable: {
+            execution_context: { taskId: "forged", principal: { principalId: "admin" } },
+          } } }),
+        });
+        assert.equal(response.status, 400);
+        assert.equal(forwarded, false);
+      });
+    });
+  });
+});
+
 function createTestConfig(langGraphApiUrl: string, overrides: Partial<BffConfig> = {}): BffConfig {
   return {
     port: 0,

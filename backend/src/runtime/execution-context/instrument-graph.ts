@@ -9,7 +9,7 @@ import {
   type SubjectCorrelationIndexPort,
 } from "../data-governance/subject-correlation-index.js";
 
-type ContextResolver = (input: unknown, config: unknown) => ExecutionContext | undefined;
+type ContextResolver = (input: unknown, config: unknown) => ExecutionContext | undefined | Promise<ExecutionContext | undefined>;
 
 const STREAM_METHODS = new Set<PropertyKey>(["stream", "streamEvents", "streamLog"]);
 
@@ -24,11 +24,11 @@ function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
     typeof value[Symbol.asyncIterator] === "function";
 }
 
-function prepareConfig(input: unknown, config: unknown, resolveContext: ContextResolver): {
+async function prepareConfig(input: unknown, config: unknown, resolveContext: ContextResolver): Promise<{
   prepared: unknown;
   context: ExecutionContext | undefined;
-} {
-  const context = resolveContext(input, config);
+}> {
+  const context = await resolveContext(input, config);
   if (context === undefined) return { prepared: config, context };
   const runnableConfig = isRecord(config) ? config : {};
   const configurable = isRecord(runnableConfig.configurable)
@@ -36,13 +36,13 @@ function prepareConfig(input: unknown, config: unknown, resolveContext: ContextR
     : {};
   const trustedMetadataRemoved = Object.fromEntries(
     Object.entries(configurable).filter(([key]) =>
-      key !== "execution_context" && !key.startsWith("x-bff-")
+      key !== "execution_context" && key !== "taskId" && key !== "task_id" && !key.startsWith("x-bff-")
     )
   );
   return {
     prepared: withExecutionContext({
-      ...runnableConfig,
-      configurable: trustedMetadataRemoved,
+      ...Object.fromEntries(Object.entries(runnableConfig).filter(([key]) => key !== "taskId" && key !== "task_id")),
+      configurable: { ...trustedMetadataRemoved, task_id: context.taskId },
     }, context),
     context,
   };
@@ -65,7 +65,7 @@ async function prepareConfigWithIdentityStatus(
   resolveContext: ContextResolver,
   options: ExecutionContextInstrumentationOptions,
 ): Promise<unknown> {
-  const { prepared, context } = prepareConfig(input, config, resolveContext);
+  const { prepared, context } = await prepareConfig(input, config, resolveContext);
   if (!context) return prepared;
   if (options.identityStatus) {
     await enforceRuntimeIdentityStatus(context, {

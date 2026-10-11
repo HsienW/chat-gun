@@ -10,6 +10,7 @@ function stateWithPlan(
   plan: NonNullable<ContractState["plan"]>
 ): ContractState {
   return {
+    executionTaskId: undefined,
     plan,
     contextPack: undefined,
     initial_search_query_count: 2,
