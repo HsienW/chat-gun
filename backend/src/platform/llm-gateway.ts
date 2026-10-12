@@ -329,7 +329,8 @@ class ProviderHttpError extends Error {
     readonly statusCode: number,
     readonly provider: LlmProviderName,
     readonly endpointKind: LlmEndpointKind,
-    readonly responseContentLength: number
+    readonly responseContentLength: number,
+    readonly responseCode?: string
   ) {
     super(message);
     this.name = "ProviderHttpError";
@@ -1237,6 +1238,25 @@ function sanitizeHeaderValue(value: string): string {
   return value ? "[redacted]" : "";
 }
 
+function parseProviderResponseCode(responseText: string): string | undefined {
+  if (responseText.length > 8_192) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(responseText);
+    if (!isPlainRecord(parsed)) return undefined;
+    const error = isPlainRecord(parsed.error) ? parsed.error : parsed;
+    const code = error.code;
+    return typeof code === "string" && /^[A-Za-z][A-Za-z0-9._-]{0,79}$/.test(code)
+      ? code
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function getProviderResponseCode(error: unknown): string | undefined {
+  return error instanceof ProviderHttpError ? error.responseCode : undefined;
+}
+
 function createProviderHttpError(
   status: number,
   statusText: string,
@@ -1251,7 +1271,8 @@ function createProviderHttpError(
     status,
     provider,
     endpointKind,
-    responseText.length
+    responseText.length,
+    parseProviderResponseCode(responseText)
   );
 }
 
@@ -1824,6 +1845,7 @@ export function formatLlmError(error: unknown): string {
               statusCode: error.statusCode,
               endpointKind: error.endpointKind,
               responseContentLength: error.responseContentLength,
+              providerResponseCode: error.responseCode,
             }
           : error instanceof ProviderResponseParseError
             ? {

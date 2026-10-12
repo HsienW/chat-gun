@@ -7,6 +7,8 @@ import {
   getConfiguredLlmCapabilities,
   llmGateway,
 } from "../platform/llm-gateway.js";
+import { createClarificationInterruptId } from "../runtime/interaction/events.js";
+import { auditLogger } from "../platform/observability.js";
 import type { WeatherToolResult } from "../tools/weather-types.js";
 
 installEgressPolicyTestTransport();
@@ -797,6 +799,12 @@ describe("Deep Research weather structured result integration", () => {
         candidateIndex: "second",
       })
     ).toBeUndefined();
+    expect(
+      deepResearcherWeatherTestInternals.coerceClarificationResolution({
+        resolutionType: "select_candidate",
+        candidateIndex: 1.5,
+      })
+    ).toBeUndefined();
   });
 
   it("dispatches clarification candidate index selection without repeating geocoding", async () => {
@@ -814,6 +822,97 @@ describe("Deep Research weather structured result integration", () => {
     expect(result.clarification?.status).toBe("resolved");
     expect(result.weatherExecution?.status).toBe("running");
     expect(result.plan?.weather?.resolvedCandidate?.providerId).toBe("geo-2");
+  });
+
+  it("resolves a validated candidate selection without calling the LLM", async () => {
+    const createChatModel = vi.spyOn(llmGateway, "createChatModel").mockImplementation(() => {
+      throw new Error("Qwen unavailable");
+    });
+    const state = stateWithSpringfieldClarification(undefined);
+    if (!state.clarification) throw new Error("Expected pending clarification");
+    const clarification = deepResearcherWeatherTestInternals.buildResumingClarificationState(
+      state.clarification,
+      {
+        userReply: "Springfield, Missouri, United States",
+        candidateIndex: 2,
+      },
+    );
+
+    const result = await deepResearcherWeatherTestInternals.resumeClarify(
+      { ...state, clarification },
+      {},
+    );
+
+    expect(clarification.resolution).toEqual({
+      resolutionType: "select_candidate",
+      candidateIndex: 2,
+    });
+    expect(result.clarification?.status).toBe("resolved");
+    expect(result.plan?.weather?.resolvedCandidate?.providerId).toBe("geo-2");
+    expect(result.weatherExecution?.status).toBe("running");
+    expect(createChatModel).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid structured candidate selections without invoking the LLM", async () => {
+    const state = stateWithSpringfieldClarification(undefined);
+    if (!state.clarification) throw new Error("Expected pending clarification");
+    const invalidSelections = [
+      { userReply: "Springfield, Missouri, United States", candidateIndex: 0 },
+      { userReply: "Springfield, Missouri, United States", candidateIndex: 3 },
+      { userReply: "Springfield, Missouri, United States", candidateIndex: 1.5 },
+      { userReply: "Springfield, Illinois, United States", candidateIndex: 2 },
+      { userReply: "Springfield, Missouri, United States", candidateIndex: "2" },
+    ];
+    const createChatModel = vi.spyOn(llmGateway, "createChatModel");
+
+    for (const selection of invalidSelections) {
+      const clarification = deepResearcherWeatherTestInternals.buildResumingClarificationState(
+        state.clarification,
+        selection,
+      );
+      expect(clarification.userReply).toBeUndefined();
+      expect(clarification.resolution).toBeUndefined();
+      const result = await deepResearcherWeatherTestInternals.resumeClarify(
+        { ...state, clarification },
+        {},
+      );
+      expect(result.weatherExecution?.status).toBe("failed");
+    }
+    expect(createChatModel).not.toHaveBeenCalled();
+  });
+
+  it("keeps manual clarification replies on the LLM path", async () => {
+    const state = stateWithSpringfieldClarification(undefined, {
+      resolution: { resolutionType: "select_candidate", candidateIndex: 2 },
+    });
+    if (!state.clarification) throw new Error("Expected pending clarification");
+    const clarification = deepResearcherWeatherTestInternals.buildResumingClarificationState(
+      state.clarification,
+      { userReply: "Illinois" },
+    );
+    const createChatModel = vi.spyOn(llmGateway, "createChatModel").mockReturnValue({
+      invoke: vi.fn(async () =>
+        new AIMessage(JSON.stringify({
+          resolutionType: "filter_candidates",
+          filter: { region: "Illinois" },
+        }))
+      ),
+    });
+
+    const result = await deepResearcherWeatherTestInternals.resumeClarify(
+      { ...state, clarification },
+      {},
+    );
+
+    expect(clarification.resolution).toBeUndefined();
+    expect(createChatModel).toHaveBeenCalledOnce();
+    expect(result.plan?.weather?.resolvedCandidate?.providerId).toBe("geo-1");
+    expect(
+      deepResearcherWeatherTestInternals.buildResumingClarificationState(
+        state.clarification,
+        { cancel: true },
+      ).userReply,
+    ).toBe("cancel");
   });
 
   it("dispatches clarification region filters to a single provider-backed candidate", async () => {
@@ -894,6 +993,143 @@ describe("Deep Research weather structured result integration", () => {
 
     expect(exhausted.clarification?.status).toBe("exhausted");
     expect(exhausted.weatherExecution?.status).toBe("failed");
+  });
+
+  it("ends manual clarification without another interrupt when its LLM call fails", async () => {
+    const correlation = {
+      threadId: "thread-weather",
+      runId: "run-weather",
+      taskId: "task-weather",
+      scopeId: "scope-weather",
+      interruptId: createClarificationInterruptId({
+        threadId: "thread-weather",
+        runId: "run-weather",
+        taskId: "task-weather",
+        round: 0,
+      }),
+    };
+    const state = stateWithSpringfieldClarification("2", {
+      interruptCorrelation: correlation,
+    });
+    vi.spyOn(llmGateway, "createChatModel").mockReturnValue({
+      invoke: vi.fn(async () => {
+        throw Object.assign(new Error("provider response contained sensitive details"), {
+          statusCode: 429,
+        });
+      }),
+    });
+    const record = vi.spyOn(auditLogger, "record");
+
+    const result = await deepResearcherWeatherTestInternals.resumeClarify(state, {});
+    const clarification = result.clarification;
+    expect(clarification?.status).toBe("resolution_failed");
+    expect(clarification?.rounds).toBe(0);
+    expect(clarification?.interruptCorrelation).toEqual(correlation);
+    expect(result.weatherExecution?.status).toBe("failed");
+    expect(deepResearcherWeatherTestInternals.routeAfterResumeClarify({
+      ...state,
+      ...result,
+    } as ResumeClarifyState)).toBe("synthesize");
+    expect(String(deepResearcherWeatherTestInternals.buildWeatherToolAnswer({
+      ...state,
+      ...result,
+    } as ResumeClarifyState)?.content)).toContain("clarification");
+    expect(record).toHaveBeenCalledWith(
+      "weather.llm.diagnostic",
+      expect.objectContaining({
+        phase: "clarification_resolution",
+        failureCode: "llm_unavailable",
+        providerErrorCode: "quota_or_rate_limit_exceeded",
+      }),
+    );
+    expect(JSON.stringify(record.mock.calls)).not.toContain("sensitive details");
+  });
+
+  it("does not ask again when manual clarification model output is malformed", async () => {
+    vi.spyOn(llmGateway, "createChatModel").mockReturnValue({
+      invoke: vi.fn(async () => new AIMessage("not JSON")),
+    });
+
+    const result = await deepResearcherWeatherTestInternals.resumeClarify(
+      stateWithSpringfieldClarification("Illinois"),
+      {},
+    );
+
+    expect(result.clarification?.status).toBe("resolution_failed");
+    expect(result.weatherExecution?.status).toBe("failed");
+  });
+
+  it.each([
+    { resolutionType: "select_candidate", candidateIndex: 3 },
+    { resolutionType: "select_candidate", candidateIndex: 1.5 },
+    { resolutionType: "filter_candidates", filter: {} },
+  ])("does not ask again for invalid model resolution %#", async (modelResponse) => {
+    vi.spyOn(llmGateway, "createChatModel").mockReturnValue({
+      invoke: vi.fn(async () => new AIMessage(JSON.stringify(modelResponse))),
+    });
+
+    const result = await deepResearcherWeatherTestInternals.resumeClarify(
+      stateWithSpringfieldClarification("Illinois"),
+      {},
+    );
+
+    expect(result.clarification?.status).toBe("resolution_failed");
+    expect(result.weatherExecution?.status).toBe("failed");
+  });
+
+  it("asks again only when the clarification model explicitly cannot recognize the reply", async () => {
+    vi.spyOn(llmGateway, "createChatModel").mockReturnValue({
+      invoke: vi.fn(async () => new AIMessage(JSON.stringify({ resolutionType: "unrecognized" }))),
+    });
+
+    const result = await deepResearcherWeatherTestInternals.resumeClarify(
+      stateWithSpringfieldClarification("unclear place"),
+      {},
+    );
+
+    expect(result.clarification?.status).toBe("awaiting_user_input");
+    expect(result.clarification?.rounds).toBe(1);
+    expect(result.weatherExecution?.status).toBe("needs_clarification");
+  });
+
+  it("issues a new interrupt when a candidate filter remains ambiguous", async () => {
+    const correlation = {
+      threadId: "thread-weather",
+      runId: "run-weather",
+      taskId: "task-weather",
+      scopeId: "scope-weather",
+      interruptId: createClarificationInterruptId({
+        threadId: "thread-weather",
+        runId: "run-weather",
+        taskId: "task-weather",
+        round: 0,
+      }),
+    };
+    vi.spyOn(llmGateway, "createChatModel").mockReturnValue({
+      invoke: vi.fn(async () =>
+        new AIMessage(JSON.stringify({
+          resolutionType: "filter_candidates",
+          filter: { name: "Springfield" },
+        }))
+      ),
+    });
+
+    const result = await deepResearcherWeatherTestInternals.resumeClarify(
+      stateWithSpringfieldClarification("Springfield", { interruptCorrelation: correlation }),
+      {},
+    );
+
+    expect(result.clarification?.status).toBe("awaiting_user_input");
+    expect(result.clarification?.candidates).toHaveLength(2);
+    expect(result.clarification?.interruptCorrelation).toEqual({
+      ...correlation,
+      interruptId: createClarificationInterruptId({
+        threadId: correlation.threadId,
+        runId: correlation.runId,
+        taskId: correlation.taskId,
+        round: 1,
+      }),
+    });
   });
 
   it("terminates clarification resume as weather_timeout after the configured timeout", async () => {
