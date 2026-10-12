@@ -27,6 +27,30 @@ function state(): ResearchState {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 describe("deep researcher current-turn evidence", () => {
+  it.each([
+    ["role message", { role: "human", content: "Current news request" }],
+    ["serialized message", new HumanMessage("Current news request").toJSON()],
+  ])("normalizes a %s before upload validation", async (_format, wireMessage) => {
+    vi.spyOn(PgGraphTaskAdmission.prototype, "admit")
+      .mockImplementation(async (context) => context.taskId);
+    const configurable = {
+      thread_id: crypto.randomUUID(), run_id: crypto.randomUUID(), "x-request-id": crypto.randomUUID(),
+      "x-bff-principal-id": "principal-1", "x-bff-principal-type": "service",
+      "x-bff-tenant-id": "tenant-1", "x-bff-roles": "member", "x-bff-scopes": "search:read",
+      "x-bff-auth-source": "trusted_gateway", "x-bff-authenticated-at": "2026-10-11T00:00:00.000Z",
+      "x-bff-scope-id": "scope-1", "x-bff-scope-type": "tenant",
+    };
+
+    const requestPayload = JSON.parse(JSON.stringify({ messages: [wireMessage] }));
+    await deepResearcherGraph.invoke(requestPayload, {
+      configurable, interruptBefore: ["build_context_pack"],
+    });
+    const paused = await deepResearcherGraph.getState({ configurable });
+    expect(paused.values.messages.at(-1)).toBeInstanceOf(HumanMessage);
+    expect(paused.values.uploadError).toBeUndefined();
+    expect(paused.next).toEqual(["build_context_pack"]);
+  });
+
   it("resets persisted state on a new prompt and retains its Task across native resume", async () => {
     const admit = vi.spyOn(PgGraphTaskAdmission.prototype, "admit")
       .mockImplementation(async (context, resumedTaskId) => resumedTaskId ?? context.taskId);
