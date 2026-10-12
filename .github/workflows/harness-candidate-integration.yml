@@ -1,0 +1,197 @@
+name: Harness candidate tarball integration
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/harness-candidate-integration.yml
+      - backend/src/tools/sdk/**
+      - backend/package.json
+      - backend/package-lock.json
+  workflow_dispatch:
+    inputs:
+      harness_sha:
+        description: Full gun-harness candidate commit SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    name: ${{ matrix.os }} / fixed harness SHA
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      HARNESS_SHA: ${{ inputs.harness_sha || vars.HARNESS_CANDIDATE_SHA }}
+      DATABASE_URL: ''
+      RUN_OPIK_EVALUATION: 'false'
+    steps:
+      - name: Require a fixed candidate commit
+        shell: pwsh
+        run: |
+          if ($env:HARNESS_SHA -notmatch '^[0-9a-fA-F]{40}$') {
+            throw 'Set HARNESS_CANDIDATE_SHA for pull requests or supply harness_sha for manual runs.'
+          }
+      - name: Checkout chat-gun candidate
+        uses: actions/checkout@v4
+        with:
+          path: chat-gun
+          persist-credentials: false
+      - name: Checkout gun-harness candidate
+        uses: actions/checkout@v4
+        with:
+          repository: HsienW/gun-harness
+          ref: ${{ env.HARNESS_SHA }}
+          path: gun-harness
+          token: ${{ secrets.HARNESS_READ_TOKEN || github.token }}
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify checkout identities
+        shell: pwsh
+        run: |
+          $actual = (git -C gun-harness rev-parse HEAD).Trim()
+          if ($actual -ne $env:HARNESS_SHA) { throw "Wrong gun-harness commit: $actual" }
+          Write-Output "gun-harness=$actual"
+          Write-Output "chat-gun=$((git -C chat-gun rev-parse HEAD).Trim())"
+      - name: Install and check gun-harness
+        id: harness_check
+        working-directory: gun-harness
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw 'gun-harness npm ci failed' }
+          npm run check
+          if ($LASTEXITCODE -ne 0) { throw 'gun-harness check failed' }
+      - name: Pack four candidate packages and save provenance
+        id: pack
+        shell: pwsh
+        run: |
+          $packDir = Join-Path $env:GITHUB_WORKSPACE 'packed'
+          New-Item -ItemType Directory -Path $packDir -Force | Out-Null
+          $evidence = [ordered]@{
+            harnessSha = (git -C gun-harness rev-parse HEAD).Trim()
+            chatGunSha = (git -C chat-gun rev-parse HEAD).Trim()
+            nodeVersion = (node --version).Trim()
+            npmVersion = (npm --version).Trim()
+            tarballs = @()
+          }
+          foreach ($name in @('contracts', 'kernel', 'sdk', 'testkit')) {
+            $packed = @(npm pack "gun-harness/packages/$name" --pack-destination $packDir --json --ignore-scripts | ConvertFrom-Json)
+            if ($LASTEXITCODE -ne 0 -or $packed.Count -ne 1) { throw "Packing $name failed" }
+            $item = $packed[0]
+            if ($item.version -ne '0.1.0-alpha.2') { throw "Wrong $name version: $($item.version)" }
+            $file = Join-Path $packDir $item.filename
+            $evidence.tarballs += [ordered]@{
+              name = $item.name
+              version = $item.version
+              file = $file
+              sha256 = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          }
+          $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $packDir 'candidate-evidence.json')
+      - name: Install chat-gun backend lockfile
+        id: backend_ci
+        working-directory: chat-gun/backend
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw 'backend npm ci failed' }
+      - name: Install the four tarballs without saving local paths
+        id: tarball_install
+        working-directory: chat-gun/backend
+        shell: pwsh
+        run: |
+          $evidence = Get-Content -LiteralPath '../../packed/candidate-evidence.json' -Raw | ConvertFrom-Json
+          $files = @($evidence.tarballs | ForEach-Object { $_.file })
+          npm install --no-save @files
+          if ($LASTEXITCODE -ne 0) { throw 'Four-tarball install failed' }
+          $installed = Get-Content -LiteralPath 'node_modules/.package-lock.json' -Raw | ConvertFrom-Json
+          foreach ($tarball in $evidence.tarballs) {
+            $entry = $installed.packages."node_modules/$($tarball.name)"
+            if ($null -eq $entry -or $entry.version -ne $tarball.version) {
+              throw "Wrong installed version for $($tarball.name)"
+            }
+            if (-not $entry.resolved.EndsWith((Split-Path $tarball.file -Leaf))) {
+              throw "Installed source is not the candidate tarball: $($tarball.name)"
+            }
+          }
+          git -C .. diff --exit-code -- backend/package.json backend/package-lock.json
+          if ($LASTEXITCODE -ne 0) { throw 'Tarball install changed a tracked dependency file' }
+      - name: Backend lint
+        id: backend_lint
+        working-directory: chat-gun/backend
+        run: npm run lint
+      - name: Backend test including T6 fixtures and T7a parity
+        id: backend_test
+        working-directory: chat-gun/backend
+        run: npm run test
+      - name: Backend build
+        id: backend_build
+        working-directory: chat-gun/backend
+        run: npm run build
+      - name: BFF install, test and build
+        id: bff_check
+        working-directory: chat-gun/bff
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw 'BFF npm ci failed' }
+          npm run test
+          if ($LASTEXITCODE -ne 0) { throw 'BFF test failed' }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw 'BFF build failed' }
+      - name: Frontend install, lint, test and build
+        id: frontend_check
+        working-directory: chat-gun/frontend
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw 'frontend npm ci failed' }
+          npm run lint
+          if ($LASTEXITCODE -ne 0) { throw 'frontend lint failed' }
+          npm run test
+          if ($LASTEXITCODE -ne 0) { throw 'frontend test failed' }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw 'frontend build failed' }
+      - name: Save validation outcomes
+        if: always()
+        shell: pwsh
+        env:
+          HARNESS_CHECK: ${{ steps.harness_check.outcome }}
+          PACK: ${{ steps.pack.outcome }}
+          BACKEND_CI: ${{ steps.backend_ci.outcome }}
+          TARBALL_INSTALL: ${{ steps.tarball_install.outcome }}
+          BACKEND_LINT: ${{ steps.backend_lint.outcome }}
+          BACKEND_TEST: ${{ steps.backend_test.outcome }}
+          BACKEND_BUILD: ${{ steps.backend_build.outcome }}
+          BFF_CHECK: ${{ steps.bff_check.outcome }}
+          FRONTEND_CHECK: ${{ steps.frontend_check.outcome }}
+        run: |
+          $packDir = Join-Path $env:GITHUB_WORKSPACE 'packed'
+          New-Item -ItemType Directory -Path $packDir -Force | Out-Null
+          [ordered]@{
+            harnessCheck = $env:HARNESS_CHECK
+            pack = $env:PACK
+            backendCi = $env:BACKEND_CI
+            tarballInstall = $env:TARBALL_INSTALL
+            backendLint = $env:BACKEND_LINT
+            backendTest = $env:BACKEND_TEST
+            backendBuild = $env:BACKEND_BUILD
+            bffCheck = $env:BFF_CHECK
+            frontendCheck = $env:FRONTEND_CHECK
+          } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $packDir 'validation-outcomes.json')
+      - name: Upload candidate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-candidate-${{ matrix.os }}
+          path: packed/*.json
+          if-no-files-found: error
