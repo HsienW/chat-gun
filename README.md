@@ -345,6 +345,10 @@ QWEN_API_KEY=your_qwen_api_key
 TAVILY_API_KEY=your_tavily_api_key
 ```
 
+若憑證已設於 `backend/.env`，下列 `docker compose` 命令需加上 `--env-file backend/.env`。Docker 映像不會打包 `.env`；Compose 僅傳遞 LangSmith key 作為授權設定，關閉 LangSmith tracing，並依 `OPIK_*` 設定啟用 Opik tracing。Hosted tracing 僅適合已核准且完成資料遮蔽的環境。
+
+Compose 已在 `langgraph-api.environment` 傳入使用容器內 PostgreSQL 埠 `5432` 的 `DATABASE_URL`；本機 `backend/.env` 則使用主機埠 `5433`。不要在對話或日誌中輸出含密碼的連線位址。
+
 啟動服務：
 
 ```bash
