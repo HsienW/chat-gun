@@ -1,0 +1,7 @@
+.git
+.agent-runtime
+.env*
+**/.env*
+**/node_modules
+**/dist
+**/coverage

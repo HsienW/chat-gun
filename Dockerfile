@@ -11,7 +11,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: LangGraph agent runtime.
-FROM docker.io/langchain/langgraphjs-api:20 AS langgraph-api
+FROM docker.io/langchain/langgraphjs-api:22 AS langgraph-api
 
 USER root
 
@@ -20,7 +20,7 @@ RUN npm install -g @modelcontextprotocol/server-filesystem @modelcontextprotocol
 ADD backend/ /deps/backend
 WORKDIR /deps/backend
 
-RUN npm install --omit=dev
+RUN npm ci --include=dev && npm prune --omit=dev
 
 ENV LANGSERVE_GRAPHS='{"deep_researcher": "/deps/backend/src/agents/deep-researcher.ts:deepResearcherGraph", "chatbot": "/deps/backend/src/agents/chatbot.ts:chatbotGraph", "mcp_agent": "/deps/backend/src/agents/mcp-agent.ts:mcpAgentGraph", "math_agent": "/deps/backend/src/agents/math-agent.ts:mathAgentGraph"}'
 

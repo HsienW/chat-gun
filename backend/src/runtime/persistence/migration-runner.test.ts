@@ -25,6 +25,7 @@ const migrationNames = [
   "019_create_interrupt_manifests.sql",
   "020_create_recovery_records.sql",
   "021_create_data_governance.sql",
+  "022_add_tool_execution_security_evidence.sql",
 ] as const;
 
 function expectedResults(
@@ -125,6 +126,7 @@ describe("runMigrations", () => {
     expect(executedSql).toContain("CREATE TABLE IF NOT EXISTS subject_right_workflows");
     expect(executedSql).toContain("CREATE TABLE IF NOT EXISTS consent_records");
     expect(executedSql).toContain("CREATE TABLE IF NOT EXISTS data_tombstones");
+    expect(executedSql).toContain("ADD COLUMN IF NOT EXISTS execution_profile_version");
   });
 
   it("runs down migrations in reverse order when applied", async () => {

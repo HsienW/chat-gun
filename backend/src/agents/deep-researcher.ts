@@ -1,4 +1,4 @@
-import { AIMessage, BaseMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
+import { AIMessage, BaseMessage, HumanMessage, ToolMessage, coerceMessageLikeToMessage } from "@langchain/core/messages";
 import { RunnableConfig } from "@langchain/core/runnables";
 import { StructuredToolInterface } from "@langchain/core/tools";
 import { Annotation, Command, END, START, StateGraph, interrupt } from "@langchain/langgraph";
@@ -233,7 +233,7 @@ const DeepResearchState = Annotation.Root({
     default: () => undefined,
   }),
   messages: Annotation<BaseMessage[]>({
-    reducer: (left, right) => left.concat(right),
+    reducer: (left, right) => left.concat(right).map(coerceMessageLikeToMessage),
     default: () => [],
   }),
   contextPack: Annotation<ImAgentContextPack | undefined>({

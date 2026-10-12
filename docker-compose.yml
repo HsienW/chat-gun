@@ -51,8 +51,16 @@ services:
       MATH_MODEL: ${MATH_MODEL:-qwen-plus}
       MCP_AGENT_MODEL: ${MCP_AGENT_MODEL:-qwen-plus}
       LANGSMITH_API_KEY: ${LANGSMITH_API_KEY}
+      LANGSMITH_TRACING: 'false'
+      OPIK_ENABLED: ${OPIK_ENABLED:-false}
+      OPIK_API_KEY: ${OPIK_API_KEY:-}
+      OPIK_WORKSPACE: ${OPIK_WORKSPACE:-}
+      OPIK_HOST: ${OPIK_HOST:-https://www.comet.com/opik/api}
+      OPIK_PROJECT_NAME: ${OPIK_PROJECT_NAME:-chat-gun}
+      OPIK_REDACT_ENABLED: ${OPIK_REDACT_ENABLED:-true}
       REDIS_URI: redis://langgraph-redis:6379
       POSTGRES_URI: postgres://postgres:postgres@langgraph-postgres:5432/postgres?sslmode=disable
+      DATABASE_URL: postgres://postgres:postgres@langgraph-postgres:5432/postgres?sslmode=disable
       # MCP 設定
       MCP_LOAD_ON_START: ${MCP_LOAD_ON_START}
       DEEP_RESEARCHER_MCP_ENABLED: ${DEEP_RESEARCHER_MCP_ENABLED}
