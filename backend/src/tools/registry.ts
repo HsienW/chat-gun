@@ -16,9 +16,11 @@ import type { SandboxRunnerPort } from "../runtime/tool-dispatch/execution-profi
 import { EnvironmentSecretBroker } from "../runtime/tool-dispatch/secret-broker.js";
 import {
   createLocalExecutionProfileRegistry,
+  createLocalRuntimeToolDescriptors,
   createLocalRuntimeToolDescriptorRegistry,
   LOCAL_PRODUCTION_TOOLS,
 } from "./production-runtime-tool-descriptors.js";
+import { stageCurrentWeatherSdkDescriptor } from "./sdk/current-weather-manifest-adapter.js";
 
 const PIPELINE_FLAG_BY_SOURCE = {
   math_agent: "TOOL_DISPATCH_PIPELINE_MATH_ENABLED",
@@ -28,6 +30,7 @@ const PIPELINE_FLAG_BY_SOURCE = {
 
 export interface LoadAgentToolsOptions {
   includeMcp?: boolean;
+  currentWeatherRegistration?: "sdk" | "legacy";
   sandboxRunner?: SandboxRunnerPort;
   dispatchPipelineDependencies?: Omit<
     RuntimeToolDispatchPipelineDependencies,
@@ -75,8 +78,22 @@ export async function loadAgentToolRuntime(
     mcpRiskDescriptors,
   } =
     createRuntimeToolAuthorizationComposition();
-  const descriptorRegistry = createLocalRuntimeToolDescriptorRegistry();
   const profileRegistry = createLocalExecutionProfileRegistry();
+  const localDescriptors = createLocalRuntimeToolDescriptors();
+  const stagedDescriptors = await Promise.all(localDescriptors.map(async (descriptor) => {
+    if (descriptor.toolName !== "current_weather" || options.currentWeatherRegistration === "legacy") {
+      return descriptor;
+    }
+    const tool = LOCAL_PRODUCTION_TOOLS.find((candidate) => candidate.name === descriptor.toolName);
+    if (tool === undefined) throw new Error("Current weather implementation is unavailable");
+    return stageCurrentWeatherSdkDescriptor({
+      tool,
+      descriptor,
+      riskPolicy: authorization.riskRegistry.get(descriptor.toolName),
+      profileRegistry,
+    });
+  }));
+  const descriptorRegistry = createLocalRuntimeToolDescriptorRegistry(stagedDescriptors);
   const executionProfileEnforcer =
     options.dispatchPipelineDependencies?.executionProfileEnforcer ??
     new ExecutionProfileEnforcer({

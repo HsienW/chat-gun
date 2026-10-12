@@ -48,6 +48,9 @@ export function createStructuredToolResultEnvelope<TResult>(
       riskTier: input.descriptor.riskTier,
       readOnly: input.descriptor.isReadOnly,
     },
+    ...(input.descriptor.manifestVersion
+      ? { manifestVersion: input.descriptor.manifestVersion }
+      : {}),
     outcome: input.outcome,
     ...(input.securityEvidence ? {
       executionProfileVersion: input.securityEvidence.executionProfileVersion,

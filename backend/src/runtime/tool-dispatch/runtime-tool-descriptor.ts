@@ -64,6 +64,9 @@ function validateDescriptor<TInput, TOutput>(
   assertNonEmptyString(identity.toolVersion, "registered toolVersion");
   assertNonEmptyString(descriptor.toolName, "toolName");
   assertNonEmptyString(descriptor.toolVersion, "toolVersion");
+  if (descriptor.manifestVersion !== undefined) {
+    assertNonEmptyString(descriptor.manifestVersion, "manifestVersion");
+  }
 
   if (descriptor.toolName !== identity.toolName || descriptor.toolVersion !== identity.toolVersion) {
     throw new Error("Runtime tool descriptor identity mismatch");

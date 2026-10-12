@@ -54,6 +54,18 @@ const descriptor: RuntimeToolDescriptor<unknown, string> = {
 };
 
 describe("StructuredToolResultEnvelope", () => {
+  it("carries only additive SDK manifest provenance", () => {
+    const envelope = createStructuredToolResultEnvelope({
+      executionContext,
+      descriptor: { ...descriptor, manifestVersion: "1.0.0" },
+      outcome: { type: "succeeded", result: "ok" },
+    });
+    expect(envelope.manifestVersion).toBe("1.0.0");
+    expect(structuredToolResultEnvelopeSchema.safeParse(envelope).success).toBe(true);
+    expect(JSON.stringify(envelope)).not.toContain("inputSchema");
+    expect(JSON.stringify(envelope)).not.toContain("secret-value");
+  });
+
   it("adds security evidence without changing the existing envelope fields", () => {
     const envelope = createStructuredToolResultEnvelope({
       executionContext,
