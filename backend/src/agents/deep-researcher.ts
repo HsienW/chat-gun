@@ -4,7 +4,9 @@ import { StructuredToolInterface } from "@langchain/core/tools";
 import { Annotation, Command, END, START, StateGraph, interrupt } from "@langchain/langgraph";
 import { MemorySaver } from "@langchain/langgraph-checkpoint";
 import { readCanonicalExecutionContext, readExecutionCorrelation } from "../runtime/execution-context/read-execution-context.js";
-import { readDevelopmentExecutionContext } from "../runtime/execution-context/read-execution-context.js";
+import { createGraphEntryContextResolver } from "../runtime/execution-context/graph-entry.js";
+import { PgGraphTaskAdmission } from "../runtime/execution-context/graph-task-admission.js";
+import { createToolCallContext } from "../runtime/execution-context/tool-call-context.js";
 import { instrumentGraphWithExecutionContext } from "../runtime/execution-context/instrument-graph.js";
 import { getRuntimeIdentityStatusInstrumentation } from "../runtime/authorization/identity-status-composition.js";
 import { createClarificationInterruptId } from "../runtime/interaction/events.js";
@@ -226,6 +228,10 @@ type VerificationReport = {
 };
 
 const DeepResearchState = Annotation.Root({
+  executionTaskId: Annotation<string | undefined>({
+    reducer: (_left, right) => right,
+    default: () => undefined,
+  }),
   messages: Annotation<BaseMessage[]>({
     reducer: (left, right) => left.concat(right),
     default: () => [],
@@ -275,7 +281,7 @@ const DeepResearchState = Annotation.Root({
     default: () => undefined,
   }),
   imageObservations: Annotation<string[]>({
-    reducer: (left, right) => left.concat(right),
+    reducer: (_left, right) => right,
     default: () => [],
   }),
   weatherExecution: Annotation<WeatherExecutionState | undefined>({
@@ -643,7 +649,7 @@ async function invokeTool(
   nodeName: string,
   config?: RunnableConfig
 ): Promise<{ content: string; toolCallId: string }> {
-  const toolCallId = crypto.randomUUID();
+  const { config: toolConfig, toolCallId } = createToolCallContext(config, nodeName, toolName, input);
   const selectedTool = toolByName.get(toolName) as StructuredToolInterface | undefined;
   if (!selectedTool) {
     return {
@@ -651,18 +657,6 @@ async function invokeTool(
       toolCallId,
     };
   }
-
-  const existingStepId = readExecutionCorrelation(config).stepId;
-  const toolConfig: RunnableConfig = {
-    ...config,
-    configurable: {
-      ...config?.configurable,
-      tool_call_id: toolCallId,
-      ...(existingStepId
-        ? {}
-        : { step_id: nodeName }),
-    },
-  };
 
   try {
     const content = await getSpanManager().withSpan(
@@ -683,7 +677,7 @@ async function invokeTool(
     return {
       content: serializeErrorEnvelope(
         createErrorEnvelope(error, {
-          executionContext: readCanonicalExecutionContext(config),
+          executionContext: readCanonicalExecutionContext(toolConfig),
           source: "backend",
           stage: "tool_invoke",
           provider: toolName,
@@ -719,12 +713,20 @@ async function validateUploads(
   state: typeof DeepResearchState.State,
   config: RunnableConfig
 ): Promise<Partial<typeof DeepResearchState.State>> {
-  const validationError = validateImageAttachments(state.messages);
+  const reset: Partial<typeof DeepResearchState.State> = {
+    executionTaskId: readCanonicalExecutionContext(config)?.taskId,
+    plan: undefined, contextPack: undefined, searchResults: [], rankedSources: [],
+    fetchedSources: [], extractedSources: [], verification: undefined,
+    uploadError: undefined, imageObservations: [], weatherExecution: undefined,
+    clarification: undefined,
+  };
+  const validationError = validateImageAttachments(currentTurnMessages(state));
   if (!validationError) {
-    return {};
+    return reset;
   }
 
   return {
+    ...reset,
     uploadError: serializeErrorEnvelope(
       createErrorEnvelope(new Error(validationError), {
         executionContext: readCanonicalExecutionContext(config),
@@ -751,7 +753,7 @@ async function buildContextPack(
   _config: RunnableConfig
 ): Promise<Partial<typeof DeepResearchState.State>> {
   const runtimeConfig = getAgentRuntimeConfig();
-  const contextPack = buildImAgentContextPack(state.messages, {
+  const contextPack = buildImAgentContextPack(currentTurnMessages(state), {
     maxTokens: getMaxFetchedSources(state) * runtimeConfig.contextTokensPerSource,
     locale: runtimeConfig.locale,
   });
@@ -1408,7 +1410,7 @@ async function planResearch(
     };
   }
 
-  const contextPack = state.contextPack ?? buildImAgentContextPack(state.messages);
+  const contextPack = state.contextPack ?? buildImAgentContextPack(currentTurnMessages(state));
   const imageContext = state.imageObservations.length
     ? state.imageObservations.join("\n\n")
     : "No image attachments were provided.";
@@ -1444,7 +1446,7 @@ async function planResearch(
       ? (await assembleAgentContext({
           systemPolicy: plannerPolicy,
           currentTaskLabel: "Current user request:",
-          messages: state.messages,
+          messages: conversationMessages(state),
           purpose: "research",
           config,
           activeState: [
@@ -2599,12 +2601,24 @@ async function verifyCitations(
   };
 }
 
+function currentTurnMessages(state: typeof DeepResearchState.State): BaseMessage[] {
+  const messages = state.messages ?? [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].getType() === "human") return messages.slice(index);
+  }
+  return [];
+}
+
+function conversationMessages(state: typeof DeepResearchState.State): BaseMessage[] {
+  return state.messages.filter((message) => message.getType() === "human" || message.getType() === "ai");
+}
+
 function formatEvidence(state: typeof DeepResearchState.State): string {
   const imageEvidence = state.imageObservations.length
     ? `Image recognition observations:\n${state.imageObservations.join("\n\n")}`
     : "";
 
-  const toolEvidence = state.messages
+  const toolEvidence = currentTurnMessages(state)
     .filter((message) => message.getType?.() === "tool")
     .map((message, index) => `Tool result ${index + 1}:\n${excerpt(messageContentToString(message), 2_000)}`)
     .join("\n\n");
@@ -2628,7 +2642,7 @@ function getLatestToolMessageContent(
   state: typeof DeepResearchState.State,
   toolName: string
 ): string | undefined {
-  const matchingMessages = state.messages.filter((message) => {
+  const matchingMessages = currentTurnMessages(state).filter((message) => {
     return (
       message.getType?.() === "tool" &&
       "name" in message &&
@@ -2794,6 +2808,7 @@ function buildTargetedToolAnswer(
 }
 
 export const deepResearcherWeatherTestInternals = {
+  validateUploads,
   planResearch,
   normalizeWeatherPlanConsistency,
   routeAfterPlan,
@@ -2909,7 +2924,7 @@ async function synthesizeAnswer(
       ? (await assembleAgentContext({
           systemPolicy: synthesisPolicy,
           currentTaskLabel: "Current user request:",
-          messages: state.messages,
+          messages: conversationMessages(state),
           purpose: "research",
           config,
           activeState: [
@@ -2935,7 +2950,7 @@ async function synthesizeAnswer(
           "Evidence:",
           evidence || "No external evidence was collected.",
           "Conversation:",
-          getResearchTopic(state.messages),
+          getResearchTopic(conversationMessages(state)),
         ].join("\n\n");
     const model = state.reasoning_model.trim() || undefined;
     const llm = llmGateway.createChatModel({ purpose: "research", model, temperature: 0.1 });
@@ -3027,20 +3042,17 @@ const builder = new StateGraph(DeepResearchState)
   .addEdge(DEEP_RESEARCH_GRAPH_NODES.synthesizeAnswer, END);
 
 const deepResearcherCheckpointer = new MemorySaver();
+const compiledDeepResearcherGraph = builder.compile({ checkpointer: deepResearcherCheckpointer });
 
 export const deepResearcherGraph = instrumentGraphWithExecutionContext(
   applyInteractionGovernance(
     instrumentGraphWithOpik(
-      builder.compile({ checkpointer: deepResearcherCheckpointer }),
+      compiledDeepResearcherGraph,
       "weather"
     ),
     productionInteractionOrchestrator
   ),
-  (input, config) =>
-    process.env.NODE_ENV === "development" &&
-    process.env.EXECUTION_CONTEXT_DEV_ENABLED === "true"
-      ? readDevelopmentExecutionContext(input, config)
-      : undefined,
+  createGraphEntryContextResolver(compiledDeepResearcherGraph, new PgGraphTaskAdmission()),
   getRuntimeIdentityStatusInstrumentation(),
 );
 

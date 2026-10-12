@@ -39,6 +39,7 @@ import {
 } from "./redis-rate-limit.js";
 import { InMemoryRateLimiter } from "./rate-limit.js";
 import { validateUploadPayload } from "./upload-security.js";
+import { containsUntrustedExecutionContext } from "./execution-context-boundary.js";
 import { pipeWebResponseBody } from "./stream-passthrough.js";
 import {
   parseAnonymousMigrationRequest,
@@ -1094,6 +1095,13 @@ async function proxyLangGraph(
 
   try {
     const body = await readRequestBody(req, config.maxBodyBytes, ctx);
+    if (containsUntrustedExecutionContext(body)) {
+      sendJson(res, 400, { error: {
+        code: "UNTRUSTED_EXECUTION_CONTEXT",
+        message: "Execution context is owned by the server",
+      } }, ctx.requestId);
+      return;
+    }
     const inputKindValidation = validateInputKind(body);
     if (!inputKindValidation.ok) {
       sendJson(
