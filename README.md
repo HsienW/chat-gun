@@ -350,6 +350,13 @@ TAVILY_API_KEY=your_tavily_api_key
 Compose 已在 `langgraph-api.environment` 傳入使用容器內 PostgreSQL 埠 `5432` 的 `DATABASE_URL`；本機 `backend/.env` 則使用主機埠 `5433`。不要在對話或日誌中輸出含密碼的連線位址。
 
 啟動服務：
+應用持久化使用獨立的 `DATABASE_URL` 設定；`POSTGRES_URI` 是 LangGraph 伺服器的連線設定，不會配置應用的資料庫連線。首次執行時，先啟動 Compose PostgreSQL，將 `backend/.env` 的 `DATABASE_URL` 指向主機上的 PostgreSQL 埠 `5433`，再執行遷移：
+
+```bash
+docker compose up -d langgraph-postgres
+npm --prefix backend run migrations:up
+```
+
 
 ```bash
 docker compose up --build
