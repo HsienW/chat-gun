@@ -35,6 +35,39 @@ type StartedServer = {
 };
 
 describe("trusted runtime configuration boundary", () => {
+  it("forwards frontend interaction metadata without replacing native execution identity", async () => {
+    const clientMetadata = {
+      requestId: "11111111-1111-4111-8111-111111111111",
+      idempotencyKey: "22222222-2222-4222-8222-222222222222",
+      inputKind: "prompt",
+      activeRunHint: { runId: "previous-run", generation: 1 },
+    };
+    const payload = { input: { kind: "prompt", messages: [] }, config: { configurable: {
+      clientInteractionMetadata: clientMetadata,
+    } } };
+    let forwardedBody = "";
+    let forwardedRequestId: string | string[] | undefined;
+    await withServer((req, res) => {
+      forwardedRequestId = req.headers["x-request-id"];
+      req.on("data", (chunk) => { forwardedBody += String(chunk); });
+      req.on("end", () => { res.end("{}"); });
+    }, async (upstream) => {
+      await withBff(createTestConfig(upstream.url), async (bff) => {
+        const response = await fetch(`${bff.url}/api/langgraph/threads/thread-1/runs/stream`, {
+          method: "POST", headers: {
+            "content-type": "application/json",
+            "x-request-id": "33333333-3333-4333-8333-333333333333",
+          },
+          body: JSON.stringify(payload),
+        });
+        await response.text();
+        assert.equal(response.status, 200);
+        assert.deepEqual(JSON.parse(forwardedBody), payload);
+        assert.equal(forwardedRequestId, "33333333-3333-4333-8333-333333333333");
+      });
+    });
+  });
+
   it("rejects forged execution context before forwarding to LangGraph", async () => {
     let forwarded = false;
     await withServer((_req, res) => {

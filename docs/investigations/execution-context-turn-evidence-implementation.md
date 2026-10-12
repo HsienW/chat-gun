@@ -92,3 +92,14 @@
 2. 經 BFF 重播原新聞問題及同 thread「weather→news」，記錄安全 correlation、tool status／errorCode 與來源數。
 3. 補 native Server 的 streaming、Graph configuration、持久化 checkpoint resume 與 DB 並行／取消驗證；若入口包裝未被保留，先固化該失敗再修正。
 4. 只有真實工具成功及 UI 事件驗證後，才能宣稱原服務修復與部署驗收完成。
+
+## 2026-10-12：BFF 誤擋合法 client metadata 回歸修正
+
+- 問題重現：在 `http://localhost:5173/app/` 新對話輸入「請只回答：連線測試」，UI 出現 `langgraph_stream / unknown_error / HTTP 400 / UNTRUSTED_EXECUTION_CONTEXT`。這次錯誤發生在 BFF，尚未進入 Graph／Tool 授權。
+- 根因：`hasReservedConfig` 遞迴依欄位名稱拒絕所有 `requestId`／`runId`，沒有區分 canonical authority 與既有 `config.configurable.clientInteractionMetadata.requestId`／`activeRunHint.runId`。前端每次 submit 都產生前者，後續互動可能包含後者。前次合法案例只測 inputKind，漏掉實際必要欄位，屬本次提交引入的回歸。
+- 修正：僅在精確的 client metadata 物件及其 activeRunHint 物件中容許字串追蹤欄位；不複製到 canonical execution_context、不提升權限、不全面跳過 metadata 掃描。其他位置的同名欄位，以及 metadata 內夾帶 taskId、execution_context、x-bff-* 或巢狀偽造內容，仍拒絕。格式與 input kind 的既有驗證責任不變。
+- 變更範圍：`bff/src/execution-context-boundary.ts`、同名 test、`bff/src/server.test.ts` 與本文件。沒有更動 frontend、backend、認證政策或環境設定。沿用本議題直接施工授權，無 OpenSpec Task 更新。
+- 先紅後綠：新增案例在修正前得到 5 failed／134 passed，包含 HTTP 400 而非預期 200；修正後 `npm test` 全部 139 Vitest tests 與 9 Node tests 通過，test:node 內含 TypeScript build 通過。`git diff --check` 通過。backend／frontend 本輪未重跑，因本次僅恢復既有 BFF transport 契約，未修改其程式。
+- 安全回歸涵蓋四種 inputKind、batch、active run hint、巢狀偽造、錯誤位置與 array metadata；HTTP 測試確認 body 原樣透傳，body requestId 不覆蓋 HTTP request header 的可信 correlation。
+- 程序比對：5173 frontend 及 2024 backend 仍使用 `C:/D/ai-agent/chat-gun-react-agent`；8787 程序僅識別到相對入口 dist/server.js，未確認其 working directory。此次修正位於 `C:/D/ai-agent/chat-gun`。未擅自停止程序、寫入另一份 checkout 或宣稱線上 UI 已修復。
+- 待續：將修正套用到實際 BFF、重新 build／啟動後，經同一頁面重測；若進入下一道 DB／Graph 錯誤，另依結構化證據定位，不混同這個已重現的 400 回歸。
