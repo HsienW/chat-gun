@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json --noEmit",
     "lint": "npm run migrations:check && tsc -p tsconfig.json --noEmit",
     "migrations:check": "tsx src/runtime/persistence/migration-additive.cli.ts",
+    "migrations:up": "tsx src/runtime/persistence/migrate-up.cli.ts",
     "postinstall": "patch-package",
     "start": "langgraphjs dev",
     "test": "vitest run",
