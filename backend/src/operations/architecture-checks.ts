@@ -14,6 +14,10 @@ export const ARCHITECTURE_CHECK_IDS = [
   "client-controlled-trusted-identity",
   "harness-forbidden-dependency",
   "harness-cycle",
+  "sdk-forbidden-dependency",
+  "sdk-cycle",
+  "sdk-self-executor",
+  "sdk-trusted-identity-mutation",
   "chat-gun-parallel-local-definition",
 ] as const;
 
@@ -52,6 +56,7 @@ interface ParsedOverride {
 const HARNESS_PACKAGE_NAMES = [
   "@gun-ai/harness-contracts",
   "@gun-ai/harness-kernel",
+  "@gun-ai/harness-sdk",
   "@gun-ai/harness-testkit",
 ] as const;
 
@@ -69,9 +74,14 @@ const HARNESS_ALLOWED_DEPENDENCIES: Readonly<
 > = {
   "@gun-ai/harness-contracts": new Set(),
   "@gun-ai/harness-kernel": new Set(["@gun-ai/harness-contracts"]),
+  "@gun-ai/harness-sdk": new Set([
+    "@gun-ai/harness-contracts",
+    "@gun-ai/harness-kernel",
+  ]),
   "@gun-ai/harness-testkit": new Set([
     "@gun-ai/harness-contracts",
     "@gun-ai/harness-kernel",
+    "@gun-ai/harness-sdk",
   ]),
 };
 
@@ -106,10 +116,10 @@ function harnessPackageFromSpecifier(
 
 function harnessPackageFromPath(path: string): HarnessPackageName | undefined {
   const normalizedPath = path.replaceAll("\\", "/");
-  const scopedMatch = /(?:^|\/)@gun-ai\/harness-(contracts|kernel|testkit)(?:\/|$)/u.exec(
+  const scopedMatch = /(?:^|\/)@gun-ai\/harness-(contracts|kernel|sdk|testkit)(?:\/|$)/u.exec(
     normalizedPath
   );
-  const packageMatch = /(?:^|\/)packages\/(contracts|kernel|testkit)(?:\/|$)/u.exec(
+  const packageMatch = /(?:^|\/)packages\/(contracts|kernel|sdk|testkit)(?:\/|$)/u.exec(
     normalizedPath
   );
   const packageSegment = scopedMatch?.[1] ?? packageMatch?.[1];
@@ -253,10 +263,23 @@ function runHarnessProjectChecks(
       )
     ) {
       findings.push({
-        checkId: "harness-forbidden-dependency",
+        checkId: harnessPackage === "@gun-ai/harness-sdk"
+          ? "sdk-forbidden-dependency"
+          : "harness-forbidden-dependency",
         path: source.path,
-        reasonCode: "HARNESS_FORBIDDEN_DEPENDENCY",
+        reasonCode: harnessPackage === "@gun-ai/harness-sdk"
+          ? "SDK_FORBIDDEN_DEPENDENCY"
+          : "HARNESS_FORBIDDEN_DEPENDENCY",
       });
+    }
+    if (harnessPackage === "@gun-ai/harness-sdk") {
+      if (/\b(?:[A-Za-z_$][\w$]*\s*\.\s*invoke|createRuntimeToolDispatchPipeline|createExecutor|new\s+[A-Za-z_$][\w$]*Executor)\s*\(/u.test(source.source)) {
+        findings.push({ checkId: "sdk-self-executor", path: source.path, reasonCode: "SDK_SELF_EXECUTOR" });
+      }
+      if (/\b(?:principal|principalId|tenant|tenantId|authorization|approval|billing)\s*(?:\.|\[|\s*=)/u.test(source.source) &&
+          /\b(?:view|hookContext)\s*\.\s*(?:principal|principalId|tenant|tenantId|authorization|approval|billing)\s*=/u.test(source.source)) {
+        findings.push({ checkId: "sdk-trusted-identity-mutation", path: source.path, reasonCode: "SDK_TRUSTED_IDENTITY_MUTATION" });
+      }
     }
   }
 
@@ -281,9 +304,9 @@ function runHarnessProjectChecks(
   for (const source of parsedSources) {
     if (source.harnessPackage !== undefined && cyclePackages.has(source.harnessPackage)) {
       findings.push({
-        checkId: "harness-cycle",
+        checkId: source.harnessPackage === "@gun-ai/harness-sdk" ? "sdk-cycle" : "harness-cycle",
         path: source.path,
-        reasonCode: "HARNESS_PACKAGE_CYCLE",
+        reasonCode: source.harnessPackage === "@gun-ai/harness-sdk" ? "SDK_PACKAGE_CYCLE" : "HARNESS_PACKAGE_CYCLE",
       });
     }
   }
