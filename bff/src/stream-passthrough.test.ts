@@ -48,6 +48,31 @@ test("passes stream bytes and SSE framing through unchanged", async () => {
   assert.equal(Buffer.concat(output).toString("utf8"), 'event: runtime\ndata: {"sequence":1}\n\n');
 });
 
+test("preserves SDK provenance, legacy results, unknown fields and correlation", async () => {
+  const base = {
+    schemaVersion: "1.0",
+    kind: "tool_result",
+    correlation: { requestId: "request-1", threadId: "thread-1", runId: "run-1", toolCallId: "call-1" },
+    tool: { name: "current_weather", version: "1.0", riskTier: "read", readOnly: true },
+    outcome: { type: "succeeded", result: "ok" },
+    emittedAt: "2026-10-12T00:00:00.000Z",
+  };
+  const events = [base, { ...base, manifestVersion: "1.0.0", futureField: { value: true } }];
+  const frames = events.map((event) => `event: tool.success\ndata: ${JSON.stringify(event)}\n\n`);
+  const expected = frames.join("");
+  const output: Buffer[] = [];
+  const response = new Writable({ write(chunk, _encoding, callback) {
+    output.push(Buffer.from(chunk));
+    callback();
+  } });
+  const result = await pipeWebResponseBody(createBody(frames), response, {
+    abortController: new AbortController(),
+    disconnectReason: { code: "client_disconnected", stage: "langgraph_stream_proxy", requestId: "request-1" },
+  });
+  assert.deepEqual(result, { completed: true, clientDisconnected: false });
+  assert.equal(Buffer.concat(output).toString("utf8"), expected);
+});
+
 test("honors writable backpressure without concurrent buffered writes", async () => {
   const output: Buffer[] = [];
   let inFlightWrites = 0;
