@@ -316,7 +316,7 @@ export type WeatherClarificationResolution =
   | { resolutionType: "unrecognized" };
 
 export type WeatherClarificationState = {
-  status: "awaiting_user_input" | "resuming" | "resolved" | "cancelled" | "timeout" | "exhausted";
+  status: "awaiting_user_input" | "resuming" | "resolved" | "cancelled" | "timeout" | "exhausted" | "resolution_failed";
   candidates: WeatherClarificationCandidate[];
   originalQuery: LocationQuery;
   weatherCapability: WeatherCapability;

@@ -33,6 +33,7 @@ import { createPlannerFailureRoutingDecision } from "../platform/agent-routing-p
 import {
   createErrorEnvelope,
   formatErrorEnvelope,
+  inferErrorCode,
   parseErrorEnvelope,
   serializeErrorEnvelope,
 } from "../platform/errors.js";
@@ -44,6 +45,7 @@ import {
   describeLlmGatewayConfig,
   formatLlmError,
   getConfiguredLlmCapabilities,
+  getProviderResponseCode,
   llmGateway,
 } from "../platform/llm-gateway.js";
 import { auditLogger, recordMetric, recordWeatherAuditEvent } from "../platform/observability.js";
@@ -1049,6 +1051,8 @@ async function recordWeatherLlmDiagnostic(payload: {
   plannerJson?: unknown;
   repairJson?: unknown;
   candidateCount?: number;
+  providerErrorCode?: string;
+  providerResponseCode?: string;
 }): Promise<void> {
   const gateway = describeLlmGatewayConfig();
   await auditLogger.record("weather.llm.diagnostic", {
@@ -1059,6 +1063,8 @@ async function recordWeatherLlmDiagnostic(payload: {
     failureCode: payload.failureCode,
     responseContentLength: payload.responseContentLength,
     candidateCount: payload.candidateCount,
+    providerErrorCode: payload.providerErrorCode,
+    providerResponseCode: payload.providerResponseCode,
     plannerJson: payload.plannerJson === undefined
       ? undefined
       : sanitizeJsonForDiagnostics(payload.plannerJson),
@@ -1880,19 +1886,41 @@ function buildClarificationInterrupt(
   };
 }
 
-function parseClarificationResumeInput(value: unknown): string | undefined {
+function buildResumingClarificationState(
+  clarification: WeatherClarificationState,
+  value: unknown
+): WeatherClarificationState {
+  let userReply: string | undefined;
+  let resolution: WeatherClarificationResolution | undefined;
   if (typeof value === "string") {
-    return value;
-  }
-  if (isRecord(value)) {
-    if (typeof value.userReply === "string") {
-      return value.userReply;
+    userReply = value;
+  } else if (isRecord(value)) {
+    if (Object.hasOwn(value, "candidateIndex")) {
+      const candidateIndex =
+        typeof value.candidateIndex === "number" &&
+        Number.isSafeInteger(value.candidateIndex) &&
+        value.candidateIndex > 0
+          ? value.candidateIndex
+          : undefined;
+      const candidate = candidateIndex === undefined
+        ? undefined
+        : clarification.candidates[candidateIndex - 1];
+      if (
+        candidateIndex !== undefined &&
+        candidate &&
+        typeof value.userReply === "string" &&
+        value.userReply.trim() === candidate.displayName.trim()
+      ) {
+        userReply = value.userReply;
+        resolution = { resolutionType: "select_candidate", candidateIndex };
+      }
+    } else if (typeof value.userReply === "string") {
+      userReply = value.userReply;
+    } else if (value.cancel === true) {
+      userReply = "cancel";
     }
-    if (value.cancel === true) {
-      return "cancel";
-    }
   }
-  return undefined;
+  return { ...clarification, status: "resuming", userReply, resolution };
 }
 
 function routeAfterTargetedTools(state: typeof DeepResearchState.State): string {
@@ -1947,15 +1975,10 @@ async function clarifyInterrupt(
   );
 
   const resumeValue = interrupt<WeatherClarificationInterrupt, unknown>(payload);
-  const userReply = parseClarificationResumeInput(resumeValue);
 
   return new Command({
     update: {
-      clarification: {
-        ...clarification,
-        status: "resuming",
-        userReply,
-      },
+      clarification: buildResumingClarificationState(clarification, resumeValue),
     },
     goto: DEEP_RESEARCH_GRAPH_NODES.resumeClarify,
   });
@@ -1976,21 +1999,30 @@ function coerceClarificationResolution(
     return undefined;
   }
 
-  if (value.resolutionType === "select_candidate" && typeof value.candidateIndex === "number") {
+  if (
+    value.resolutionType === "select_candidate" &&
+    typeof value.candidateIndex === "number" &&
+    Number.isSafeInteger(value.candidateIndex) &&
+    value.candidateIndex > 0
+  ) {
     return {
       resolutionType: "select_candidate",
-      candidateIndex: Math.trunc(value.candidateIndex),
+      candidateIndex: value.candidateIndex,
     };
   }
 
   if (value.resolutionType === "filter_candidates" && isRecord(value.filter)) {
+    const filter = {
+      country: typeof value.filter.country === "string" ? value.filter.country : undefined,
+      region: typeof value.filter.region === "string" ? value.filter.region : undefined,
+      name: typeof value.filter.name === "string" ? value.filter.name : undefined,
+    };
+    if (!Object.values(filter).some((entry) => entry?.trim())) {
+      return undefined;
+    }
     return {
       resolutionType: "filter_candidates",
-      filter: {
-        country: typeof value.filter.country === "string" ? value.filter.country : undefined,
-        region: typeof value.filter.region === "string" ? value.filter.region : undefined,
-        name: typeof value.filter.name === "string" ? value.filter.name : undefined,
-      },
+      filter,
     };
   }
 
@@ -2019,7 +2051,7 @@ async function resolveClarificationWithPlanner(
   clarification: WeatherClarificationState,
   userReply: string,
   state: typeof DeepResearchState.State
-): Promise<WeatherClarificationResolution> {
+): Promise<WeatherClarificationResolution | undefined> {
   const prompt = [
     "Return only JSON. Do not use markdown.",
     "Resolve a weather location clarification reply using only the pending candidates and the user's reply.",
@@ -2039,28 +2071,36 @@ async function resolveClarificationWithPlanner(
     `User reply: ${JSON.stringify(userReply)}`,
   ].join("\n");
 
+  let response: BaseMessage;
   try {
     const llm = createResearchJsonChatModel(state);
-    const response = await llm.invoke(prompt);
-    const parsedResult = parseJsonObjectWithDiagnostics<WeatherClarificationResolutionResponse>(
-      messageContentToString(response)
-    );
-    const resolution = coerceClarificationResolution(parsedResult.parsed);
-    await recordWeatherLlmDiagnostic({
-      phase: "clarification_resolution",
-      resultStatus: resolution?.resolutionType ?? "rejected",
-      failureCode: resolution ? undefined : (parsedResult.failureCode ?? "schema_rejected"),
-      responseContentLength: parsedResult.responseContentLength,
-      plannerJson: parsedResult.parsed,
-    });
-    return resolution ?? { resolutionType: "unrecognized" };
-  } catch {
+    response = await llm.invoke(prompt);
+  } catch (error) {
     await recordWeatherLlmDiagnostic({
       phase: "clarification_resolution",
       failureCode: "llm_unavailable",
+      providerErrorCode: inferErrorCode(error).code,
+      providerResponseCode: getProviderResponseCode(error),
     });
-    return { resolutionType: "unrecognized" };
+    return undefined;
   }
+
+  const parsedResult = parseJsonObjectWithDiagnostics<WeatherClarificationResolutionResponse>(
+    messageContentToString(response)
+  );
+  const modelResolution = coerceClarificationResolution(parsedResult.parsed);
+  const resolution = modelResolution?.resolutionType === "select_candidate" &&
+    modelResolution.candidateIndex > clarification.candidates.length
+    ? undefined
+    : modelResolution;
+  await recordWeatherLlmDiagnostic({
+    phase: "clarification_resolution",
+    resultStatus: resolution?.resolutionType ?? "rejected",
+    failureCode: resolution ? undefined : (parsedResult.failureCode ?? "schema_rejected"),
+    responseContentLength: parsedResult.responseContentLength,
+    plannerJson: parsedResult.parsed,
+  });
+  return resolution;
 }
 
 function createWeatherClarificationErrorResult(
@@ -2163,6 +2203,36 @@ function buildClarificationResultFromCandidates(
   };
 }
 
+function retryClarification(
+  clarification: WeatherClarificationState,
+  resolution: WeatherClarificationResolution,
+  candidates = clarification.candidates
+): WeatherClarificationState {
+  const rounds = clarification.rounds + 1;
+  const correlation = clarification.interruptCorrelation;
+  return {
+    ...clarification,
+    status: "awaiting_user_input",
+    candidates,
+    rounds,
+    resolution,
+    userReply: undefined,
+    ...(correlation
+      ? {
+          interruptCorrelation: {
+            ...correlation,
+            interruptId: createClarificationInterruptId({
+              threadId: correlation.threadId,
+              runId: correlation.runId,
+              taskId: correlation.taskId,
+              round: rounds,
+            }),
+          },
+        }
+      : {}),
+  };
+}
+
 async function resumeClarify(
   state: typeof DeepResearchState.State,
   config: RunnableConfig
@@ -2204,7 +2274,22 @@ async function resumeClarify(
     };
   }
 
-  const resolution = await resolveClarificationWithPlanner(clarification, userReply, state);
+  const resolution = clarification.resolution?.resolutionType === "select_candidate"
+    ? clarification.resolution
+    : await resolveClarificationWithPlanner(clarification, userReply, state);
+
+  if (!resolution) {
+    const result = createWeatherClarificationErrorResult(
+      clarification,
+      "weather_unknown_error",
+      "Weather clarification could not be processed. Please try again or select a listed location."
+    );
+    return {
+      clarification: { ...clarification, status: "resolution_failed", resolution: undefined },
+      weatherExecution: { status: "failed", result },
+      messages: [createToolMessage(result.tool, JSON.stringify(result))],
+    };
+  }
 
   if (resolution.resolutionType === "cancel") {
     const result = createWeatherClarificationErrorResult(
@@ -2242,14 +2327,7 @@ async function resumeClarify(
       };
     }
     if (matchingCandidates.length > 1 && clarification.rounds < 1) {
-      const narrowed = {
-        ...clarification,
-        status: "awaiting_user_input" as const,
-        candidates: matchingCandidates,
-        rounds: clarification.rounds + 1,
-        resolution,
-        userReply: undefined,
-      };
+      const narrowed = retryClarification(clarification, resolution, matchingCandidates);
       const result = buildClarificationResultFromCandidates(narrowed, matchingCandidates);
       return {
         clarification: narrowed,
@@ -2286,13 +2364,7 @@ async function resumeClarify(
   if (clarification.rounds < 1) {
     const result = buildClarificationResultFromCandidates(clarification, clarification.candidates);
     return {
-      clarification: {
-        ...clarification,
-        status: "awaiting_user_input",
-        rounds: clarification.rounds + 1,
-        resolution,
-        userReply: undefined,
-      },
+      clarification: retryClarification(clarification, resolution),
       weatherExecution: { status: "needs_clarification", result },
       messages: [createToolMessage(result.tool, JSON.stringify(result))],
     };
@@ -2763,6 +2835,11 @@ function buildWeatherToolAnswer(
 
   // Task 5.8 — provider_error / timeout / error
   if (result.status === "error") {
+    if (state.clarification?.status === "resolution_failed") {
+      return new AIMessage(
+        "I could not process your location clarification. Please try again or select a listed location."
+      );
+    }
     if (result.code === "weather_timeout") {
       return new AIMessage(
         "The weather service did not respond in time. Please try again later."
@@ -2824,6 +2901,7 @@ export const deepResearcherWeatherTestInternals = {
   routeAfterResumeClarify,
   buildClarificationState,
   buildClarificationInterrupt,
+  buildResumingClarificationState,
   coerceClarificationResolution,
 };
 
