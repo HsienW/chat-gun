@@ -911,6 +911,37 @@ describe("llm-gateway provider selection", () => {
     expect(formatted).not.toContain("qwen-secret-test-key");
   });
 
+  it("exposes only a bounded provider error code from Qwen validation failures", async () => {
+    vi.stubEnv("LLM_PROVIDER", "qwen");
+    vi.stubEnv("QWEN_API_KEY", "qwen-secret-test-key");
+    vi.resetModules();
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({
+          error: {
+            code: "InvalidParameter",
+            message: "Request includes qwen-secret-test-key and private prompt text",
+          },
+        }), { status: 400, statusText: "Bad Request" })
+      )
+    );
+
+    const { llmGateway, getProviderResponseCode, formatLlmError } = await import("./llm-gateway.js");
+    let error: unknown;
+    try {
+      await llmGateway.createChatModel({ maxRetries: 0 }).invoke("ping");
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(getProviderResponseCode(error)).toBe("InvalidParameter");
+    expect(formatLlmError(error)).toContain("InvalidParameter");
+    expect(formatLlmError(error)).not.toContain("qwen-secret-test-key");
+    expect(formatLlmError(error)).not.toContain("private prompt text");
+  });
+
   it("maps invalid Qwen JSON response without leaking response body contents", async () => {
     vi.stubEnv("LLM_PROVIDER", "qwen");
     vi.stubEnv("QWEN_API_KEY", "qwen-secret-test-key");
