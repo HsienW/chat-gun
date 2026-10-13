@@ -1,0 +1,92 @@
+name: Harness registry integration
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/harness-registry-integration.yml
+      - backend/package.json
+      - backend/package-lock.json
+      - backend/src/tools/sdk/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  registry:
+    name: ${{ matrix.os }} / published harness packages
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      DATABASE_URL: ''
+      RUN_OPIK_EVALUATION: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install backend from registry
+        working-directory: backend
+        run: npm ci --registry=https://registry.npmjs.org/ --no-audit --no-fund
+      - name: Verify exact published harness packages
+        working-directory: backend
+        shell: pwsh
+        run: |
+          $manifest = Get-Content package.json -Raw | ConvertFrom-Json -AsHashtable
+          $lock = Get-Content package-lock.json -Raw | ConvertFrom-Json -AsHashtable
+          $installedLock = Get-Content node_modules/.package-lock.json -Raw | ConvertFrom-Json -AsHashtable
+          foreach ($shortName in @('contracts', 'kernel', 'sdk', 'testkit')) {
+            $name = "@gun-ai/harness-$shortName"
+            $key = "node_modules/$name"
+            $locked = $lock.packages[$key]
+            $installed = $installedLock.packages[$key]
+            if ($null -eq $locked -or $null -eq $installed) {
+              throw "Missing lockfile entry: $name"
+            }
+            if ($manifest.dependencies[$name] -ne '0.1.0-alpha.2' -or
+                $lock.packages[''].dependencies[$name] -ne '0.1.0-alpha.2' -or
+                $locked.version -ne '0.1.0-alpha.2' -or
+                $installed.version -ne '0.1.0-alpha.2') {
+              throw "Wrong published version: $name"
+            }
+            if ($locked.resolved -notlike 'https://registry.npmjs.org/*' -or
+                $installed.resolved -notlike 'https://registry.npmjs.org/*') {
+              throw "Non-registry package source: $name"
+            }
+            Write-Output "$name $($installed.version) $($installed.resolved)"
+          }
+      - name: Backend lint
+        working-directory: backend
+        run: npm run lint
+      - name: Backend test
+        working-directory: backend
+        run: npm run test
+      - name: Backend build
+        working-directory: backend
+        run: npm run build
+      - name: BFF install, test and build
+        working-directory: bff
+        shell: pwsh
+        run: |
+          npm ci --registry=https://registry.npmjs.org/ --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'BFF npm ci failed' }
+          npm run test
+          if ($LASTEXITCODE -ne 0) { throw 'BFF test failed' }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw 'BFF build failed' }
+      - name: Frontend install, lint, test and build
+        working-directory: frontend
+        shell: pwsh
+        run: |
+          npm ci --registry=https://registry.npmjs.org/ --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'frontend npm ci failed' }
+          npm run lint
+          if ($LASTEXITCODE -ne 0) { throw 'frontend lint failed' }
+          npm run test
+          if ($LASTEXITCODE -ne 0) { throw 'frontend test failed' }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw 'frontend build failed' }
