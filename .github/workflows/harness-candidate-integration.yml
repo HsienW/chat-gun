@@ -114,6 +114,7 @@ jobs:
           npm install --no-save @files
           if ($LASTEXITCODE -ne 0) { throw 'Four-tarball install failed' }
           $installed = Get-Content -LiteralPath 'node_modules/.package-lock.json' -Raw | ConvertFrom-Json
+          $installedPackages = @()
           foreach ($tarball in $evidence.tarballs) {
             $entry = $installed.packages."node_modules/$($tarball.name)"
             if ($null -eq $entry -or $entry.version -ne $tarball.version) {
@@ -122,9 +123,20 @@ jobs:
             if (-not $entry.resolved.EndsWith((Split-Path $tarball.file -Leaf))) {
               throw "Installed source is not the candidate tarball: $($tarball.name)"
             }
+            $installedPackages += [ordered]@{
+              name = $tarball.name
+              version = $entry.version
+              resolved = $entry.resolved
+              tarballSha256 = $tarball.sha256
+            }
           }
           git -C .. diff --exit-code -- backend/package.json backend/package-lock.json
           if ($LASTEXITCODE -ne 0) { throw 'Tarball install changed a tracked dependency file' }
+          [ordered]@{
+            harnessSha = $evidence.harnessSha
+            chatGunSha = $evidence.chatGunSha
+            installedPackages = $installedPackages
+          } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath '../../packed/installed-sources.json'
       - name: Backend lint
         id: backend_lint
         working-directory: chat-gun/backend
