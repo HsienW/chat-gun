@@ -362,6 +362,18 @@ describe('WeatherToolResultCard', () => {
     warn.mockRestore();
   });
 
+  it('renders weather results with additive SDK provenance or future fields', () => {
+    const result = createSuccessResult();
+    for (const extra of [{}, { manifestVersion: '1.0.0', futureField: true }]) {
+      const content = JSON.stringify({ ...result, ...extra });
+      expect(parseWeatherToolResult(content)).toBeDefined();
+      const view = render(<WeatherToolResultCard content={content} />);
+      expect(screen.getByText('Tokyo')).toBeTruthy();
+      expect(screen.getByText('完成')).toBeTruthy();
+      view.unmount();
+    }
+  });
+
   it('should handle non-JSON content gracefully without crash (Task 6.7)', () => {
     const content = 'Some legacy text output from weather tool';
     render(<WeatherToolResultCard content={content} />);

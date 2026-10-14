@@ -310,6 +310,7 @@ async function recordOutcome(
   const payload = {
     toolName: envelope.tool.name,
     toolVersion: envelope.tool.version,
+    ...(envelope.manifestVersion ? { manifestVersion: envelope.manifestVersion } : {}),
     outcomeType: envelope.outcome.type,
     toolResult: createAuditToolResult(envelope),
   };

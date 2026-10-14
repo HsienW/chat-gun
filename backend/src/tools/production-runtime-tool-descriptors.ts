@@ -171,9 +171,11 @@ export function createLocalRuntimeToolDescriptors(): RuntimeToolDescriptor<
   });
 }
 
-export function createLocalRuntimeToolDescriptorRegistry(): RuntimeToolDescriptorRegistry {
+export function createLocalRuntimeToolDescriptorRegistry(
+  descriptors: readonly RuntimeToolDescriptor<unknown, string>[] = createLocalRuntimeToolDescriptors()
+): RuntimeToolDescriptorRegistry {
   const registry = new RuntimeToolDescriptorRegistry();
-  for (const descriptor of createLocalRuntimeToolDescriptors()) {
+  for (const descriptor of descriptors) {
     registry.register(
       {
         toolName: descriptor.toolName,

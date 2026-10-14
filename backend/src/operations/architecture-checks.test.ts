@@ -92,6 +92,25 @@ const DELIBERATE_BYPASSES = [
     ],
   },
   {
+    checkId: "sdk-forbidden-dependency",
+    sources: [{ path: "packages/sdk/src/index.ts", source: 'import React from "react";' }],
+  },
+  {
+    checkId: "sdk-cycle",
+    sources: [
+      { path: "packages/sdk/src/index.ts", source: 'import { fixture } from "@gun-ai/harness-testkit";' },
+      { path: "packages/testkit/src/index.ts", source: 'import { registerTool } from "@gun-ai/harness-sdk";' },
+    ],
+  },
+  {
+    checkId: "sdk-self-executor",
+    sources: [{ path: "packages/sdk/src/index.ts", source: 'protectedTool.invoke(input);' }],
+  },
+  {
+    checkId: "sdk-trusted-identity-mutation",
+    sources: [{ path: "packages/sdk/src/hooks.ts", source: 'view.principalId = "admin";' }],
+  },
+  {
     checkId: "chat-gun-parallel-local-definition",
     sources: [
       {
@@ -145,6 +164,7 @@ describe("production runtime architecture checks", () => {
     ];
     const harnessPaths = [
       "@gun-ai/harness-contracts/src/authorization.ts",
+      "@gun-ai/harness-contracts/src/agent-tool-manifest.ts",
       "@gun-ai/harness-contracts/src/events.ts",
       "@gun-ai/harness-contracts/src/identity.ts",
       "@gun-ai/harness-contracts/src/index.ts",
@@ -160,10 +180,15 @@ describe("production runtime architecture checks", () => {
       "@gun-ai/harness-kernel/src/retry.ts",
       "@gun-ai/harness-kernel/src/side-effect.ts",
       "@gun-ai/harness-kernel/src/version-compatibility.ts",
+      "@gun-ai/harness-sdk/src/context.ts",
+      "@gun-ai/harness-sdk/src/index.ts",
+      "@gun-ai/harness-sdk/src/provider.ts",
+      "@gun-ai/harness-sdk/src/registration.ts",
       "@gun-ai/harness-testkit/src/deterministic.ts",
       "@gun-ai/harness-testkit/src/failures.ts",
       "@gun-ai/harness-testkit/src/fixtures.ts",
       "@gun-ai/harness-testkit/src/index.ts",
+      "@gun-ai/harness-testkit/src/sdk-fixtures.ts",
     ];
     const sources = productionPaths.map((path) => ({
       path,

@@ -40,6 +40,20 @@ function parseEnvelope(sequence: number, eventId = `event-${sequence}`): Runtime
 }
 
 describe('parseRuntimeEventEnvelope', () => {
+  it('keeps SDK and legacy tool results as opaque event payloads', () => {
+    const base = {
+      schemaVersion: '1.0', kind: 'tool_result',
+      correlation: { requestId: 'request-1', threadId: 'thread-1', runId: 'run-1', toolCallId: 'call-1' },
+      tool: { name: 'current_weather', version: '1.0', riskTier: 'read', readOnly: true },
+      outcome: { type: 'succeeded', result: 'ok' }, emittedAt: '2026-10-12T00:00:00.000Z',
+    };
+    for (const payload of [base, { ...base, manifestVersion: '1.0.0', futureField: true }]) {
+      const parsed = parseRuntimeEventEnvelope(createEnvelope(1, 'event-1', { type: 'tool.success', payload }));
+      expect(parsed.kind).toBe('versioned');
+      if (parsed.kind === 'versioned') expect(parsed.envelope.payload).toEqual(payload);
+    }
+  });
+
   it('validates every required envelope field', () => {
     expect(parseRuntimeEventEnvelope(createEnvelope())).toEqual(
       expect.objectContaining({

@@ -11,7 +11,8 @@ describe("production tool authorization architecture", () => {
     const registrySource = readSource("../registry.ts");
     const mcpLoaderSource = readSource("../mcp-loader.ts");
 
-    expect(registrySource).toContain("createLocalRuntimeToolDescriptorRegistry()");
+    expect(registrySource).toContain("createLocalRuntimeToolDescriptorRegistry(stagedDescriptors)");
+    expect(registrySource).toContain("stageCurrentWeatherSdkDescriptor({");
     expect(registrySource).toContain("createRuntimeToolDispatchPipeline({");
     expect(registrySource).toContain("registry: descriptorRegistry");
     expect(registrySource).toContain("dispatchPipeline.createExecutor(tool.name, defaultExecutor)");
