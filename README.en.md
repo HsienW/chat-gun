@@ -34,6 +34,7 @@ Chat Gun is a full-stack agent chat application built with React, TypeScript, an
 - **Multimodal input**: Accepts PNG, JPEG, and WebP images and uses a vision model to incorporate their content into answers and research workflows.
 - **Native Tools**: Includes calculation, web search powered by the Tavily Search API, web fetching, current weather, and weather forecast tools that agents can select as needed.
 - **MCP integration**: Optionally loads Filesystem and Brave Search MCP Servers; Brave Search extends search capabilities as an optional MCP Tool.
+- **Agent/Tool SDK**: Provides typed declarations for agents and tools, with versioned manifests describing inputs, outputs, required permissions, and execution requirements.
 - **Model providers**: Supports Qwen, OpenAI-compatible, and CCR-compatible endpoints through a shared LLM Gateway interface.
 - **API Gateway**: The BFF centralizes API key authentication, maps verified API keys to trusted principal contexts, and handles CORS, request size validation, timeouts, cancellation propagation, and rate limiting. When authentication is enabled, client-supplied identity and tenant headers are not treated as trusted identity sources.
 - **Observability & Evaluation**: Provides metrics and OpenTelemetry, with optional Opik tracing, versioned datasets, and experiments for tracking and evaluating agent behavior.
@@ -273,6 +274,18 @@ Invoke-RestMethod http://127.0.0.1:8787/api/ready
 | `weather_forecast` | Weather forecasts from Open-Meteo | None |
 
 Use `TOOL_ALLOWLIST`, `TOOL_DENYLIST`, `TOOL_TIMEOUT_MS`, and tool-specific settings to restrict the available capabilities. By default, `web_fetch` allows only ports `80` and `443` and blocks unsafe private network addresses.
+
+### Extending Agents and Tools
+
+- TypeScript developers can use these packages:
+  - [`@gun-ai/harness-sdk`](https://www.npmjs.com/package/@gun-ai/harness-sdk) provides `defineAgent` and `defineTool`.
+    - Declare agents and tools with versioned manifests that specify data schemas, required permissions, execution environments, retry behavior, and other requirements.
+    - Declarations are validated during registration; incomplete or contradictory settings are rejected.
+
+  - [`@gun-ai/harness-testkit`](https://www.npmjs.com/package/@gun-ai/harness-testkit)
+    - Provides test helpers. This project uses alpha versions of these packages; pin compatible versions when extending it.
+
+- To use a custom tool in Chat Gun, you must also integrate its implementation into the Backend and configure authorization and execution. Installing the SDK does not automatically enable tools or bypass existing security checks.
 
 ## MCP
 
