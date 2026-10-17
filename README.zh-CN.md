@@ -34,6 +34,7 @@ Chat Gun 是一套以 React、TypeScript 与 LangGraph JS 构建的全栈 Agent 
 - **Multimodal input**：接受 PNG、JPEG 与 WebP 图片，通过 vision model 分析内容并纳入回答或研究流程。
 - **Native Tools**：内建计算、由 Tavily Search API 提供的网络搜索、网页撷取、目前天气与天气预报工具，Agent 可依问题选择合适工具。
 - **MCP integration**：可选择载入 Filesystem 与 Brave Search MCP Server；Brave Search 以选配 MCP Tool 的形式扩充搜索能力。
+- **Agent／Tool SDK**：提供具备类型的 Agent 与 Tool 声明方式，并以版本化 manifest 描述输入输出、所需权限与执行条件。
 - **Model providers**：支持 Qwen、OpenAI-compatible 与 CCR-compatible endpoints，统一由 LLM Gateway 处理模型能力与呼叫接口。
 - **API Gateway**：BFF 集中处理 API key authentication、CORS、request size validation、Timeout、Cancellation propagation 与 Rate limiting。
 - **Observability & Evaluation**：提供 Metrics 与 OpenTelemetry，并可启用 Opik tracing、versioned datasets 与 experiments 来追踪及评估 Agent 行为。
@@ -262,6 +263,18 @@ Invoke-RestMethod http://127.0.0.1:8787/api/ready
 | `weather_forecast` | Open-Meteo 天气预报 | 无 |
 
 可以使用 `TOOL_ALLOWLIST`、`TOOL_DENYLIST`、`TOOL_TIMEOUT_MS` 与个别 Tool 设定限制可用范围。`web_fetch` 预设只允许 port `80`、`443`，并拒绝不安全的 private network address。
+
+### 扩展 Agent 与 Tool
+
+- TypeScript 开发者可以使用以下软件包：
+  - [`@gun-ai/harness-sdk`](https://www.npmjs.com/package/@gun-ai/harness-sdk) 的 `defineAgent`、`defineTool`
+    - 声明 Agent 与 Tool，并通过版本化 manifest 指定数据格式、所需权限、执行环境与重试等条件。
+    - 注册时会验证声明；不完整或相互矛盾的设定会被拒绝。
+
+  - [`@gun-ai/harness-testkit`](https://www.npmjs.com/package/@gun-ai/harness-testkit)
+    - 提供测试辅助工具。本项目使用 alpha 版本，扩展时请固定兼容版本。
+
+- 要在 Chat Gun 使用自定义 Tool，仍需在 Backend 接入实现并设定授权与执行环境；安装 SDK 不会自动启用 Tool，也不会绕过现有的安全检查。
 
 ## MCP
 
