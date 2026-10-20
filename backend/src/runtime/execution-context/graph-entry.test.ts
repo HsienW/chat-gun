@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Command } from "@langchain/langgraph";
 import { createGraphEntryContextResolver } from "./graph-entry.js";
 import { instrumentGraphWithExecutionContext } from "./instrument-graph.js";
-import { readCanonicalExecutionContext, readDevelopmentExecutionContext } from "./read-execution-context.js";
+import { readCanonicalExecutionContext, readDevelopmentExecutionContext, readExecutionCorrelation } from "./read-execution-context.js";
 import type { ExecutionContext } from "./execution-context.js";
 
 const config = {
@@ -16,16 +16,21 @@ const config = {
   },
 };
 
-function setup(values: unknown = {}) {
-  const admit = vi.fn(async (context: ExecutionContext, resumeTaskId?: string) => resumeTaskId ?? context.taskId);
+function setup(values: unknown = {}, admissionTimeoutMs = 10_000) {
+  const admit = vi.fn(async (context: ExecutionContext, resumeTaskId?: string) => ({
+    taskId: resumeTaskId ?? context.taskId,
+    runId: resumeTaskId ? "persisted-product-run" : context.runId,
+  }));
   const graph = {
     getState: vi.fn(async () => ({ values })),
     invoke: vi.fn(async (_input: unknown, prepared: unknown) => prepared),
     async *stream(_input: unknown, prepared: unknown) { yield prepared; },
   };
-  const resolve = createGraphEntryContextResolver(graph, { admit });
+  const resolve = createGraphEntryContextResolver(graph, { admit }, { admissionTimeoutMs });
   return { graph, admit, wrapped: instrumentGraphWithExecutionContext(graph, resolve) };
 }
+
+afterEach(() => vi.useRealTimers());
 
 describe("trusted graph entry", () => {
   it("allocates an independent task before invoke and preserves cancellation", async () => {
@@ -33,7 +38,11 @@ describe("trusted graph entry", () => {
     const signal = new AbortController().signal;
     const prepared = await wrapped.invoke({ messages: [] }, { ...config, signal });
     const context = readCanonicalExecutionContext(prepared);
-    expect(context).toMatchObject({ runId: "run-1", threadId: "thread-1", principal: { principalId: "principal-1" } });
+    expect(context).toMatchObject({ threadId: "thread-1", principal: { principalId: "principal-1" } });
+    expect(context?.runId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(context?.runId).not.toBe("run-1");
+    expect(prepared).toHaveProperty("configurable.nativeRunId", "run-1");
+    expect(readExecutionCorrelation(prepared).runId).toBe(context?.runId);
     expect(context?.taskId).toBeTruthy();
     expect(context?.taskId).not.toBe("run-1");
     expect(admit).toHaveBeenCalledOnce();
@@ -57,6 +66,7 @@ describe("trusted graph entry", () => {
     const prepared = await wrapped.invoke(new Command({ resume: "answer" }), config);
     expect(admit.mock.calls[0]?.[1]).toBe("task-saved");
     expect(readCanonicalExecutionContext(prepared)?.taskId).toBe("task-saved");
+    expect(readCanonicalExecutionContext(prepared)?.runId).toBe("persisted-product-run");
     const next = await wrapped.invoke({ messages: [] }, config);
     expect(readCanonicalExecutionContext(next)?.taskId).not.toBe("task-saved");
   });
@@ -72,7 +82,7 @@ describe("trusted graph entry", () => {
     await expect(wrapped.invoke({}, { configurable: { run_id: "run-1" } })).rejects.toThrow();
     expect(admit).not.toHaveBeenCalled();
     admit.mockRejectedValueOnce(new Error("storage unavailable"));
-    await expect(wrapped.invoke({}, config)).rejects.toThrow("storage unavailable");
+    await expect(wrapped.invoke({}, config)).rejects.toMatchObject({ code: "ADAPTER_OPERATION_FAILED", message: "ADAPTER_OPERATION_FAILED" });
     expect(graph.invoke).not.toHaveBeenCalled();
   });
 
@@ -84,6 +94,9 @@ describe("trusted graph entry", () => {
       return readCanonicalExecutionContext(chunks[0]);
     }));
     expect(outputs[0]?.taskId).not.toBe(outputs[1]?.taskId);
+    expect(outputs[0]?.runId).not.toBe(outputs[1]?.runId);
+    expect(outputs[0]?.runId).not.toBe("run-1");
+    expect(outputs[1]?.runId).not.toBe("run-2");
   });
 
   it("does not invoke after cancellation during admission", async () => {
@@ -91,9 +104,24 @@ describe("trusted graph entry", () => {
     const controller = new AbortController();
     admit.mockImplementationOnce(async (context) => {
       controller.abort();
-      return context.taskId;
+      return { taskId: context.taskId, runId: context.runId };
     });
     await expect(wrapped.invoke({}, { ...config, signal: controller.signal })).rejects.toThrow();
+    expect(graph.invoke).not.toHaveBeenCalled();
+  });
+
+  it.each(["timeout", "cancel"] as const)("does not enter a node when admission remains pending until %s", async (mode) => {
+    vi.useFakeTimers();
+    const { wrapped, graph, admit } = setup({}, 10);
+    admit.mockImplementationOnce(async () => new Promise<{ taskId: string; runId: string }>(() => {}));
+    const controller = new AbortController();
+    const pending = wrapped.invoke({}, { ...config, signal: controller.signal });
+    const rejection = expect(pending).rejects.toMatchObject({ code: mode === "timeout" ? "ADAPTER_OPERATION_TIMEOUT" : "ADAPTER_OPERATION_CANCELLED" });
+    for (let index = 0; index < 10 && admit.mock.calls.length === 0; index += 1) await Promise.resolve();
+    expect(admit).toHaveBeenCalledOnce();
+    if (mode === "timeout") await vi.advanceTimersByTimeAsync(10);
+    else controller.abort();
+    await rejection;
     expect(graph.invoke).not.toHaveBeenCalled();
   });
 });

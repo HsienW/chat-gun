@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { isCommand } from "@langchain/langgraph";
+import { FrameworkAdapterError, runBoundedAdapterOperation } from "../framework-adapters/bounded-operation.js";
 import { executionContextSchema, executionIdSchema, type ExecutionContext } from "./execution-context.js";
 import { readDevelopmentExecutionContext, readExecutionContext } from "./read-execution-context.js";
 
 export interface GraphTaskAdmission {
-  admit(context: ExecutionContext, resumeTaskId?: string): Promise<string>;
+  admit(context: ExecutionContext, resumeTaskId?: string, signal?: AbortSignal): Promise<{ taskId: string; runId: string }>;
 }
 
 interface CheckpointReader {
@@ -15,6 +16,7 @@ interface CheckpointReader {
 const ENTRY_OWNED_KEYS = new Set([
   "execution_context", "taskId", "task_id", "stepId", "step_id",
   "toolCallId", "tool_call_id", "toolExecutionId", "tool_execution_id",
+  "runId", "nativeRunId",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -30,28 +32,50 @@ function entryConfig(config: unknown): RunnableConfig {
   };
 }
 
-export function createGraphEntryContextResolver(graph: CheckpointReader, admission: GraphTaskAdmission) {
+export function createGraphEntryContextResolver(
+  graph: CheckpointReader,
+  admission: GraphTaskAdmission,
+  options: { admissionTimeoutMs: number } = { admissionTimeoutMs: 10_000 },
+) {
   return async (input: unknown, config: unknown): Promise<ExecutionContext> => {
     const prepared = entryConfig(config);
-    prepared.signal?.throwIfAborted();
+    if (prepared.signal?.aborted) throw new FrameworkAdapterError("ADAPTER_OPERATION_CANCELLED");
     const candidateTaskId = randomUUID();
+    const candidateRunId = randomUUID();
     const candidateConfig = {
-      ...prepared,
-      configurable: { ...prepared.configurable, task_id: candidateTaskId },
+      ...Object.fromEntries(Object.entries(prepared).filter(([key]) => key !== "run_id")),
+      configurable: {
+        ...Object.fromEntries(Object.entries(prepared.configurable ?? {}).filter(([key]) => key !== "run_id")),
+        runId: candidateRunId,
+        task_id: candidateTaskId,
+      },
     };
-    const candidate = process.env.NODE_ENV === "development" && process.env.EXECUTION_CONTEXT_DEV_ENABLED === "true"
-      ? readDevelopmentExecutionContext(input, candidateConfig)
-      : readExecutionContext(input, candidateConfig, "production");
-    const isResume = input === null || input === undefined || isCommand(input);
-    let resumeTaskId: string | undefined;
-    if (isResume) {
-      const checkpoint = await graph.getState(prepared);
-      resumeTaskId = executionIdSchema.parse(
-        isRecord(checkpoint.values) ? checkpoint.values.executionTaskId : undefined,
-      );
+    let candidate: ExecutionContext;
+    try {
+      candidate = process.env.NODE_ENV === "development" && process.env.EXECUTION_CONTEXT_DEV_ENABLED === "true"
+        ? readDevelopmentExecutionContext(input, candidateConfig)
+        : readExecutionContext(input, candidateConfig, "production");
+    } catch {
+      throw new FrameworkAdapterError("ADAPTER_INVALID");
     }
-    const taskId = await admission.admit(candidate, resumeTaskId);
-    prepared.signal?.throwIfAborted();
-    return executionContextSchema.parse({ ...candidate, taskId });
+    const isResume = input === null || input === undefined || isCommand(input);
+    const admitted = await runBoundedAdapterOperation(async (signal) => {
+      let resumeTaskId: string | undefined;
+      if (isResume) {
+        const checkpoint = await graph.getState({ ...prepared, signal });
+        const parsed = executionIdSchema.safeParse(
+          isRecord(checkpoint.values) ? checkpoint.values.executionTaskId : undefined,
+        );
+        if (!parsed.success) throw new FrameworkAdapterError("CHECKPOINT_PARKED");
+        resumeTaskId = parsed.data;
+      }
+      signal.throwIfAborted();
+      const admitted = await admission.admit(candidate, resumeTaskId, signal);
+      signal.throwIfAborted();
+      return admitted;
+    }, { timeoutMs: options.admissionTimeoutMs, signal: prepared.signal });
+    const context = executionContextSchema.safeParse({ ...candidate, ...admitted });
+    if (!context.success) throw new FrameworkAdapterError("ADAPTER_INVALID");
+    return context.data;
   };
 }

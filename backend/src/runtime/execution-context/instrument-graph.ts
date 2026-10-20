@@ -36,13 +36,16 @@ async function prepareConfig(input: unknown, config: unknown, resolveContext: Co
     : {};
   const trustedMetadataRemoved = Object.fromEntries(
     Object.entries(configurable).filter(([key]) =>
-      key !== "execution_context" && key !== "taskId" && key !== "task_id" && !key.startsWith("x-bff-")
+      key !== "execution_context" && key !== "taskId" && key !== "task_id" && key !== "nativeRunId" && !key.startsWith("x-bff-")
     )
   );
+  const nativeRunId = typeof configurable.run_id === "string" && configurable.run_id.trim().length > 0
+    ? configurable.run_id.trim()
+    : undefined;
   return {
     prepared: withExecutionContext({
       ...Object.fromEntries(Object.entries(runnableConfig).filter(([key]) => key !== "taskId" && key !== "task_id")),
-      configurable: { ...trustedMetadataRemoved, task_id: context.taskId },
+      configurable: { ...trustedMetadataRemoved, ...(nativeRunId ? { nativeRunId } : {}), task_id: context.taskId },
     }, context),
     context,
   };

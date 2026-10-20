@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { deepResearcherGraph, deepResearcherWeatherTestInternals } from "./deep-researcher.js";
 import { llmGateway } from "../platform/llm-gateway.js";
 import { PgGraphTaskAdmission } from "../runtime/execution-context/graph-task-admission.js";
+import { readCanonicalExecutionContext } from "../runtime/execution-context/read-execution-context.js";
 
 type ResearchState = Parameters<typeof deepResearcherWeatherTestInternals.synthesizeAnswer>[0];
 
@@ -32,7 +33,7 @@ describe("deep researcher current-turn evidence", () => {
     ["serialized message", new HumanMessage("Current news request").toJSON()],
   ])("normalizes a %s before upload validation", async (_format, wireMessage) => {
     vi.spyOn(PgGraphTaskAdmission.prototype, "admit")
-      .mockImplementation(async (context) => context.taskId);
+      .mockImplementation(async (context) => ({ taskId: context.taskId, runId: context.runId }));
     const configurable = {
       thread_id: crypto.randomUUID(), run_id: crypto.randomUUID(), "x-request-id": crypto.randomUUID(),
       "x-bff-principal-id": "principal-1", "x-bff-principal-type": "service",
@@ -52,8 +53,17 @@ describe("deep researcher current-turn evidence", () => {
   });
 
   it("resets persisted state on a new prompt and retains its Task across native resume", async () => {
+    const runBindings = new Map<string, string>();
     const admit = vi.spyOn(PgGraphTaskAdmission.prototype, "admit")
-      .mockImplementation(async (context, resumedTaskId) => resumedTaskId ?? context.taskId);
+      .mockImplementation(async (context, resumedTaskId) => {
+        if (resumedTaskId) {
+          const runId = runBindings.get(resumedTaskId);
+          if (!runId) throw new Error("Missing durable test binding");
+          return { taskId: resumedTaskId, runId };
+        }
+        runBindings.set(context.taskId, context.runId);
+        return { taskId: context.taskId, runId: context.runId };
+      });
     const prompts: string[] = [];
     const model = llmGateway.createChatModel({ purpose: "research" });
     vi.spyOn(model, "invoke").mockImplementation(async (prompt) => {
@@ -81,13 +91,17 @@ describe("deep researcher current-turn evidence", () => {
       configurable, interruptBefore: ["synthesize_answer"],
     });
     const paused = await deepResearcherGraph.getState({ configurable });
+    const pausedContext = readCanonicalExecutionContext(paused.config);
     expect(paused.next).toEqual(["synthesize_answer"]);
     expect(paused.values.uploadError).toBeUndefined();
     expect(paused.values).toMatchObject({ imageObservations: [], extractedSources: [] });
     expect(paused.values.executionTaskId).not.toBe("old-task");
     const resumed = await deepResearcherGraph.invoke(null, { configurable: { ...configurable, run_id: crypto.randomUUID() } });
+    const resumedState = await deepResearcherGraph.getState({ configurable });
+    const resumedContext = readCanonicalExecutionContext(resumedState.config);
     expect(resumed.executionTaskId).toBe(paused.values.executionTaskId);
     expect(admit.mock.calls[1]?.[1]).toBe(paused.values.executionTaskId);
+    expect(resumedContext?.runId).toBe(pausedContext?.runId);
     expect(prompts).toHaveLength(2);
     expect(prompts.join("\n")).not.toContain("OLD_WEATHER_EVIDENCE");
     expect(resumed.messages.length).toBeGreaterThan(previous.messages.length);
