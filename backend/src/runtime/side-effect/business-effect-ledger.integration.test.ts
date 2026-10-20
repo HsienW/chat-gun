@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
+import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
+import { createExecutionContextFixture } from "@gun-ai/harness-testkit";
 
 import { createNoopSpanManager } from "../../platform/tracing/span-manager.js";
 import { runMigrations } from "../persistence/migration-runner.js";
@@ -17,6 +19,8 @@ import { createReplayKey, hashBusinessEffectKey } from "./identity.js";
 import { PgResultReferenceStore } from "./result-reference-store.js";
 import type { SideEffectToolDescriptor } from "./side-effect-descriptor.js";
 import { ToolExecutionRunner } from "./tool-execution-runner.js";
+import { instrumentLangGraphNode, type GraphNodeStepPort } from "../framework-adapters/langgraph-task-observer.js";
+import { readCanonicalExecutionContext } from "../execution-context/read-execution-context.js";
 
 const databaseUrl = process.env.SIDE_EFFECT_INTEGRATION_DATABASE_URL;
 const describePostgres = databaseUrl ? describe : describe.skip;
@@ -178,6 +182,41 @@ describePostgres("side-effect PostgreSQL integration", () => {
     await pool.query("DELETE FROM business_effects WHERE tenant_id = $1", [tenantId]);
     await pool.end();
   }, 30_000);
+
+  it.each(["committed", "ambiguous"] as const)("keeps %s effects singular across real native retries and product attempts", async (state) => {
+    const dispatches = { count: 0 };
+    const input = runnerInput(`native-retry-${state}`,
+      executor(state === "committed" ? { type: "succeeded", result: { operationId: `native-${suiteId}` } }
+        : { type: "ambiguous_after_dispatch", errorCode: "RESPONSE_LOST" }, dispatches), descriptor());
+    const runner = new ToolExecutionRunner(ledger, resultStore, { spanManager: createNoopSpanManager() });
+    const fixtureContext = createExecutionContextFixture();
+    const context = createExecutionContextFixture({ runId: input.identity.runId, stepId: input.identity.stepId,
+      principal: { ...fixtureContext.principal, principalId: input.scope.principalId, tenantId },
+      scope: { ...fixtureContext.scope, scopeId: input.scope.scopeId, tenantId } });
+    let attempt = 0;
+    const attempts: number[] = [];
+    const steps: GraphNodeStepPort = {
+      start: async () => ({ stepId: input.identity.stepId, attempt: ++attempt }), finish: async () => {},
+    };
+    const State = Annotation.Root({ outcome: Annotation<string>() });
+    const node = instrumentLangGraphNode(async (_state: typeof State.State, config) => {
+      const current = readCanonicalExecutionContext(config);
+      if (!current) throw new Error("Missing product context");
+      attempts.push(current.attempt);
+      const outcome = await runner.execute({ ...input, executionContext: current, signal: config.signal });
+      if (current.attempt === 1) throw new Error("Recorded native retry after effect outcome");
+      return { outcome: outcome.type };
+    }, { graphId: "ledger_retry_fixture", nodeName: "effect", nativeTaskId: () => `native-${state}`, port: steps });
+    const graph = new StateGraph(State).addNode("effect", node, {
+      retryPolicy: { maxAttempts: 2, initialInterval: 1, jitter: false, retryOn: () => true },
+    }).addEdge(START, "effect").addEdge("effect", END).compile();
+    const result = await graph.invoke({}, { configurable: { execution_context: context } });
+    expect(result.outcome).toBe(state === "committed" ? "succeeded" : "deferred");
+    expect(attempts).toEqual([1, 2]);
+    expect(dispatches.count).toBe(1);
+    const stored = await ledger.findExecutionByReplayKey(createReplayKey(input.identity));
+    expect(stored?.status).toBe(state === "committed" ? "committed" : "manual_intervention_required");
+  });
 
   it("allows only one of two concurrent workers to claim the same business effect", async () => {
     const sharedBusinessKey = "shared-concurrent-effect";

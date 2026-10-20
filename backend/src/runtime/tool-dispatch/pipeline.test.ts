@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { z } from "zod";
+import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 
 import type { CompensationRegistry } from "../compensation/compensation-registry.js";
 import type { SagaOrchestrator } from "../compensation/saga-orchestrator.js";
-import type { GovernedToolExecutor } from "../side-effect/governed-outcome.js";
+import type { GovernedToolExecutor, GovernedToolOutcome } from "../side-effect/governed-outcome.js";
 import type {
   ToolExecutionRunner,
   ToolExecutionRunResult,
@@ -16,6 +17,7 @@ import {
 } from "./pipeline.js";
 import { ToolSchedulingError } from "./scheduler.js";
 import type { ExecutionProfileEnforcerPort } from "./execution-profile.js";
+import type { StructuredToolResultEnvelope } from "./structured-tool-result.js";
 
 const executionContext = {
   requestId: "request-1",
@@ -151,6 +153,7 @@ function createDependencies(
   };
   return {
     registry,
+    pool: null,
     toolExecutionRunner: {
       execute: runnerExecute as ToolExecutionRunner["execute"],
     },
@@ -200,6 +203,52 @@ afterEach(() => {
 });
 
 describe("RuntimeToolDispatchPipeline", () => {
+  it.each(["success", "schema", "authorization", "egress", "sandbox", "timeout", "cancel", "ambiguous"] as const)("pairs Graph and non-Graph %s through one registry and dispatcher", async (scenario) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-20T00:00:00.000Z"));
+    async function run(graphMode: boolean) {
+      const descriptor = createDescriptor(scenario !== "ambiguous", { manifestVersion: "1.0.0" });
+      const runnerResult: ToolExecutionRunResult<unknown> = scenario === "timeout" ? { type: "failed", errorCode: "TOOL_TIMEOUT" }
+        : scenario === "cancel" ? { type: "cancelled", dispatchState: "after" }
+        : scenario === "ambiguous" ? { type: "deferred", errorCode: "SIDE_EFFECT_RECONCILIATION_REQUIRED" }
+        : { type: "succeeded", source: "live", result: "ok" };
+      const dependencies = createDependencies(createRegistry(descriptor), vi.fn(async () => runnerResult));
+      const source = createSourceExecutor();
+      if (scenario === "authorization") source.authorizeTyped = vi.fn<NonNullable<GovernedToolExecutor<unknown, string>["authorizeTyped"]>>(async () => ({ type: "denied_by_authorization", errorCode: "TOOL_POLICY_DENIED", decisionId: "decision-1" }));
+      const executionProfileEnforcer: ExecutionProfileEnforcerPort = {
+        enforce: vi.fn<ExecutionProfileEnforcerPort["enforce"]>(async ({ config }) => scenario === "egress" || scenario === "sandbox"
+          ? { type: "denied", errorCode: scenario === "egress" ? "EGRESS_DENIED" : "SANDBOX_RUNNER_UNAVAILABLE", terminationCause: "unsupported" }
+          : { type: "disabled", config }),
+      };
+      const pipeline = createRuntimeToolDispatchPipeline({ ...dependencies, executionProfileEnforcer });
+      const executor = pipeline.createExecutor(descriptor.toolName, source);
+      const input = scenario === "schema" ? { value: 1 } : { value: "x" };
+      let outcome: GovernedToolOutcome<StructuredToolResultEnvelope>;
+      if (graphMode) {
+        const State = Annotation.Root({ outcome: Annotation<GovernedToolOutcome<StructuredToolResultEnvelope>>() });
+        const graph = new StateGraph(State)
+          .addNode("tool", async (_state, config) => ({ outcome: await executor.executeTyped(input, config) }))
+          .addEdge(START, "tool").addEdge("tool", END).compile();
+        outcome = (await graph.invoke({}, runnableConfig)).outcome;
+      } else outcome = await executor.executeTyped(input, runnableConfig);
+      expect(source.executeTyped).not.toHaveBeenCalled();
+      return { outcome, runnerCalls: dependencies.runnerExecute.mock.calls.length,
+        started: dependencies.taskStepAdapter.start, registry: dependencies.registry.list().map(({ toolName }) => toolName) };
+    }
+    const direct = await run(false);
+    const graph = await run(true);
+    expect(graph.outcome).toEqual(direct.outcome);
+    expect(graph.runnerCalls).toBe(direct.runnerCalls);
+    expect(graph.registry).toEqual(direct.registry);
+    if (["schema", "authorization", "egress", "sandbox"].includes(scenario)) {
+      expect(graph.runnerCalls).toBe(0);
+      expect(graph.started).not.toHaveBeenCalled();
+    } else {
+      expect(graph.runnerCalls).toBe(1);
+      expect(graph.outcome).toMatchObject({ type: "succeeded", result: { manifestVersion: "1.0.0", correlation: { runId: "run-1", stepId: "step-1", toolCallId: "tool-call-1" } } });
+    }
+  });
+
   it("uses the shared profile enforcer for a direct pipeline executor", async () => {
     const descriptor = createDescriptor(true);
     const dependencies = createDependencies(createRegistry(descriptor));
