@@ -110,7 +110,7 @@ describe("tool authorization confirmation graph adapter", () => {
     expect(enforcer.enforce).toHaveBeenCalledOnce();
     expect(invoked).toHaveBeenCalledOnce();
   });
-  it("interrupts and resumes on the same thread before one physical dispatch", async () => {
+  it.each(["approved", "superseded", "expired", "resumed", "cancel_during_approval", "unauthorized", "approval_timeout"] as const)("gates %s approval before physical dispatch", async (mode) => {
     const invoked = vi.fn(async ({ path }: { path: string }) => `wrote:${path}`);
     const source = tool(invoked, {
       name: "write_file",
@@ -167,10 +167,11 @@ describe("tool authorization confirmation graph adapter", () => {
       async () => persistedManifest
     );
     const consumeManifest = vi.fn<InterruptManifestRepository["consume"]>(
-      async () =>
-        persistedManifest
-          ? { ...persistedManifest, status: "resumed" as const }
-          : null
+      async () => {
+        if (!persistedManifest || persistedManifest.status !== "waiting") return null;
+        persistedManifest = { ...persistedManifest, status: "resumed" };
+        return persistedManifest;
+      }
     );
     const transitionStatus = vi.fn<InterruptManifestRepository["transitionStatus"]>(
       async () => null
@@ -249,22 +250,50 @@ describe("tool authorization confirmation graph adapter", () => {
       })
     );
     expect(invoked).not.toHaveBeenCalled();
+    const waitingCheckpoint = await graph.getState(config);
+    expect(waitingCheckpoint.next).toEqual(["confirm"]);
+    const savedManifest = await findManifest("saved");
+    if (!savedManifest) throw new Error("Missing test manifest");
+    if (mode === "cancel_during_approval") {
+      consume.mockImplementationOnce(async () => {
+        persistedManifest = { ...savedManifest, status: "superseded" };
+        return { ok: true, status: "approved" };
+      });
+    } else if (mode === "unauthorized" || mode === "approval_timeout") {
+      consume.mockResolvedValueOnce({ ok: false, reasonCode: mode === "unauthorized" ? "CONFIRMATION_BINDING_MISMATCH" : "CONFIRMATION_TIMEOUT" });
+    } else if (mode !== "approved") {
+      persistedManifest = { ...savedManifest, status: mode };
+    }
 
-    const resumed = await graph.invoke(new Command({ resume: {
+    const pendingResume = graph.invoke(new Command({ resume: {
       type: "tool_authorization_confirmation",
       schemaVersion: "1.0",
       approvalId: payload.approvalId,
       decisionId: payload.decisionId,
       decision: "approve",
     } }), config);
+    if (mode === "unauthorized" || mode === "approval_timeout") {
+      const denied = await pendingResume;
+      expect(denied.activeToolCall).toBeNull();
+      expect(invoked).not.toHaveBeenCalled();
+      expect(consumeManifest).not.toHaveBeenCalled();
+      return;
+    }
+    if (mode !== "approved") {
+      await expect(pendingResume).rejects.toMatchObject({ code: "CHECKPOINT_PARKED" });
+      expect(invoked).not.toHaveBeenCalled();
+      if (mode !== "cancel_during_approval") expect(consume).not.toHaveBeenCalled();
+      return;
+    }
+    const resumed = await pendingResume;
     expect("__interrupt__" in resumed ? resumed.__interrupt__ : undefined).toBeUndefined();
     expect(upsertPending).toHaveBeenCalledOnce();
     expect(consume).toHaveBeenCalledOnce();
-    expect(consumeManifest).not.toHaveBeenCalled();
-    expect(transitionStatus).toHaveBeenCalledWith(
+    expect(consumeManifest).toHaveBeenCalledWith(
       expect.objectContaining({
-        expectedStatus: "waiting",
-        nextStatus: "resumed",
+        runId: executionContext.runId,
+        taskId: executionContext.taskId,
+        scopeId: executionContext.scope.scopeId,
       })
     );
     expect(invoked).toHaveBeenCalledOnce();

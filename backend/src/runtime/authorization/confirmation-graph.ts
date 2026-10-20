@@ -4,6 +4,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { interrupt } from "@langchain/langgraph";
 
 import { getGovernedToolExecutor } from "../../platform/tool-governance.js";
+import { FrameworkAdapterError } from "../framework-adapters/bounded-operation.js";
 import {
   readExecutionContext,
   withExecutionContext,
@@ -184,6 +185,7 @@ export function createToolAuthorizationGraphNodes(
     );
     if (
       !manifest ||
+      manifest.status !== "waiting" ||
       manifest.kind !== "confirmation" ||
       manifest.interruptId !== interruptId ||
       manifest.threadId !== descriptor.threadId ||
@@ -200,13 +202,14 @@ export function createToolAuthorizationGraphNodes(
         input.executionManifest
       ) !== "compatible"
     ) {
-      throw new Error("Confirmation interrupt manifest is unavailable or incompatible");
+      throw new FrameworkAdapterError("CHECKPOINT_PARKED");
     }
 
     const resume = parseConfirmationResume(
       interrupt(toConfirmationInterruptPayload(descriptor))
     );
     const context = readExecutionContext(undefined, config, "production");
+    if (config.signal?.aborted) throw new FrameworkAdapterError("ADAPTER_OPERATION_CANCELLED");
     const consumed = await input.confirmationStore.consume({
       descriptor,
       resume,
@@ -238,11 +241,14 @@ export function createToolAuthorizationGraphNodes(
         pendingAuthorization: null,
       };
     }
-    await input.interruptManifestRepository.transitionStatus({
+    if (config.signal?.aborted) throw new FrameworkAdapterError("ADAPTER_OPERATION_CANCELLED");
+    const resumedManifest = await input.interruptManifestRepository.consume({
       interruptId,
-      expectedStatus: "waiting",
-      nextStatus: "resumed",
+      runId: context.runId,
+      taskId: context.taskId,
+      scopeId: context.scope.scopeId,
     });
+    if (!resumedManifest) throw new FrameworkAdapterError("CHECKPOINT_PARKED");
     return { activeToolCall: call, pendingAuthorization: null };
   }
 
