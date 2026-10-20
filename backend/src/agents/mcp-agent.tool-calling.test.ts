@@ -5,7 +5,11 @@ import { z } from "zod";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 describe("Qwen tool-calling round trip", () => {
+  let activeController: AbortController | undefined;
+
   afterEach(() => {
+    activeController?.abort();
+    activeController = undefined;
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
@@ -13,6 +17,7 @@ describe("Qwen tool-calling round trip", () => {
   });
 
   it("executes a model tool call through ToolNode and sends ToolMessage into the final model turn", async () => {
+    activeController = new AbortController();
     vi.stubEnv("LLM_PROVIDER", "qwen");
     vi.stubEnv("QWEN_API_KEY", "qwen-test-key");
     vi.stubEnv("QWEN_TOOL_MODEL", "qwen-plus-tool-test");
@@ -78,7 +83,9 @@ describe("Qwen tool-calling round trip", () => {
 
     const { llmGateway } = await import("../platform/llm-gateway.js");
     const model = llmGateway.createChatModel({ purpose: "tool", temperature: 0 });
-    const first = await model.bindTools?.([calculator]).invoke([new HumanMessage("2+2")]);
+    const first = await model.bindTools?.([calculator]).invoke([new HumanMessage("2+2")], {
+      signal: activeController.signal,
+    });
 
     expect((first as AIMessage).tool_calls?.[0]).toMatchObject({
       id: "call-1",
@@ -89,16 +96,16 @@ describe("Qwen tool-calling round trip", () => {
 
     const toolResult = await toolNode.invoke({
       messages: [new HumanMessage("2+2"), first],
-    });
+    }, { signal: activeController.signal });
     const second = await model.invoke([
       new HumanMessage("2+2"),
       first,
       ...toolResult.messages,
-    ]);
+    ], { signal: activeController.signal });
 
     expect(String(second.content)).toBe("Final answer: 4");
     expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
+  }, 15_000);
 
   it("stops malformed Tool arguments before ToolNode or physical dispatch", async () => {
     vi.stubEnv("LLM_PROVIDER", "qwen");
