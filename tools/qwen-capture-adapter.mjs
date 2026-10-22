@@ -1,11 +1,37 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { constants as fsConstants } from "node:fs";
-import { access, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { constants as fsConstants, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { createHash, randomUUID } from "node:crypto";
+import { access, link, mkdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+
+// This repository tool uses the validator installed with the backend tooling.
+// Resolve from the adapter location, not the possibly temporary capture workspace.
+const requireBackend = createRequire(new URL("../backend/package.json", import.meta.url));
+const Ajv = requireBackend("ajv/dist/2020.js").default;
+const ajv = new Ajv({ strict: false, allErrors: true });
+requireBackend("ajv-formats")(ajv);
+const contractRoot = new URL("../openspec/changes/archive/2026-06-29-add-agent-artifact-shared-state-handoff/specs/", import.meta.url);
+const contractValidators = new Map();
+for (const name of ["current-state", "handoff", "agent-result"]) {
+  contractValidators.set(name, ajv.compile(JSON.parse(readFileSync(
+    new URL(`${name}-contract/${name}.schema.json`, contractRoot), "utf8",
+  ))));
+}
+
+function validateContract(name, value) {
+  const validate = contractValidators.get(name);
+  if (!validate(value)) {
+    // Schema locations are useful diagnostics; never echo input values.
+    const errors = validate.errors.map(error => `${error.instancePath || "/"}: ${error.message}`).join("; ");
+    throw new Error(`${name} schema validation failed: ${errors}`);
+  }
+}
 
 const DEFAULT_STAGE = "review-result";
 const EXPECTED_KIND = "review_result";
@@ -22,7 +48,6 @@ const VALID_CURRENT_STATE_PHASES = new Set([
   "IMPLEMENTING",
   "READY_FOR_REVIEW",
   "REVIEWING",
-  "REVIEW_RESULT",
   "CHANGES_REQUESTED",
   "NEEDS_COORDINATOR_ARBITRATION",
   "READY_FOR_READINESS_CHECK",
@@ -145,22 +170,370 @@ export function extractJsonObjectFromOutput(output) {
     throw new Error("Qwen stdout is empty; no review_result JSON found.");
   }
 
-  const fencedJson = output.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fencedJson) {
-    return parseJsonObject(fencedJson[1].trim());
-  }
+  const fenced = [...output.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
+  if (fenced.length > 1) throw new Error("Multiple JSON candidates.");
+  return parseJsonObject(fenced.length === 1 ? fenced[0][1].trim() : output.trim());
+}
 
-  const trimmed = output.trim();
+function emptyObservations() {
+  return { parentSessionId: null, model: null, provider: null, approvalMode: null, qwenCodeVersion: null,
+    effectiveTools: null, subagents: [], tools: [], unknownEventCount: 0,
+    notObserved: ["parentSessionId", "model", "provider", "approvalMode", "subagents"], conflicts: [] };
+}
+
+export const REVIEWER_AGENT_NAME = "secondary-architecture-reviewer";
+
+function toolResultText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.filter(block => block?.type === "text" && typeof block.text === "string")
+      .map(block => block.text).join("");
+  }
+  return null;
+}
+
+// Qwen 0.25.3 stream-json (verified against the installed CLI source):
+// - every message carries the parent session_id; subagent messages are distinguished only by
+//   parent_tool_use_id, which is the call id of the parent's `agent` tool_use;
+// - the only success `result` event belongs to the parent session;
+// - the reviewer's output reaches the parent as the tool_result of that `agent` call.
+// The reviewer's tool_result is therefore the authoritative review; parent copies must match it.
+// Event metadata, never message text, establishes provenance.
+export function parseCaptureOutput(output, format = "text") {
+  const observed = emptyObservations();
+  if (format === "text") return { reviewResult: extractJsonObjectFromOutput(output), observed, reviewSource: null };
+  if (!["json", "stream-json"].includes(format)) throw new Error("Unsupported output format.");
+  let events;
   try {
-    return parseJsonObject(trimmed);
-  } catch {
-    const objectText = findFirstJsonObjectText(trimmed);
-    if (!objectText) {
-      throw new Error("Qwen stdout does not contain a JSON object.");
+    const raw = stripByteOrderMark(output).trim();
+    if (!raw) throw new Error();
+    const value = format === "json" ? JSON.parse(raw) : null;
+    events = format === "json" ? (Array.isArray(value) ? value : [value])
+      : raw.split(/\r?\n/).filter(line => line.trim()).map(line => JSON.parse(line));
+  } catch { throw new Error("Malformed JSON capture."); }
+  const authoritative = [];
+  const copies = [];
+  const metadata = value => typeof value === "string" && value.length > 0 && value.length <= 256
+    && !containsSecret(value) ? value : null;
+  const observe = (key, value) => {
+    const safe = metadata(value);
+    if (safe === null) return;
+    if (observed[key] !== null && observed[key] !== safe) observed.conflicts.push(key);
+    else observed[key] = safe;
+  };
+  const toReview = value => {
+    if (value === undefined || value === null || value === "") return null;
+    try {
+      const review = typeof value === "string" ? extractJsonObjectFromOutput(value) : value;
+      return review?.kind === "review_result" ? review : null;
+    } catch { return null; }
+  };
+  const fail = message => {
+    const error = new Error(message);
+    error.observed = observed;
+    throw error;
+  };
+  const isParentEvent = event => event.session_id === observed.parentSessionId && !event.parent_tool_use_id;
+  const pendingResults = [];
+  // Qwen emits a single success result per run; more than one is never a valid capture.
+  let resultReviewEvents = 0;
+  for (const event of events) {
+    if (!isPlainObject(event)) throw new Error("Malformed event object.");
+    if (event.type === "system" && event.subtype === "init") {
+      if (!event.parent_tool_use_id) {
+        observe("parentSessionId", event.session_id);
+        observe("model", event.model);
+        observe("approvalMode", event.permission_mode);
+        observe("qwenCodeVersion", event.qwen_code_version);
+        if (Array.isArray(event.tools)) {
+          observed.effectiveTools = event.tools.map(metadata).filter(name => name !== null);
+        }
+      }
+    } else if (!["assistant", "user", "result", "stream_event", "tool_progress"].includes(event.type)) {
+      observed.unknownEventCount++;
     }
-
-    return parseJsonObject(objectText);
+    if (event.type === "result") {
+      if (event.is_error) observed.conflicts.push("result_error");
+      // Qwen emits structured_result and its serialized result in the same event.
+      if (event.structured_result !== undefined && event.result !== undefined) {
+        let copy;
+        try { copy = typeof event.result === "string" ? JSON.parse(event.result) : event.result; } catch { /* mismatch below */ }
+        if (JSON.stringify(copy) !== JSON.stringify(event.structured_result)) throw new Error("Conflicting result representations.");
+      }
+      const review = toReview(event.structured_result ?? event.result);
+      if (review) {
+        copies.push(review);
+        resultReviewEvents++;
+      }
+    }
+    if (event.type !== "assistant" && event.type !== "user") continue;
+    const blocks = event.message?.content;
+    if (!Array.isArray(blocks)) continue;
+    for (const block of blocks) {
+      if (block.type === "tool_use" && event.type === "assistant") {
+        const name = metadata(block.name);
+        const tool = { id: metadata(block.id), name, owner: null, status: "called",
+          sessionId: metadata(event.session_id), parentToolUseId: metadata(event.parent_tool_use_id) };
+        // The skill name is call metadata, not file content; it decides whether the load is read-only.
+        if (name?.toLowerCase() === "skill") tool.skillName = metadata(block.input?.skill);
+        observed.tools.push(tool);
+        if (name?.toLowerCase() === "agent" && isParentEvent(event)) {
+          observed.subagents.push({ name: metadata(block.input?.subagent_type), toolUseId: tool.id });
+        }
+        if (name === "structured_output") {
+          const review = toReview(block.input);
+          if (review) copies.push(review);
+        }
+      } else if (block.type === "tool_result") {
+        const tool = observed.tools.find(item => item.id !== null && item.id === block.tool_use_id);
+        if (tool) tool.status = block.is_error ? "failed" : "completed";
+        else observed.conflicts.push("unmatched_tool_result");
+        if (isParentEvent(event) && !block.is_error) pendingResults.push({ toolUseId: block.tool_use_id, content: block.content });
+      }
+    }
   }
+  const reviewerCalls = observed.subagents.filter(agent => agent.name === REVIEWER_AGENT_NAME && agent.toolUseId !== null);
+  for (const { toolUseId, content } of pendingResults) {
+    if (!reviewerCalls.some(agent => agent.toolUseId === toolUseId)) continue;
+    const review = toReview(toolResultText(content));
+    if (review) authoritative.push({ review, toolUseId });
+  }
+  const subagentIds = new Set(observed.subagents.map(agent => agent.toolUseId).filter(id => id !== null));
+  const reviewerIds = new Set(reviewerCalls.map(agent => agent.toolUseId));
+  for (const tool of observed.tools) {
+    tool.owner = tool.parentToolUseId !== null
+      ? (reviewerIds.has(tool.parentToolUseId) ? "subagent" : subagentIds.has(tool.parentToolUseId) ? "other_subagent" : null)
+      : tool.sessionId !== null && tool.sessionId === observed.parentSessionId ? "parent" : null;
+  }
+  observed.notObserved = ["parentSessionId", "model", "provider", "approvalMode", "qwenCodeVersion", "effectiveTools"]
+    .filter(key => observed[key] === null);
+  if (!observed.subagents.length) observed.notObserved.push("subagents");
+  for (const [index, agent] of observed.subagents.entries()) {
+    for (const key of ["name", "toolUseId"]) {
+      if (agent[key] === null) observed.notObserved.push(`subagents.${index}.${key}`);
+    }
+  }
+  if (resultReviewEvents > 1) fail(`Expected at most one result event with a review; found ${resultReviewEvents}.`);
+  if (authoritative.length > 1) fail(`Expected at most one reviewer tool_result review; found ${authoritative.length}.`);
+  if (authoritative.length === 1) {
+    const expected = JSON.stringify(authoritative[0].review);
+    if (copies.some(copy => JSON.stringify(copy) !== expected)) fail("Parent review copy does not match the reviewer tool_result.");
+    return { reviewResult: authoritative[0].review, observed,
+      reviewSource: { toolUseId: authoritative[0].toolUseId, owner: "subagent" } };
+  }
+  // Without a reviewer tool_result the parent copy is kept for inspection but can never pass the gate.
+  if (copies.length !== 1) fail(`Expected exactly one review_result candidate; found ${copies.length}.`);
+  return { reviewResult: copies[0], observed, reviewSource: { toolUseId: null, owner: null } };
+}
+
+const WRITE_TOOLS = new Set([
+  "write", "writefile", "write_file", "edit", "replace", "bash", "shell", "run_shell_command", "exec",
+  "notebookedit", "notebook_edit", "save_memory", "manage_memory", "todo_write", "exit_plan_mode",
+  "enter_worktree", "exit_worktree", "tool_call", "task_create", "task_update", "cron_create", "cron_delete",
+]);
+// Skills the reviewer contract (.qwen/agents/secondary-architecture-reviewer.md) requires it to load.
+// Qwen declares the skill tool read-only, but an unknown skill name falls back to running a slash
+// command, so only these names, confirmed by a successful tool_result, count as read-only.
+export const REVIEWER_SKILL_NAMES = Object.freeze(["openspec-workflow-router", "secondary-architecture-reviewer"]);
+
+function isReadOnlySkillLoad(tool) {
+  return tool.name?.toLowerCase() === "skill" && REVIEWER_SKILL_NAMES.includes(tool.skillName)
+    && tool.status === "completed";
+}
+
+// Controlled-launch provider evidence for Qwen 0.25.3. The adapter does not reproduce Qwen's runtime
+// provider resolution (ModelsConfig.syncAfterAuthRefresh is stateful); it requires the qwen argv to
+// pin --auth-type, --model and --openai-base-url to the expected values and checks every settings
+// file Qwen reads for something that could override them: a modelProviders entry for the model
+// (its baseUrl outranks the CLI value) or a conflicting security.auth.enforcedType. qwen-oauth
+// ignores the CLI base URL, so it cannot be pinned this way.
+const PROVIDER_ARG_ALIASES = Object.freeze({
+  authType: ["--auth-type", "--authType"],
+  model: ["--model", "-m"],
+  baseUrl: ["--openai-base-url", "--openaiBaseUrl"],
+});
+
+function readQwenArg(args, aliases) {
+  const values = [];
+  for (let index = 0; index < args.length; index++) {
+    for (const alias of aliases) {
+      if (args[index] === alias) values.push(args[index + 1]);
+      else if (args[index].startsWith(`${alias}=`)) values.push(args[index].slice(alias.length + 1));
+    }
+  }
+  return values;
+}
+
+// Mirrors Storage.getGlobalQwenDir, getSystemSettingsPath, getSystemDefaultsPath and
+// Storage#getWorkspaceSettingsPath in Qwen 0.25.3.
+export function qwenSettingsPaths({ workspaceRoot, env = process.env, platform = os.platform(), homedir = os.homedir() }) {
+  const system = env.QWEN_CODE_SYSTEM_SETTINGS_PATH || (platform === "darwin"
+    ? "/Library/Application Support/QwenCode/settings.json"
+    : platform === "win32" ? "C:\\ProgramData\\qwen-code\\settings.json" : "/etc/qwen-code/settings.json");
+  const systemDefaults = env.QWEN_CODE_SYSTEM_DEFAULTS_PATH || path.join(path.dirname(system), "system-defaults.json");
+  let globalDir;
+  if (env.QWEN_HOME) {
+    const expanded = env.QWEN_HOME.startsWith("~") ? path.join(homedir, env.QWEN_HOME.slice(1)) : env.QWEN_HOME;
+    globalDir = path.resolve(workspaceRoot, expanded);
+  } else {
+    globalDir = homedir ? path.join(homedir, ".qwen") : path.join(os.tmpdir(), ".qwen");
+  }
+  return [
+    ["system", system],
+    ["system-defaults", systemDefaults],
+    ["user", path.join(globalDir, "settings.json")],
+    ["workspace", path.join(workspaceRoot, ".qwen", "settings.json")],
+  ];
+}
+
+// Qwen parses settings with strip-json-comments; strings are copied verbatim so `//` inside a URL survives.
+function parseJsonWithComments(text) {
+  let output = "";
+  let inString = false;
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (inString) {
+      output += char;
+      if (char === "\\") { output += next ?? ""; index++; }
+      else if (char === "\"") inString = false;
+    } else if (char === "\"") {
+      inString = true;
+      output += char;
+    } else if (char === "/" && next === "/") {
+      while (index < text.length && text[index] !== "\n") index++;
+      output += "\n";
+    } else if (char === "/" && next === "*") {
+      const end = text.indexOf("*/", index + 2);
+      if (end === -1) throw new Error("Unterminated comment.");
+      index = end + 1;
+    } else {
+      output += char;
+    }
+  }
+  return JSON.parse(stripByteOrderMark(output));
+}
+
+export async function verifyProviderLaunch({ commandArgs = [], expected = null, workspaceRoot, env, platform, homedir }) {
+  const conflicts = [];
+  const evidence = { basis: "controlled-launch", wireObserved: false, authType: null, model: null, baseUrlHost: null,
+    settingsFiles: [], conflicts, verified: false };
+  if (!expected) {
+    conflicts.push("expected_provider_not_supplied");
+    return evidence;
+  }
+  const safe = value => typeof value === "string" && value.length > 0 && value.length <= 256 && !containsSecret(value) ? value : null;
+  evidence.authType = safe(expected.authType);
+  evidence.model = safe(expected.model);
+  try { evidence.baseUrlHost = safe(new URL(expected.baseUrl).hostname); } catch { /* reported below */ }
+  if (!evidence.authType) conflicts.push("expected_auth_type_invalid");
+  else if (evidence.authType === "qwen-oauth") conflicts.push("auth_type_not_cli_controllable");
+  if (!evidence.model) conflicts.push("expected_model_invalid");
+  if (!evidence.baseUrlHost) conflicts.push("expected_base_url_invalid");
+  for (const [key, aliases] of Object.entries(PROVIDER_ARG_ALIASES)) {
+    const values = readQwenArg(commandArgs, aliases);
+    if (values.length !== 1 || values[0] !== expected[key]) conflicts.push(`argv_${key}_not_pinned`);
+  }
+  for (const [scope, file] of qwenSettingsPaths({ workspaceRoot, env, platform, homedir })) {
+    const entry = { scope, present: false, parsed: null };
+    evidence.settingsFiles.push(entry);
+    let settings;
+    try {
+      settings = parseJsonWithComments(await readFile(file, "utf8"));
+      entry.present = true;
+      entry.parsed = true;
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      entry.present = true;
+      entry.parsed = false;
+      conflicts.push(`${scope}_settings_unverifiable`);
+      continue;
+    }
+    const enforced = settings?.security?.auth?.enforcedType;
+    if (enforced !== undefined && enforced !== expected.authType) conflicts.push(`${scope}_enforced_type_conflict`);
+    const providers = settings?.modelProviders;
+    if (providers === undefined || providers === null) continue;
+    if (!isPlainObject(providers)) {
+      conflicts.push(`${scope}_model_providers_unrecognized`);
+      continue;
+    }
+    // Any provider protocol counts. A matching entry wins over the CLI base URL, so it is accepted only
+    // when its baseUrl is literally the pinned one; ids that cannot be compared literally are rejected.
+    const overrides = Object.values(providers).filter(Array.isArray).flat()
+      .some(item => typeof item?.id !== "string" || item.id.includes("$")
+        || (item.id === expected.model && item.baseUrl !== expected.baseUrl));
+    if (overrides) conflicts.push(`${scope}_model_provider_override`);
+  }
+  evidence.verified = conflicts.length === 0;
+  return evidence;
+}
+
+function assessEvidence(observed, reviewSource, format) {
+  const reasons = [];
+  if (format === "text") reasons.push("text_has_no_isolation_evidence");
+  if (observed.approvalMode !== "plan") reasons.push("parent_not_plan");
+  if (!observed.parentSessionId) reasons.push("parent_session_not_observed");
+  if (!observed.model) reasons.push("model_not_observed");
+  if (observed.subagents.length !== 1 || observed.subagents[0]?.name !== REVIEWER_AGENT_NAME
+      || reviewSource?.owner !== "subagent") reasons.push("reviewer_provenance_not_observed");
+  if (observed.tools.some(tool => WRITE_TOOLS.has(tool.name?.toLowerCase()))) reasons.push("write_or_shell_tool_called");
+  if (observed.tools.some(tool => tool.owner === null || tool.name === null)) reasons.push("tool_provenance_not_observed");
+  // An unfamiliar tool might wrap writes or shell execution. Do not certify it as read-only.
+  const readOnlyTools = new Set(["read_file", "readfile", "read", "grep_search", "grep", "glob", "list_directory",
+    "listfiles", "ls", "agent", "structured_output", "web_search", "websearch", "read_mcp_resource"]);
+  if (observed.tools.some(tool => !readOnlyTools.has(tool.name?.toLowerCase()) && !isReadOnlySkillLoad(tool))) {
+    reasons.push("tool_readonly_not_proven");
+  }
+  if (observed.conflicts.length) reasons.push("conflicting_event_metadata");
+  return { passed: reasons.length === 0, reasons };
+}
+
+function containsSecret(text) {
+  return /(?:\bsk-[a-zA-Z0-9_-]{12,}|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|-----BEGIN (?:[A-Z ]*PRIVATE KEY)-----|\bBearer\s+[a-zA-Z0-9._~+/-]{8,}|\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+|["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|client[_-]?secret|authorization|cookie)["']?\s*[:=]\s*["']?[^\s"',;}]{4,})/i.test(text ?? "");
+}
+
+function redactArgv(argv) {
+  let redactNext = false;
+  let hostOnlyNext = false;
+  // Base URLs may embed credentials or tenant paths; only the hostname is kept.
+  const hostOnly = value => {
+    try { return `[host:${new URL(value).hostname}]`; } catch { return "[REDACTED]"; }
+  };
+  return argv.map(arg => {
+    if (redactNext) { redactNext = false; return "[REDACTED]"; }
+    if (hostOnlyNext) { hostOnlyNext = false; return hostOnly(arg); }
+    const baseUrlFlag = PROVIDER_ARG_ALIASES.baseUrl.find(alias => arg === alias || arg.startsWith(`${alias}=`));
+    if (baseUrlFlag) {
+      if (arg === baseUrlFlag) { hostOnlyNext = true; return arg; }
+      return `${baseUrlFlag}=${hostOnly(arg.slice(baseUrlFlag.length + 1))}`;
+    }
+    if (/^--?[^=]*(?:key|token|secret|password|header)/i.test(arg)) {
+      if (arg.includes("=")) return `${arg.split("=", 1)[0]}=[REDACTED]`;
+      redactNext = true;
+      return arg;
+    }
+    return containsSecret(arg) ? "[REDACTED]" : arg;
+  });
+}
+
+function sha256(value) { return createHash("sha256").update(value).digest("hex"); }
+function serialize(value) { return typeof value === "string" ? value : `${JSON.stringify(value, null, 2)}\n`; }
+function getOutputFormat(args) {
+  let format = "text";
+  for (let i = 0; i < args.length; i++) {
+    if (["-o", "--output-format"].includes(args[i])) format = args[i + 1];
+    else if (args[i].startsWith("--output-format=")) format = args[i].slice(16);
+  }
+  return format;
+}
+function versionArgs(args) {
+  // Support `node /path/to/qwen/cli-entry.js ...` on Windows without invoking a shell.
+  return args[0]?.endsWith("cli-entry.js") || args[0]?.endsWith("cli.js") ? [args[0], "--version"] : ["--version"];
+}
+async function assertAbsent(target) {
+  try { await access(target); }
+  catch (error) { if (error.code === "ENOENT") return; throw error; }
+  throw new Error("Capture target already exists; refusing overwrite.");
 }
 
 export function validateReviewResult(
@@ -214,6 +587,7 @@ export function validateReviewResult(
 
   validateVerification(value.verification);
   validateReviewPayload(value.payload);
+  validateContract("agent-result", value);
 
   return value;
 }
@@ -222,70 +596,172 @@ export async function captureQwenReviewResult({
   workspaceRoot = process.cwd(),
   changeId,
   runId,
+  artifactId,
   stage = DEFAULT_STAGE,
   command,
   commandArgs = [],
   processResult,
+  outputFormat,
+  qwenVersion = null,
+  fromFile = null,
+  expectedProvider = null,
+  settingsEnvironment = {},
   now = () => new Date(),
 }) {
   validatePathSegment("changeId", changeId);
+  if (typeof artifactId !== "string" || !/^[a-z0-9-]+$/.test(artifactId)) {
+    throw new Error("artifactId is required and must contain only [a-z0-9-].");
+  }
   requireNonEmptyString("runId", runId);
   requireNonEmptyString("stage", stage);
+  if (stage !== "review-plan" && stage !== "review-result") throw new Error(`Unsupported review stage: ${stage}`);
 
   const root = path.resolve(workspaceRoot);
   const runtimeDir = path.join(root, ".agent-runtime", changeId);
   const artifactsDir = path.join(runtimeDir, "artifacts");
   const currentStatePath = path.join(runtimeDir, "current-state.json");
-  const artifactPath = path.join(artifactsDir, "review-result.json");
-  const artifactTempPath = `${artifactPath}.${process.pid}.${Date.now()}.tmp`;
-  const currentStateTempPath = `${currentStatePath}.${process.pid}.${Date.now()}.tmp`;
+  const artifactPath = path.join(artifactsDir, `${artifactId}.json`);
+  const capturePath = path.join(artifactsDir, `${artifactId}.capture.json`);
+  const stdoutPath = path.join(artifactsDir, `${artifactId}.stdout.ndjson`);
+  const stderrPath = path.join(artifactsDir, `${artifactId}.stderr.log`);
 
   ensureInside(root, runtimeDir);
   ensureInside(root, artifactsDir);
   ensureInside(root, currentStatePath);
   ensureInside(root, artifactPath);
 
-  const result = processResult ?? (await runCommand(command, commandArgs, { cwd: root }));
-
-  if (result.exitCode !== 0) {
-    const stderr = result.stderr.trim();
-    throw new Error(
-      `Qwen CLI exited with code ${result.exitCode}${stderr ? `: ${stderr}` : ""}`,
-    );
-  }
-
-  const parsed = extractJsonObjectFromOutput(result.stdout);
-  const reviewResult = validateReviewResult(parsed, {
-    expectedChangeId: changeId,
-    expectedRunId: runId,
-    expectedStage: stage,
-    expectedKind: EXPECTED_KIND,
-  });
-
   const currentState = await readCurrentState(currentStatePath, { expectedChangeId: changeId, expectedRunId: runId });
+  const reviewPhases = stage === "review-plan" ? ["PLAN_REVIEW"] : ["READY_FOR_REVIEW", "REVIEWING"];
+  if (currentState.currentOwner !== "Qwen" || !reviewPhases.includes(currentState.currentPhase)) {
+    throw new Error("CurrentState review owner/phase does not authorize capture.");
+  }
+  if (Object.values(currentState.latestArtifactRefs).some(ref => ref.artifactId === artifactId)) {
+    throw new Error("artifactId already exists in CurrentState.");
+  }
+  await mkdir(artifactsDir, { recursive: true });
+  ensureInside(await realpath(root), await realpath(artifactsDir));
+  for (const target of [artifactPath, capturePath, stdoutPath, stderrPath]) await assertAbsent(target);
+  const originalState = await readFile(currentStatePath, "utf8");
+  const startedAt = now().toISOString();
+  // Version lookup never uses review arguments, credentials or shell interpolation.
+  if (!processResult && !fromFile && qwenVersion === null) {
+    const version = await runCommand(command, versionArgs(commandArgs), { cwd: root });
+    if (version.exitCode === 0 && /^\d+\.\d+\.\d+[\w.+-]*$/.test(version.stdout.trim())) qwenVersion = version.stdout.trim();
+  }
+  const result = processResult ?? (fromFile
+    ? { exitCode: 0, stdout: await readFile(fromFile, "utf8"), stderr: "", signal: null }
+    : await runCommand(command, commandArgs, { cwd: root }));
+  const format = outputFormat ?? getOutputFormat(commandArgs);
+  let parsed;
+  let partialObserved;
+  let captureError = result.exitCode !== 0 ? "process_nonzero_exit" : null;
+  try { parsed = parseCaptureOutput(result.stdout, format); }
+  catch (error) { partialObserved = error.observed; captureError ??= "output_extraction_failed"; }
+  const observed = parsed?.observed ?? partialObserved ?? emptyObservations();
+  const suppressed = { stdout: containsSecret(result.stdout), stderr: containsSecret(result.stderr) };
+  observed.provider = await verifyProviderLaunch({ commandArgs: fromFile ? [] : commandArgs,
+    expected: expectedProvider, workspaceRoot: root, ...settingsEnvironment });
+  if (observed.provider.verified) observed.notObserved = observed.notObserved.filter(key => key !== "provider");
+  const evidenceGate = assessEvidence(observed, parsed?.reviewSource, format);
+  if (!observed.provider.verified) evidenceGate.reasons.push("provider_not_verified");
+  else if (observed.model !== observed.provider.model) evidenceGate.reasons.push("model_differs_from_pinned_launch");
+  if (suppressed.stdout || suppressed.stderr) evidenceGate.reasons.push("raw_output_contains_secret");
+  if (captureError) evidenceGate.reasons.push(captureError);
+  evidenceGate.passed = evidenceGate.reasons.length === 0;
+  const reference = (id, target, kind = "evidence") => ({
+    artifactId: id, changeId, runId, kind, relativePath: toPosixPath(path.relative(root, target)),
+  });
+  const evidence = {
+    schemaVersion: "1.0.0", artifactId: `${artifactId}-capture`, changeId, runId, kind: "evidence",
+    argv: redactArgv([command ?? (fromFile ? "from-file" : "injected-process"), ...commandArgs]),
+    cwd: ".", qwenVersion: typeof qwenVersion === "string" && /^\d+\.\d+\.\d+[\w.+-]*$/.test(qwenVersion) ? qwenVersion : null,
+    startedAt, endedAt: now().toISOString(),
+    exitCode: result.exitCode, signal: result.signal ?? null, outputFormat: format,
+    source: fromFile ? "from-file" : processResult ? "injected-process" : "child-process",
+    hashes: { stdout: sha256(result.stdout), stderr: sha256(result.stderr), savedResult: null },
+    redactedForSecret: suppressed, observed, evidenceGate, error: captureError,
+  };
+  const evidenceEntries = () => [
+    ...(!suppressed.stdout ? [[stdoutPath, result.stdout]] : []),
+    ...(!suppressed.stderr ? [[stderrPath, result.stderr]] : []),
+    [capturePath, evidence],
+  ];
+  if (captureError) {
+    await writeCapture(evidenceEntries());
+    throw new Error(`Capture failed: ${captureError}; evidence saved.`);
+  }
+  let reviewResult;
+  try {
+    reviewResult = validateReviewResult(parsed.reviewResult, {
+      expectedChangeId: changeId, expectedRunId: runId, expectedStage: stage, expectedKind: EXPECTED_KIND,
+    });
+    if (reviewResult.artifactId !== artifactId) throw new Error("review_result artifactId does not match requested artifactId.");
+  } catch {
+    evidence.error = "review_result_schema_or_artifactId_invalid";
+    evidence.evidenceGate = { passed: false, reasons: [...evidenceGate.reasons, evidence.error] };
+    await writeCapture(evidenceEntries());
+    throw new Error("Capture failed: review_result schema or artifactId invalid; evidence saved.");
+  }
+  if (containsSecret(JSON.stringify(reviewResult))) {
+    evidence.error = "review_result_contains_secret";
+    evidence.evidenceGate = { passed: false, reasons: [...evidenceGate.reasons, evidence.error] };
+    await writeCapture(evidenceEntries());
+    throw new Error("Capture failed: review_result contains secret; only safe evidence saved.");
+  }
   const updatedState = applyVerdictTransition(currentState, reviewResult, {
     changeId,
     runId,
     relativePath: toPosixPath(path.relative(root, artifactPath)),
     now,
+    effectiveVerdict: evidenceGate.passed ? reviewResult.payload.verdict : "INCOMPLETE",
   });
+  const handoff = buildHandoff(currentState, updatedState, reviewResult);
+  if (!evidenceGate.passed) handoff.reason = "Review evidence gate failed; CCR must recheck the review environment.";
+  const handoffPath = path.join(artifactsDir, `${handoff.handoffId}.json`);
+  await assertAbsent(handoffPath);
+  updatedState.latestArtifactRefs.reviewCapture = reference(evidence.artifactId, capturePath);
+  if (!suppressed.stdout) updatedState.latestArtifactRefs.reviewRawStdout = reference(`${artifactId}-stdout`, stdoutPath);
+  else delete updatedState.latestArtifactRefs.reviewRawStdout;
+  if (!suppressed.stderr) updatedState.latestArtifactRefs.reviewRawStderr = reference(`${artifactId}-stderr`, stderrPath);
+  else delete updatedState.latestArtifactRefs.reviewRawStderr;
+  updatedState.latestArtifactRefs.handoff = {
+    artifactId: handoff.handoffId, changeId, runId, kind: "handoff",
+    relativePath: toPosixPath(path.relative(root, handoffPath)),
+  };
+  validateContract("handoff", handoff);
+  validateCanonicalCurrentState(updatedState, { expectedChangeId: changeId, expectedRunId: runId });
+  for (const ref of handoff.requiredInputRefs) {
+    validateArtifactPath(ref, changeId);
+    const inputPath = path.resolve(root, ref.relativePath);
+    ensureInside(root, inputPath);
+    if (ref.artifactId === reviewResult.artifactId && inputPath === artifactPath) continue;
+    await access(inputPath, fsConstants.R_OK);
+    ensureInside(await realpath(root), await realpath(inputPath));
+  }
 
-  await mkdir(artifactsDir, { recursive: true });
-  await writeJsonAtomic(artifactPath, artifactTempPath, reviewResult);
-  await writeJsonAtomic(currentStatePath, currentStateTempPath, updatedState);
+  evidence.hashes.savedResult = sha256(serialize(reviewResult));
+  if (await readFile(currentStatePath, "utf8") !== originalState) throw new Error("CurrentState changed during capture.");
+  // Publish the state last, after all referenced documents have been staged.
+  await writeCapture([
+    ...evidenceEntries(), [artifactPath, reviewResult], [handoffPath, handoff], [currentStatePath, updatedState, originalState],
+  ]);
 
   return {
     artifactPath,
     currentStatePath,
+    handoffPath,
+    capturePath,
     artifactReference: updatedState.latestArtifactRefs.reviewResult,
   };
 }
 
-function applyVerdictTransition(currentState, reviewResult, { changeId, runId, relativePath, now }) {
-  const verdict = reviewResult.payload.verdict;
+function applyVerdictTransition(currentState, reviewResult, { changeId, runId, relativePath, now, effectiveVerdict }) {
+  const verdict = effectiveVerdict ?? reviewResult.payload.verdict;
   const stage = reviewResult.stage;
   const transition = resolveTransition(verdict, stage);
-  const stageHandoff = buildStageHandoff(verdict, stage);
+  const stageHandoff = buildStageHandoff(verdict, stage) ?? {
+    stage: "readiness-check", from: "Qwen", to: "CCR", status: transition.handoffStatus,
+  };
 
   return {
     ...currentState,
@@ -302,19 +778,10 @@ function applyVerdictTransition(currentState, reviewResult, { changeId, runId, r
         relativePath,
       },
     },
-    latestHandoff: stageHandoff
-      ? {
-          handoffId: `handoff-${changeId}-${stageHandoff.from.toLowerCase()}-to-${stageHandoff.to.toLowerCase()}-${stageHandoff.stage}-${Date.now()}`,
-          stage: stageHandoff.stage,
-          from: stageHandoff.from,
-          to: stageHandoff.to,
-          reason: `Qwen ${stage} verdict=${verdict}; ${verdict === "REQUEST_CHANGES" ? "退回修訂" : "推進下一阶段"}`,
-          status: stageHandoff.status,
-        }
-      : {
-          ...currentState.latestHandoff,
-          status: transition.handoffStatus,
-        },
+    latestHandoff: {
+      handoffId: `handoff-${changeId}-${randomUUID()}`,
+      ...stageHandoff,
+    },
     gateStatus: {
       ...currentState.gateStatus,
       reviewPassed: transition.reviewPassed,
@@ -323,6 +790,38 @@ function applyVerdictTransition(currentState, reviewResult, { changeId, runId, r
     nextActions: buildNextActions(verdict, reviewResult),
     updatedAt: now().toISOString(),
   };
+}
+
+function buildHandoff(currentState, updatedState, reviewResult) {
+  const identity = updatedState.latestHandoff;
+  const reviewRef = updatedState.latestArtifactRefs.reviewResult;
+  const requiredInputRefs = [reviewRef];
+  for (const ref of reviewResult.inputRefs) {
+    if (!requiredInputRefs.some(input => input.artifactId === ref.artifactId)) requiredInputRefs.push(ref);
+  }
+  const implementation = identity.to === "Codex";
+  return {
+    schemaVersion: "1.0.0", ...identity,
+    changeId: currentState.changeId, runId: currentState.runId,
+    reason: `Qwen ${reviewResult.stage}: ${reviewResult.payload.verdict}. Follow CurrentState owner and gates before execution.`,
+    requiredInputRefs,
+    expectedOutputKind: implementation ? "implementation_result" : "coordinator_result",
+    onSuccess: {
+      nextStage: implementation ? "READY_FOR_REVIEW" : "NEEDS_COORDINATOR_ARBITRATION",
+      nextOwner: implementation ? "Qwen" : "CCR",
+    },
+    onFailure: { nextStage: "NEEDS_COORDINATOR_ARBITRATION", nextOwner: "CCR" },
+    requiresHumanApproval: false,
+    createdAt: updatedState.updatedAt,
+  };
+}
+
+function validateArtifactPath(ref, changeId) {
+  if (ref.changeId !== changeId || ref.relativePath.includes("..") || ref.relativePath.includes("\\")
+      || !(ref.relativePath.startsWith(`openspec/changes/${changeId}/`) || ref.relativePath.startsWith(`.agent-runtime/${changeId}/`))
+      || path.isAbsolute(ref.relativePath)) {
+    throw new Error("Invalid handoff input reference.");
+  }
 }
 
 function buildBlockerEntries(reviewResult, changeId, runId, existingBlockers) {
@@ -346,7 +845,8 @@ function buildBlockerEntries(reviewResult, changeId, runId, existingBlockers) {
 
   for (const finding of reviewResult.payload.findings.major) {
     entries.push({
-      severity: "Major",
+      // CurrentState records blocking work; the original review retains Major.
+      severity: "Blocker",
       description: finding.description ?? finding.summary ?? JSON.stringify(finding),
       source: `${reviewResult.artifactId}:major:${finding.id ?? finding.title ?? ""}`,
       status: "unresolved",
@@ -435,6 +935,8 @@ function validateCanonicalCurrentState(currentState, { expectedChangeId, expecte
     throw new Error("current-state.json attempt must be a positive integer.");
   }
 
+  validateContract("current-state", currentState);
+
   return currentState;
 }
 
@@ -455,17 +957,44 @@ async function readCurrentState(currentStatePath, { expectedChangeId, expectedRu
   return validateCanonicalCurrentState(currentState, { expectedChangeId, expectedRunId });
 }
 
-async function writeJsonAtomic(finalPath, tempPath, value) {
-  await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf8",
-    flag: "wx",
-  });
-
+async function writeCapture(entries) {
+  const pending = [];
+  const published = [];
   try {
-    await rename(tempPath, finalPath);
+    for (const [finalPath, value, previous] of entries) {
+      if (previous === undefined) await assertAbsent(finalPath);
+      pending.push({ finalPath, value, previous, tempPath: `${finalPath}.${randomUUID()}.tmp` });
+    }
+    for (const item of pending) {
+      await writeFile(item.tempPath, serialize(item.value), { encoding: "utf8", flag: "wx", mode: 0o600 });
+    }
+    for (const item of pending) {
+      if (item.previous === undefined) {
+        // Hard-link publication is exclusive: rename would replace an existing artifact.
+        await link(item.tempPath, item.finalPath);
+      } else {
+        if (await readFile(item.finalPath, "utf8") !== item.previous) throw new Error("CurrentState changed during publication.");
+        await rename(item.tempPath, item.finalPath);
+      }
+      published.push(item);
+    }
   } catch (error) {
-    await unlink(tempPath).catch(() => {});
+    const failures = [error];
+    for (const item of published.reverse()) {
+      try {
+        if (item.previous === undefined) await unlink(item.finalPath);
+        else {
+          await writeFile(item.tempPath, item.previous, { flag: "wx" });
+          await rename(item.tempPath, item.finalPath);
+        }
+      } catch (rollbackError) { failures.push(rollbackError); }
+    }
+    if (failures.length > 1) throw new AggregateError(failures, "Capture failed and rollback was incomplete.");
     throw error;
+  } finally {
+    for (const item of pending) {
+      await unlink(item.tempPath).catch(error => { if (error.code !== "ENOENT") throw error; });
+    }
   }
 }
 
@@ -491,12 +1020,13 @@ function runCommand(command, commandArgs, { cwd }) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
-    child.on("error", reject);
-    child.on("close", (exitCode) => {
+    child.on("error", () => resolve({ exitCode: 1, stdout, stderr, signal: null }));
+    child.on("close", (exitCode, signal) => {
       resolve({
         exitCode: exitCode ?? 1,
         stdout,
         stderr,
+        signal,
       });
     });
   });
@@ -683,11 +1213,21 @@ function parseArgs(argv) {
     } else if (arg === "--run-id") {
       parsed.runId = value;
       index += 1;
+    } else if (arg === "--artifact-id") {
+      parsed.artifactId = value;
+      index += 1;
+    } else if (arg === "--output-format") {
+      parsed.outputFormat = value;
+      index += 1;
     } else if (arg === "--stage") {
       parsed.stage = value;
       index += 1;
     } else if (arg === "--from-file") {
       parsed.fromFile = value;
+      index += 1;
+    } else if (["--expected-auth-type", "--expected-model", "--expected-base-url"].includes(arg)) {
+      const key = { "--expected-auth-type": "authType", "--expected-model": "model", "--expected-base-url": "baseUrl" }[arg];
+      parsed.expectedProvider = { ...parsed.expectedProvider, [key]: value };
       index += 1;
     } else if (arg === "--help" || arg === "-h") {
       parsed.help = true;
@@ -702,15 +1242,20 @@ function parseArgs(argv) {
 function usage() {
   return [
     "Usage:",
-    "  node tools/qwen-capture-adapter.mjs --change-id <change-id> --run-id <run-id> [--stage review-result] -- qwen <args...>",
-    "  node tools/qwen-capture-adapter.mjs --change-id <change-id> --run-id <run-id> [--stage review-plan] --from-file <path-to-review-result.json>",
+    "  node tools/qwen-capture-adapter.mjs --change-id <change-id> --run-id <run-id> --artifact-id <fresh-id> [--stage review-result] -- qwen <args...>",
+    "  node tools/qwen-capture-adapter.mjs --change-id <change-id> --run-id <run-id> --artifact-id <fresh-id> [--stage review-plan] [--output-format stream-json] --from-file <capture-path>",
     "",
     "The adapter captures stdout from the command (or reads --from-file), extracts a review_result",
     "JSON object, validates changeId/runId/stage/kind/producer, then atomically writes:",
-    "  .agent-runtime/<change-id>/artifacts/review-result.json",
+    "  .agent-runtime/<change-id>/artifacts/<artifactId>.json (exclusive creation)",
+    "  <artifactId>.capture.json, <artifactId>.stdout.ndjson, <artifactId>.stderr.log",
+    "Text/from-file captures never prove a live isolation probe; missing evidence routes INCOMPLETE.",
     "",
     "Options:",
     "  --from-file <path>  Read review_result from an existing JSON file instead of spawning a command.",
+    "  --expected-auth-type <type> --expected-model <id> --expected-base-url <url>",
+    "                      Provider the qwen argv must pin with --auth-type, --model and --openai-base-url.",
+    "                      Without them, or when a settings file could override them, the evidence gate fails.",
   ].join("\n");
 }
 
@@ -719,7 +1264,7 @@ async function assertCurrentStateExists(workspaceRoot, changeId) {
   await access(currentStatePath, fsConstants.R_OK);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const args = parseArgs(process.argv.slice(2));
 
@@ -733,13 +1278,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     validatePathSegment("changeId", args.changeId);
     await assertCurrentStateExists(args.workspaceRoot, args.changeId);
 
-    if (args.fromFile) {
-      const fileContent = await readFile(args.fromFile, "utf8");
-      const parsed = extractJsonObjectFromOutput(fileContent);
-      args.processResult = { exitCode: 0, stdout: JSON.stringify(parsed), stderr: "" };
-      args.command = "node";
-      args.commandArgs = ["-e", ""];
-    } else {
+    if (!args.fromFile) {
       requireNonEmptyString("command", args.command);
     }
 
@@ -750,6 +1289,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
           ok: true,
           artifactPath: result.artifactPath,
           artifactReference: result.artifactReference,
+          handoffPath: result.handoffPath,
         },
         null,
         2,

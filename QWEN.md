@@ -78,6 +78,7 @@ Qwen 每次考慮 Write、Edit、Shell、MCP 或其他具副作用操作前，MU
 6. 對應 Change 的 Proposal、Specs、Design、Tasks。
 7. 受影響程式、測試、Schema 與文件。
 8. 由 Coordinator 或 Primary Implementer 提供的真實 Git Diff 與已執行驗證結果。
+9. 若 Handoff 為 `rolePolicyVersion: "2"`，本次實作者（implementation_result 的 producer）與 `actingRole`；Reviewer 不得因實作者是 CCR 或 Codex 而調整審查標準。
 
 Reviewer 的工具白名單不包含 Shell，因此不得自行執行 Git、Lint、Test 或 Build。完整審查至少需要收到下列唯讀證據：
 ```text

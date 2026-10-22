@@ -48,3 +48,4 @@ Use this prompt when an approved OpenSpec change should be implemented by Codex.
 - **Output**：`artifacts/implementation-result.json`、`artifacts/handoff.json`、`evidence/changed-files.txt`、`git-diff.patch`、`git-diff-stat.txt`、`git-diff-check.txt`、`validation-summary.json`；適用時另存 lint/test/build 輸出。
 - **State Transition**：開始時 `READY_FOR_IMPLEMENTATION` → `IMPLEMENTING`；成功時 → `READY_FOR_REVIEW` 且 owner → Qwen；根本規格問題時回到 `PLAN_DRAFT`／CCR。
 - **Validation**：Evidence 只記錄實際命令；未執行項目列入 `notExecuted`。更新 CurrentState 前驗證 Result、Handoff 與所有 References。
+- **承接者**：預設為 Codex；`rolePolicyVersion: "2"` 下可能是持有 Master 授權的 CCR（implementation_secondary），契約相同，producer 記為實際執行者。

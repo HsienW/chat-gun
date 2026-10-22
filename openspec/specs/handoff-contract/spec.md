@@ -145,3 +145,16 @@ WHEN 檢查該 reference
 THEN 它 MUST 包含 `artifactId`、`changeId`、`relativePath`
 AND 它 MUST NOT 包含完整 Artifact 內容（如 proposal 全文）
 AND 接收方 MUST 依 reference 讀取完整 Artifact
+
+### Requirement: 角色政策欄位
+Handoff MAY 帶有 `rolePolicyVersion`、`actingRole`、`writeScope` 與 `authorizationRef`。`actingRole` 為 `planning_secondary` 或 `implementation_secondary` 時，MUST 同時提供 `rolePolicyVersion: "2"`、`authorizationRef` 與 `writeScope`。
+
+#### Scenario: 次要角色 Handoff 缺少授權引用
+- GIVEN Handoff 的 `actingRole` 為 `implementation_secondary`
+- WHEN 缺少 `authorizationRef` 或 `writeScope`
+- THEN Schema 驗證 MUST 失敗
+
+#### Scenario: 舊 Handoff 相容
+- GIVEN 既有 Handoff 沒有角色政策欄位
+- WHEN 以新 Schema 驗證
+- THEN MUST 通過

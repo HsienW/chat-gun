@@ -17,19 +17,21 @@
 
 ## 角色對應
 
-| 流程角色 | 本專案常用工具 | 責任 |
-| --- | --- | --- |
-| Planner | CCR | 前期需求評估，產生 proposal / design / tasks 草案 |
-| Reviewer | Qwen | 審查計劃與實作結果，找 Blocker / Major / Minor |
-| Implementer | Codex | 依 OpenSpec 實作、測試、更新 tasks |
-| Coordinator | CCR | 完成判定，確認是否可 archive |
-| Archivist | Codex + 人工 | 執行 OpenSpec archive；git commit / push 由人完成 |
+| 流程角色 | 主要 | 次要（需 Master 逐次授權，rolePolicyVersion 2） | 責任 |
+| --- | --- | --- | --- |
+| Planner | CCR | Codex | 前期需求評估，產生 proposal / design / tasks 草案 |
+| Reviewer | Qwen | 無 | 審查計劃與實作結果，找 Blocker / Major / Minor |
+| Implementer | Codex | CCR | 依 OpenSpec 實作、測試、更新 tasks |
+| Coordinator | CCR | Codex | 完成判定；不得驗收自己撰寫的實作（Master self_acceptance 例外） |
+| Archivist | Codex + 人工 | CCR + 人工 | 執行 OpenSpec archive；git commit / push 由人完成 |
+
+沒有 `rolePolicyVersion` 的既有紀錄依 v1（只有主要角色）解讀。完整規則見 `openspec/specs/agent-role-policy/spec.md`。
 
 ## 寫入前角色 Gate
 
 任何 Agent 在每一次寫入前都必須重新驗證 `role + currentPhase + currentOwner + target path + Handoff`。宿主具備 Write、Edit、Shell 或 MCP 能力不等於目前角色有權使用；改動只有一行、使用者接受決策方向或 Coordinator 想節省交接時間都不得豁免。
 
-驗證失敗、狀態缺失或任務由查詢／審查滑向實作時，Agent 必須 fail-closed，只產出 Structured Handoff，不得修改任何字。CCR 的實作 Handoff 一律交給 Codex；Qwen Reviewer 只輸出 stdout／聊天結果，由 adapter、CLIHost 或人工保存。
+驗證失敗、狀態缺失或任務由查詢／審查滑向實作時，Agent 必須 fail-closed，只產出 Structured Handoff，不得修改任何字。CCR 的實作 Handoff 預設交給 Codex；只有在 v2 且有有效 Master 授權時，CCR 才能以 implementation_secondary 承接；
 
 ## 階段路由
 

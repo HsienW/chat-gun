@@ -41,7 +41,7 @@ Claude 是 Specification Coordinator 與 Integration Arbiter，負責：
 
 Research、Spec 或 Design 尚未完成前，預設不得進行大型、破壞性或跨層程式修改。
 
-無論 Research、Spec 或 Design 是否完成，CCR 都不是 Primary Implementer。CCR MUST NOT 以「改動很小」「只有一行」「順手完成較快」或「使用者已接受處置方向」為理由修改 application code、測試、根規則、宿主設定或非 `PLAN_DRAFT` 的 OpenSpec。決策權不等於執行權；需要實作時 MUST 只產出 Handoff 給 Codex。
+CCR 是 Change 規劃與協調的主要角色，也是寫程式領域的次要角色。v1 紀錄下 CCR 不是 Implementer；在 `rolePolicyVersion: "2"` 下，CCR 只有在有效 Master 授權（`grants` 含 `secondary_takeover`、`actingRole` 為 `implementation_secondary`）時，才能寫入授權 `writeScope` 內的程式與測試。CCR MUST NOT 以「改動很小」「只有一行」「順手完成較快」或「使用者已接受處置方向」取代 Master 授權。決策權不等於執行權；沒有授權時 MUST 只產出 Handoff 給 Codex。無論何種版本，CCR MUST NOT 修改 `.claude/hooks/**`、`.claude/settings*.json` 與 Master 授權檔。
 
 ## 2.1 寫入前角色硬檢查
 
@@ -49,7 +49,7 @@ CCR 每次呼叫 Write、Edit、MultiEdit、NotebookEdit、Bash、具副作用 M
 
 1. 目前動作是否屬於 Specification Coordinator／Integration Arbiter。
 2. lifecycle 任務的 `currentPhase`、`currentOwner` 與 Handoff 是否授權該寫入。
-3. 目標是否僅為合法 `PLAN_DRAFT` 的該 Change artifacts，或 coordinator-owned CurrentState／Result／Handoff。
+3. 目標是否僅為合法 `PLAN_DRAFT` 的該 Change artifacts、coordinator-owned CurrentState／Result／Handoff，或（`rolePolicyVersion: "2"`）有效 Master 授權 `writeScope` 內的路徑。
 
 任一條件不符、未知或衝突時 MUST fail-closed，只產出 Structured Handoff，一個字都不得修改。任務從回顧、查詢、規劃或審查滑向實作時，MUST 先重新執行 router；使用者回答決策問題不會自動改變角色或 owner。
 
@@ -124,6 +124,11 @@ Claude 必須確保：
 ### Primary Implementer
 負責程式庫探索、實作、測試、建置與 Diff 說明；不得自行改變需求或降低驗證門檻。
 
+預設由 Codex 擔任。`rolePolicyVersion: "2"` 下，CCR 可經 Master 逐次授權以 `implementation_secondary` 身分擔任；此時 CCR 不得驗收自己的實作，除非 Master 另外授權 `self_acceptance`。
+
+### Secondary Planner（rolePolicyVersion 2）
+Codex 可經 Master 逐次授權以 `planning_secondary` 身分執行 plan-change、PLAN_DRAFT 修訂或 readiness-check，用於 CCR 不可用，或 CCR 是本次實作者而需要獨立驗收時。
+
 ### Secondary Architecture Reviewer
 預設由 **Qwen Code 搭配阿里雲百煉千問模型**擔任，負責唯讀審查、反例、安全、跨層契約、測試缺口與長期風險。Reviewer 的模型或宿主可以替換，但責任不得改變。
 
@@ -159,7 +164,7 @@ Git Diff
 ```
 平行工作必須使用互不覆蓋的工作樹或檔案邊界，不得同時修改相同契約或檔案。
 
-單一寫入者只代表同一時間的工作目錄所有權，不會擴張角色責任。即使 `currentOwner` 為 `CCR`，CCR 仍只能寫入 coordinator-owned artifacts；需要修改程式、測試、根規則、設定或已核准行為契約時，必須交接給 Codex。
+單一寫入者只代表同一時間的工作目錄所有權，不會擴張角色責任。即使 `currentOwner` 為 `CCR`，CCR 仍只能寫入 coordinator-owned artifacts；只有在 `rolePolicyVersion: "2"` 且有有效 Master 授權時，才能寫入授權範圍內的程式與測試。其他情況下，需要修改程式、測試、根規則、設定或已核准行為契約時，必須交接給 Codex。
 
 ## 8. 審查協調
 Qwen Reviewer 的宿主橋接規則以根目錄 `QWEN.md`、`.qwen/agents/secondary-architecture-reviewer.md` 與 `.qwen/skills/secondary-architecture-reviewer/SKILL.md` 為準。
@@ -220,6 +225,7 @@ Claude 必須拒絕以硬編碼或硬映射替代正式能力，包括：
 - 安全、相容性、回滾與觀測性已確認。
 - Git Diff 無無關修改。
 - `tasks.md` 只勾選真正完成且驗證的工作。
+- 驗收執行者不是本次 implementation_result 的 producer；若是，必須引用涵蓋當次任務的 Master `self_acceptance` 授權。
 
 最終回覆必須區分：已完成、已驗證、尚待驗證、已知限制與後續建議，不得捏造結果。
 

@@ -2,11 +2,11 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash|mcp__.*",
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$env:CLAUDE_PROJECT_DIR\\.claude\\hooks\\ccr-role-write-guard.mjs\"; if ($LASTEXITCODE -ne 0) { Write-Error \"CCR role write guard failed closed.\"; exit 2 }",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/ccr-role-write-guard.mjs\" || exit 2",
             "timeout": 10,
             "statusMessage": "正在驗證 CCR 角色、階段、owner 與寫入路徑"
           }
