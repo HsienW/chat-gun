@@ -52,9 +52,17 @@ docs/openspec/agent-workflow-prompts.md
 
 任一條件缺失、未知、衝突或不符時 MUST fail-closed：只產出 Structured Handoff，不得修改任何字，也不得先做「暫時」「順手」或「只有一行」的修改。改動大小不構成豁免；使用者批准決策方向不等於授權目前角色執行。任務從查詢、回顧、規劃或審查轉為實作時，MUST 重新執行 workflow-router 與本檢查。
 
-CCR 只能執行 Coordinator／Planner 所有的寫入：合法 `PLAN_DRAFT` 中該 Change 的 OpenSpec artifacts，以及 owner／phase 合法的 coordinator CurrentState、Result 與 Handoff。CCR MUST NOT 修改 application code、測試、根規則、宿主設定或非目前 plan-change 的規格；Finding 必須交由 Codex 實作。
+角色權限依 `rolePolicyVersion` 判定。沒有此欄位的 Handoff／CurrentState 屬於 v1：CCR 只能執行 Coordinator／Planner 所有的寫入（合法 `PLAN_DRAFT` 中該 Change 的 OpenSpec artifacts，以及 owner／phase 合法的 coordinator CurrentState、Result 與 Handoff），Finding 必須交由 Codex 實作。
+
+`rolePolicyVersion: "2"` 依 `openspec/specs/agent-role-policy/spec.md` 判定：Change 規劃與協調以 CCR 為主、Codex 為次；寫程式以 Codex 為主、CCR 為次；獨立審查固定由 Qwen 擔任。次要角色只有在 `.agent-runtime/master-authorization.json` 存在有效 Master 授權、與 CurrentState／Handoff 一致，且目標在 `writeScope` 內時才能寫入。任何 Agent MUST NOT 寫入 Master 授權檔；CCR MUST NOT 修改 `.claude/hooks/**` 或 `.claude/settings*.json`。
 
 Qwen 主工作階段即使保留寫入工具能力，也不代表 Reviewer 角色取得寫入權。Qwen Reviewer MUST 使用 `approvalMode: plan` 的 `secondary-architecture-reviewer` Subagent、維持唯讀工具白名單，只輸出 stdout／聊天結果；Runtime Artifact 與 CurrentState 由 adapter、CLIHost 或人工保存。無法證明父工作階段沒有覆蓋 Reviewer 隔離時，Verdict MUST 為 `INCOMPLETE`。
+
+### Master 授權與撰寫者驗收 Gate（rolePolicyVersion 2）
+
+Master 指專案擁有者（Human）。Master 授權 MUST 由 Master 本人在聊天中明確給出，並由 Master 手動寫入 `.agent-runtime/master-authorization.json`。授權只對檔案中指定的 `changeId`、`runId`、`handoffId` 與 `writeScope` 有效，過期或 Handoff 完成後即失效，不得延伸到其他任務。
+
+實作驗收（readiness-check 與最終驗收）的執行者 MUST NOT 是被驗收之 implementation_result 的 `producer`。唯一例外是 Master 授權的 `grants` 含 `self_acceptance` 且涵蓋當次任務；此時 readiness_result 必須引用該授權。
 
 ---
 
@@ -437,6 +445,7 @@ Mock 測試通過不得等同於真實模型驗收完成。
 - 核心流程失效。
 - 與 OpenSpec 直接衝突。
 - 以硬編碼或硬映射繞過核心 Resolver、Schema 或權限邊界。
+- 違反撰寫者驗收 Gate，或次要角色在沒有有效 Master 授權時寫入。
 
 ### Major
 
@@ -503,3 +512,5 @@ Agent 預設不得讀取 `.gitignore` 已忽略內容。只有下列條件全部
 
 不得遞迴掃描 `.agent-runtime/`、讀取其他 Change／Run、建立歷史事件流，或將 Runtime Artifact 加入版本控制。
 Qwen Reviewer 不得直接寫入 Runtime Artifact。完成 `review-plan` 或 `review-result` 時，必須將 schema-valid `review_result` 輸出至 stdout／聊天回應，再由 `qwen-capture-adapter.mjs`、CLIHost 或人工驗證並保存至 `.agent-runtime/<change-id>/artifacts/`；Qwen 本身不得呼叫 Write、Edit 或 Shell 完成保存。
+
+`.agent-runtime/master-authorization.json` 由 Master 手動維護，任何 Agent 不得寫入。Agent 只能在目前 Handoff 的 `authorizationRef` 或 `requiredInputRefs` 明確引用它時讀取，並依第 1–4 點驗證後使用。

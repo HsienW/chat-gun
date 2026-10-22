@@ -39,7 +39,7 @@ AND 若是其他 Agent 或其他階段：Agent MUST 報錯並要求先初始化
 
 ### Requirement: currentPhase 與 currentOwner
 
-`currentPhase` MUST 反映目前 Workflow Phase，`currentOwner` MUST 反映目前持有寫入權的 Agent。
+`currentPhase` MUST 反映目前 Workflow Phase，`currentOwner` MUST 反映目前持有寫入權的 Agent。在 `rolePolicyVersion: "2"` 下，本 spec 情境中的 `"CCR"`、`"Codex"` 指該領域的主要角色；持有有效 Master 授權的次要角色 MAY 取代之，依 `agent-role-policy` 判定。
 
 #### Scenario: 寫入權檢查
 
