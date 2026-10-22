@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import fsPromises, { access, mkdir, mkdtemp, readFile, rm, writeFile, readdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import * as adapter from "./qwen-capture-adapter.mjs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -24,6 +27,21 @@ for (const name of ["current-state", "handoff", "agent-result"]) {
   )));
 }
 
+// Captures pin the provider on the qwen argv; settings paths point into the temp workspace so the
+// developer's real ~/.qwen and system settings never influence a test.
+const PINNED_PROVIDER = Object.freeze({ authType: "openai", model: "fixture-model", baseUrl: "https://provider.fixture.test/v1" });
+const PINNED_ARGS = ["--auth-type", PINNED_PROVIDER.authType, "--model", PINNED_PROVIDER.model,
+  "--openai-base-url", PINNED_PROVIDER.baseUrl];
+function isolatedSettings(workspaceRoot) {
+  return { env: { QWEN_HOME: path.join(workspaceRoot, "qwen-home"),
+    QWEN_CODE_SYSTEM_SETTINGS_PATH: path.join(workspaceRoot, "qwen-system", "settings.json") },
+  homedir: path.join(workspaceRoot, "home") };
+}
+function pinnedLaunch(workspaceRoot, commandArgs = []) {
+  return { expectedProvider: PINNED_PROVIDER, commandArgs: [...commandArgs, ...PINNED_ARGS],
+    settingsEnvironment: isolatedSettings(workspaceRoot) };
+}
+
 async function captureFixture(t, stage = "review-plan") {
   const workspaceRoot = await mkdtemp(path.join(tmpdir(), "qwen-contract-"));
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
@@ -39,11 +57,17 @@ async function captureFixture(t, stage = "review-plan") {
   const statePath = path.join(workspaceRoot, ".agent-runtime", review.changeId, "current-state.json");
   await mkdir(path.dirname(statePath), { recursive: true });
   await writeFile(statePath, JSON.stringify(state));
-  return { workspaceRoot, state, statePath, review, capture: () => captureQwenReviewResult({
-    workspaceRoot, changeId: review.changeId, runId: review.runId, stage,
-    processResult: { exitCode: 0, stdout: JSON.stringify(review), stderr: "" },
+  return { workspaceRoot, state, statePath, review, capture: (overrides = {}) => captureQwenReviewResult({
+    workspaceRoot, changeId: review.changeId, runId: review.runId, stage, artifactId: review.artifactId,
+    outputFormat: "stream-json", qwenVersion: "0.25.3-fixture", ...pinnedLaunch(workspaceRoot),
+    processResult: { exitCode: 0, stdout: stream(review), stderr: "", signal: null }, ...overrides,
   }) };
 }
+
+test("capture requires an explicit artifactId instead of a fixed overwrite path", async (t) => {
+  const f = await captureFixture(t);
+  await assert.rejects(() => f.capture({ artifactId: undefined }), /artifact.?id/i);
+});
 
 for (const stage of ["review-plan", "review-result"]) {
   for (const verdict of ["APPROVE", "COMMENT_ONLY", "REQUEST_CHANGES", "INCOMPLETE"]) {
@@ -114,14 +138,11 @@ test("unapproved owner or phase cannot be advanced by capture", async (t) => {
   }
 });
 
-test("state publication failure restores both prior artifacts and removes staging files", async (t) => {
+test("state publication failure removes every newly published artifact and staging file", async (t) => {
   const f = await captureFixture(t);
   const artifactsDir = path.join(path.dirname(f.statePath), "artifacts");
   await mkdir(artifactsDir);
-  const reviewPath = path.join(artifactsDir, "review-result.json");
-  const handoffPath = path.join(artifactsDir, "review-handoff.json");
-  await writeFile(reviewPath, "previous review");
-  await writeFile(handoffPath, "previous handoff");
+  await writeFile(path.join(artifactsDir, "review-result.json"), "preserved old review");
   const rename = fsPromises.rename;
   let injected = false;
   const mocked = t.mock.method(fsPromises, "rename", async (source, destination) => {
@@ -132,16 +153,11 @@ test("state publication failure restores both prior artifacts and removes stagin
     return rename(source, destination);
   });
   syncBuiltinESMExports();
-  try {
-    await assert.rejects(f.capture, /injected publication failure/);
-  } finally {
-    mocked.mock.restore();
-    syncBuiltinESMExports();
-  }
+  try { await assert.rejects(f.capture, /injected publication failure/); }
+  finally { mocked.mock.restore(); syncBuiltinESMExports(); }
   assert.equal(await readFile(f.statePath, "utf8"), JSON.stringify(f.state));
-  assert.equal(await readFile(reviewPath, "utf8"), "previous review");
-  assert.equal(await readFile(handoffPath, "utf8"), "previous handoff");
-  assert.deepEqual((await readdir(artifactsDir)).sort(), ["review-handoff.json", "review-result.json"]);
+  assert.deepEqual(await readdir(artifactsDir), ["review-result.json"]);
+  assert.equal(await readFile(path.join(artifactsDir, "review-result.json"), "utf8"), "preserved old review");
   assert.ok(!(await readdir(path.dirname(f.statePath))).some(file => file.endsWith(".tmp")));
 });
 
@@ -179,6 +195,51 @@ function validReviewResult(overrides = {}) {
     risks: [],
     ...overrides,
   };
+}
+
+// Synthetic fixtures shaped after the Qwen 0.25.3 stream-json source (buildSystemMessage, buildMessage,
+// emitToolResult, buildResultMessage). They are not a live Qwen isolation attestation.
+const REVIEWER_CALL = "agent-call-1";
+function reviewerMessage(type, content) {
+  return { type, session_id: "parent", parent_tool_use_id: REVIEWER_CALL, message: { content } };
+}
+function parentMessage(type, content) {
+  return { type, session_id: "parent", parent_tool_use_id: null, message: { content } };
+}
+function reviewerCall(id = REVIEWER_CALL, subagentType = "secondary-architecture-reviewer") {
+  return parentMessage("assistant", [{ type: "tool_use", id, name: "agent", input: { subagent_type: subagentType, prompt: "review" } }]);
+}
+function reviewerReturn(review, id = REVIEWER_CALL) {
+  return parentMessage("user", [{ type: "tool_result", tool_use_id: id, is_error: false, content: JSON.stringify(review) }]);
+}
+function events(review) {
+  return [
+    { type: "system", subtype: "init", uuid: "parent", session_id: "parent", model: "fixture-model", permission_mode: "plan",
+      qwen_code_version: "0.25.3", tools: ["read_file", "grep_search", "glob", "list_directory", "skill", "agent"],
+      agents: ["secondary-architecture-reviewer"] },
+    reviewerCall(),
+    reviewerReturn(review),
+    { type: "result", subtype: "success", session_id: "parent", is_error: false, result: JSON.stringify(review) },
+  ];
+}
+function stream(review, mutate = () => {}) {
+  const rows = events(review);
+  mutate(rows);
+  return rows.map(row => JSON.stringify(row)).join("\n") + "\n";
+}
+function artifactPath(f, suffix = ".json") {
+  return path.join(path.dirname(f.statePath), "artifacts", `${f.review.artifactId}${suffix}`);
+}
+function sha(value) { return createHash("sha256").update(value).digest("hex"); }
+async function assertEvidence(f, stdout, stderr, savedResult) {
+  const evidence = JSON.parse(await readFile(artifactPath(f, ".capture.json"), "utf8"));
+  assert.equal(evidence.kind, "evidence");
+  assert.equal(evidence.hashes.stdout, sha(stdout));
+  assert.equal(evidence.hashes.stderr, sha(stderr));
+  assert.equal(evidence.hashes.savedResult, savedResult === null ? null : sha(savedResult));
+  assert.equal(await readFile(artifactPath(f, ".stdout.ndjson"), "utf8"), stdout);
+  assert.equal(await readFile(artifactPath(f, ".stderr.log"), "utf8"), stderr);
+  return evidence;
 }
 
 test("extractJsonObjectFromOutput extracts fenced JSON from Qwen markdown", () => {
@@ -294,48 +355,14 @@ test("validateReviewResult rejects incompatible schema major versions", () => {
   );
 });
 
-test("captureQwenReviewResult rejects non-zero process exit before writing artifact", async () => {
-  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "qwen-capture-"));
-  const changeId = "change-a";
-  const runId = "run-a";
-  const runtimeDir = path.join(workspaceRoot, ".agent-runtime", changeId);
-  const statePath = path.join(runtimeDir, "current-state.json");
-  const artifactPath = path.join(runtimeDir, "artifacts", "review-result.json");
-
-  try {
-    await mkdir(runtimeDir, { recursive: true });
-    await writeFile(
-      statePath,
-      JSON.stringify({
-        schemaVersion: "1.0.0",
-        changeId,
-        runId,
-        currentPhase: "REVIEWING",
-        currentOwner: "Qwen",
-        latestArtifactRefs: {},
-      }),
-    );
-
-    await assert.rejects(
-      () =>
-        captureQwenReviewResult({
-          workspaceRoot,
-          changeId,
-          runId,
-          stage: "review-result",
-          processResult: {
-            exitCode: 2,
-            stdout: JSON.stringify(validReviewResult({ changeId, runId })),
-            stderr: "qwen failed",
-          },
-        }),
-      /Qwen CLI exited with code 2/,
-    );
-
-    await assert.rejects(() => access(artifactPath), /ENOENT/);
-  } finally {
-    await rm(workspaceRoot, { recursive: true, force: true });
-  }
+test("captureQwenReviewResult rejects non-zero process exit and preserves evidence", async (t) => {
+  const f = await captureFixture(t);
+  const stdout = stream(f.review);
+  await assert.rejects(() => f.capture({ processResult: { exitCode: 2, stdout, stderr: "qwen failed", signal: null } }), /process_nonzero_exit/);
+  const evidence = await assertEvidence(f, stdout, "qwen failed", null);
+  assert.equal(evidence.exitCode, 2);
+  await assert.rejects(access(artifactPath(f)), /ENOENT/);
+  assert.equal(await readFile(f.statePath, "utf8"), JSON.stringify(f.state));
 });
 
 test("captureQwenReviewResult writes review-result atomically and updates current-state", async () => {
@@ -387,9 +414,10 @@ test("captureQwenReviewResult writes review-result atomically and updates curren
       changeId,
       runId,
       stage: "review-result",
+      artifactId: result.artifactId, outputFormat: "stream-json", qwenVersion: "0.25.3-fixture", ...pinnedLaunch(workspaceRoot),
       processResult: {
         exitCode: 0,
-        stdout: JSON.stringify(result),
+        stdout: stream(result),
         stderr: "",
       },
       now: () => new Date("2026-06-29T13:00:00.000Z"),
@@ -397,7 +425,7 @@ test("captureQwenReviewResult writes review-result atomically and updates curren
 
     assert.equal(
       captured.artifactPath,
-      path.join(workspaceRoot, ".agent-runtime", changeId, "artifacts", "review-result.json"),
+      path.join(workspaceRoot, ".agent-runtime", changeId, "artifacts", "rr-a.json"),
     );
 
     const writtenArtifact = JSON.parse(await readFile(captured.artifactPath, "utf8"));
@@ -409,7 +437,7 @@ test("captureQwenReviewResult writes review-result atomically and updates curren
       changeId,
       runId,
       kind: "review_result",
-      relativePath: ".agent-runtime/change-a/artifacts/review-result.json",
+      relativePath: ".agent-runtime/change-a/artifacts/rr-a.json",
     });
     assert.equal(updatedState.updatedAt, "2026-06-29T13:00:00.000Z");
     // APPROVE verdict transitions
@@ -422,7 +450,7 @@ test("captureQwenReviewResult writes review-result atomically and updates curren
   }
 });
 
-test("captureQwenReviewResult captures stdout from a live child process", async () => {
+test("captureQwenReviewResult captures stdout from a local deterministic child process", async () => {
   const workspaceRoot = await mkdtemp(path.join(tmpdir(), "qwen-capture-"));
   const changeId = "change-live";
   const runId = "run-live";
@@ -475,8 +503,10 @@ test("captureQwenReviewResult captures stdout from a live child process", async 
       changeId,
       runId,
       stage: "review-result",
+      artifactId: result.artifactId, outputFormat: "stream-json", qwenVersion: "0.25.3-fixture", ...pinnedLaunch(workspaceRoot),
       command: process.execPath,
-      commandArgs: ["-e", `console.log(${JSON.stringify(JSON.stringify(result))})`],
+      // `--` keeps node from parsing the pinned qwen flags as its own options.
+      ...pinnedLaunch(workspaceRoot, ["-e", `console.log(${JSON.stringify(stream(result))})`, "--"]),
       now: () => new Date("2026-06-29T13:00:00.000Z"),
     });
 
@@ -548,9 +578,10 @@ test("captureQwenReviewResult transitions to READY_FOR_READINESS_CHECK on APPROV
       changeId,
       runId,
       stage: "review-result",
+      artifactId: result.artifactId, outputFormat: "stream-json", qwenVersion: "0.25.3-fixture", ...pinnedLaunch(workspaceRoot),
       processResult: {
         exitCode: 0,
-        stdout: JSON.stringify(result),
+        stdout: stream(result),
         stderr: "",
       },
       now: () => new Date("2026-07-02T11:00:00.000Z"),
@@ -567,7 +598,7 @@ test("captureQwenReviewResult transitions to READY_FOR_READINESS_CHECK on APPROV
       changeId,
       runId,
       kind: "review_result",
-      relativePath: ".agent-runtime/change-approve/artifacts/review-result.json",
+      relativePath: ".agent-runtime/change-approve/artifacts/rr-approve.json",
     });
     assert.ok(updatedState.nextActions.some((a) => a.includes("CCR 執行 readiness check")));
   } finally {
@@ -633,9 +664,10 @@ test("captureQwenReviewResult transitions to CHANGES_REQUESTED on REQUEST_CHANGE
       changeId,
       runId,
       stage: "review-result",
+      artifactId: result.artifactId, outputFormat: "stream-json", qwenVersion: "0.25.3-fixture", ...pinnedLaunch(workspaceRoot),
       processResult: {
         exitCode: 0,
-        stdout: JSON.stringify(result),
+        stdout: stream(result),
         stderr: "",
       },
       now: () => new Date("2026-07-02T11:00:00.000Z"),
@@ -654,7 +686,7 @@ test("captureQwenReviewResult transitions to CHANGES_REQUESTED on REQUEST_CHANGE
     assert.ok(updatedState.blockers.some((b) => b.description === "Missing error handling"));
     assert.ok(updatedState.blockers.every((b) => b.severity === "Blocker"));
     assert.ok(updatedState.blockers.some((b) => b.source.includes(":major:")));
-    const preservedReview = JSON.parse(await readFile(path.join(path.dirname(currentStatePath), "artifacts", "review-result.json"), "utf8"));
+    const preservedReview = JSON.parse(await readFile(path.join(path.dirname(currentStatePath), "artifacts", "rr-rc.json"), "utf8"));
     assert.equal(preservedReview.payload.findings.major[0].severity, "Major");
     assert.ok(updatedState.nextActions.some((a) => a.includes("Codex 修正")));
   } finally {
@@ -716,9 +748,10 @@ test("captureQwenReviewResult transitions to INCOMPLETE on INCOMPLETE verdict", 
       changeId,
       runId,
       stage: "review-result",
+      artifactId: result.artifactId, outputFormat: "stream-json", qwenVersion: "0.25.3-fixture", ...pinnedLaunch(workspaceRoot),
       processResult: {
         exitCode: 0,
-        stdout: JSON.stringify(result),
+        stdout: stream(result),
         stderr: "",
       },
       now: () => new Date("2026-07-02T11:00:00.000Z"),
@@ -794,9 +827,10 @@ test("captureQwenReviewResult review-plan REQUEST_CHANGES transitions to PLAN_DR
       changeId,
       runId,
       stage: "review-plan",
+      artifactId: result.artifactId, outputFormat: "stream-json", qwenVersion: "0.25.3-fixture", ...pinnedLaunch(workspaceRoot),
       processResult: {
         exitCode: 0,
-        stdout: JSON.stringify(result),
+        stdout: stream(result),
         stderr: "",
       },
       now: () => new Date("2026-09-24T06:00:00.000Z"),
@@ -875,9 +909,10 @@ test("captureQwenReviewResult review-plan APPROVE transitions to PLAN_APPROVED/C
       changeId,
       runId,
       stage: "review-plan",
+      artifactId: result.artifactId, outputFormat: "stream-json", qwenVersion: "0.25.3-fixture", ...pinnedLaunch(workspaceRoot),
       processResult: {
         exitCode: 0,
-        stdout: JSON.stringify(result),
+        stdout: stream(result),
         stderr: "",
       },
       now: () => new Date("2026-09-24T06:00:00.000Z"),
@@ -933,9 +968,10 @@ test("captureQwenReviewResult rejects non-canonical current-state.json", async (
           changeId,
           runId,
           stage: "review-result",
-          processResult: {
+          artifactId: result.artifactId, outputFormat: "stream-json", qwenVersion: "0.25.3-fixture", ...pinnedLaunch(workspaceRoot),
+      processResult: {
             exitCode: 0,
-            stdout: JSON.stringify(result),
+            stdout: stream(result),
             stderr: "",
           },
         }),
@@ -952,9 +988,11 @@ test("captureQwenReviewResult rejects path traversal change ids", async () => {
       captureQwenReviewResult({
         workspaceRoot: process.cwd(),
         changeId: "../escape",
+        artifactId: "rr-traversal",
         runId: "run-a",
         stage: "review-result",
-        processResult: {
+        outputFormat: "text", qwenVersion: "0.25.3-fixture",
+      processResult: {
           exitCode: 0,
           stdout: JSON.stringify(validReviewResult({ changeId: "../escape", runId: "run-a" })),
           stderr: "",
@@ -962,4 +1000,455 @@ test("captureQwenReviewResult rejects path traversal change ids", async () => {
       }),
     /Invalid changeId/,
   );
+});
+
+for (const artifactId of ["", "../escape", "Uppercase", "a/b", "a\\b", "C:\\absolute", "/absolute", "a..b", "has space"]) {
+  test(`rejects unsafe artifact ID ${JSON.stringify(artifactId)}`, async (t) => {
+    const f = await captureFixture(t);
+    await assert.rejects(() => f.capture({ artifactId }), /artifact.?id/i);
+    assert.equal(await readFile(f.statePath, "utf8"), JSON.stringify(f.state));
+  });
+}
+
+test("rejects mismatched requested and review artifact IDs", async (t) => {
+  const f = await captureFixture(t);
+  await assert.rejects(() => f.capture({ artifactId: "different-id" }), /artifact.?id/i);
+  assert.equal(await readFile(f.statePath, "utf8"), JSON.stringify(f.state));
+});
+
+for (const collision of ["file", "reference"]) {
+  test(`existing ${collision} refuses a fresh capture and preserves review022`, async (t) => {
+    const f = await captureFixture(t);
+    const artifacts = path.join(path.dirname(f.statePath), "artifacts");
+    await mkdir(artifacts);
+    const old = path.join(artifacts, "review-result.json");
+    await writeFile(old, "immutable review022");
+    const before = sha(await readFile(old));
+    if (collision === "file") await writeFile(artifactPath(f), "already exists");
+    else {
+      f.review.artifactId = "review-plan-022-qwen-20261022";
+      f.state.latestArtifactRefs.reviewResult = { artifactId: f.review.artifactId, changeId: f.review.changeId,
+        runId: f.review.runId, kind: "review_result", relativePath: `.agent-runtime/${f.review.changeId}/artifacts/review-result.json` };
+      await writeFile(f.statePath, JSON.stringify(f.state));
+    }
+    await assert.rejects(f.capture, /exist|collision|referenc|already/i);
+    assert.equal(sha(await readFile(old)), before);
+    assert.equal(await readFile(f.statePath, "utf8"), JSON.stringify(f.state));
+  });
+}
+
+test("stream-json extracts the sole final result and counts unknown events", () => {
+  const review = validReviewResult();
+  const parsed = adapter.parseCaptureOutput(stream(review, rows => rows.splice(1, 0, { type: "future_event" })), "stream-json");
+  assert.deepEqual(parsed.reviewResult, review);
+  assert.equal(parsed.observed.unknownEventCount, 1);
+  assert.equal(parsed.observed.parentSessionId, "parent");
+  assert.equal(parsed.observed.model, "fixture-model");
+  assert.equal(parsed.observed.approvalMode, "plan");
+  assert.equal(parsed.observed.provider, null);
+  assert.ok(parsed.observed.notObserved.includes("provider"));
+});
+
+test("the reviewer agent tool_result is the authoritative review and init metadata is captured", () => {
+  const review = validReviewResult();
+  const parsed = adapter.parseCaptureOutput(stream(review), "stream-json");
+  assert.deepEqual(parsed.reviewResult, review);
+  assert.deepEqual(parsed.reviewSource, { toolUseId: REVIEWER_CALL, owner: "subagent" });
+  assert.deepEqual(parsed.observed.subagents, [{ name: "secondary-architecture-reviewer", toolUseId: REVIEWER_CALL }]);
+  assert.equal(parsed.observed.qwenCodeVersion, "0.25.3");
+  assert.ok(parsed.observed.effectiveTools.includes("read_file"));
+});
+
+test("a reviewer tool_result given as text blocks is accepted", () => {
+  const review = validReviewResult();
+  const parsed = adapter.parseCaptureOutput(stream(review, rows => {
+    rows[2].message.content[0].content = [{ type: "text", text: JSON.stringify(review) }];
+  }), "stream-json");
+  assert.equal(parsed.reviewSource.owner, "subagent");
+});
+
+test("the superseded synthetic subagent_start format cannot establish reviewer provenance", async (t) => {
+  const f = await captureFixture(t);
+  const legacy = [
+    { type: "system", subtype: "init", session_id: "parent", model: "fixture-model", permission_mode: "plan" },
+    { type: "system", subtype: "subagent_start", agent_id: "reviewer-1", agent_name: "secondary-architecture-reviewer", parent_session_id: "parent", session_id: "child" },
+    { type: "result", agent_id: "reviewer-1", session_id: "child", result: JSON.stringify(f.review) },
+  ].map(row => JSON.stringify(row)).join("\n") + "\n";
+  await f.capture({ processResult: { exitCode: 0, stdout: legacy, stderr: "" } });
+  const state = JSON.parse(await readFile(f.statePath, "utf8"));
+  const evidence = JSON.parse(await readFile(artifactPath(f, ".capture.json"), "utf8"));
+  assert.equal(state.currentPhase, "INCOMPLETE");
+  assert.ok(evidence.evidenceGate.reasons.includes("reviewer_provenance_not_observed"));
+});
+
+for (const [name, makeOutput] of [
+  ["a parent copy differs from the reviewer tool_result", review => stream(review, rows => {
+    rows.at(-1).result = JSON.stringify({ ...review, summary: "Parent rewrote the review." });
+  })],
+  ["two reviewer tool_results carry reviews", review => stream(review, rows => {
+    rows.splice(3, 0, reviewerCall("agent-call-2"), reviewerReturn(review, "agent-call-2"));
+  })],
+]) {
+  test(`capture fails closed when ${name}`, async (t) => {
+    const f = await captureFixture(t);
+    const stdout = makeOutput(f.review);
+    await assert.rejects(() => f.capture({ processResult: { exitCode: 0, stdout, stderr: "" } }));
+    const evidence = await assertEvidence(f, stdout, "", null);
+    assert.equal(evidence.evidenceGate.passed, false);
+    assert.equal(await readFile(f.statePath, "utf8"), JSON.stringify(f.state));
+    await assert.rejects(access(artifactPath(f)), /ENOENT/);
+  });
+}
+
+for (const [name, makeOutput] of [
+  ["zero candidates", () => JSON.stringify({ type: "system", subtype: "init" })],
+  ["multiple candidates", review => stream(review, rows => rows.push(rows.at(-1)))],
+  ["malformed line", review => stream(review) + "{broken\n"],
+  ["non-result embedded review", review => JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: JSON.stringify(review) }] } })],
+]) {
+  test(`stream-json fails closed for ${name} and retains raw evidence`, async (t) => {
+    const f = await captureFixture(t);
+    const stdout = makeOutput(f.review);
+    await assert.rejects(() => f.capture({ processResult: { exitCode: 0, stdout, stderr: "" } }));
+    const evidence = await assertEvidence(f, stdout, "", null);
+    assert.equal(evidence.evidenceGate.passed, false);
+    assert.equal(await readFile(f.statePath, "utf8"), JSON.stringify(f.state));
+    await assert.rejects(access(artifactPath(f)), /ENOENT/);
+  });
+}
+
+test("json event arrays and final result structured_result are supported", () => {
+  const review = validReviewResult();
+  const rows = events(review);
+  rows.at(-1).structured_result = review;
+  assert.deepEqual(adapter.parseCaptureOutput(JSON.stringify(rows), "json").reviewResult, review);
+});
+
+test("structured_output tool call is a review candidate", () => {
+  const review = validReviewResult();
+  const rows = events(review).slice(0, 2);
+  rows.push(parentMessage("assistant", [{ type: "tool_use", id: "structured-1", name: "structured_output", input: review }]));
+  assert.deepEqual(adapter.parseCaptureOutput(rows.map(row => JSON.stringify(row)).join("\n"), "stream-json").reviewResult, review);
+});
+
+test("tool observations contain ownership and status but never tool input content", () => {
+  const review = validReviewResult();
+  const stdout = stream(review, rows => rows.splice(2, 0,
+    reviewerMessage("assistant", [{ type: "tool_use", id: "read-1", name: "read_file", input: { file: "do-not-copy-tool-input" } }]),
+    reviewerMessage("user", [{ type: "tool_result", tool_use_id: "read-1", content: "do-not-copy-tool-result" }]),
+  ));
+  const { observed } = adapter.parseCaptureOutput(stdout, "stream-json");
+  const tool = observed.tools.find(item => item.id === "read-1");
+  assert.equal(tool.name, "read_file");
+  assert.equal(tool.owner, "subagent");
+  assert.equal(tool.status, "completed");
+  assert.ok(!JSON.stringify(observed).includes("do-not-copy"));
+});
+
+test("successful capture publishes raw hashes and canonical evidence references", async (t) => {
+  const f = await captureFixture(t);
+  const captured = await f.capture();
+  const evidence = await assertEvidence(f, stream(f.review), "", await readFile(artifactPath(f)));
+  assert.equal(captured.capturePath, artifactPath(f, ".capture.json"));
+  assert.equal(evidence.evidenceGate.passed, true);
+  assert.equal(evidence.exitCode, 0);
+  assert.equal(evidence.signal, null);
+  assert.ok(evidence.startedAt);
+  assert.ok(evidence.endedAt);
+  assert.ok(!path.isAbsolute(evidence.cwd));
+  const state = JSON.parse(await readFile(f.statePath, "utf8"));
+  for (const name of ["reviewCapture", "reviewRawStdout", "reviewRawStderr"]) {
+    assert.equal(state.latestArtifactRefs[name].kind, "evidence");
+    await access(path.join(f.workspaceRoot, state.latestArtifactRefs[name].relativePath));
+  }
+});
+
+test("capture metadata redacts secret flag values in split and equals argv", async (t) => {
+  const f = await captureFixture(t);
+  await f.capture({ commandArgs: ["--openai-api-key", "dummy-sensitive-value", "--token=another-sensitive-value", "--password", "third-sensitive-value", "--approval-mode", "plan"] });
+  const text = await readFile(artifactPath(f, ".capture.json"), "utf8");
+  for (const value of ["dummy-sensitive-value", "another-sensitive-value", "third-sensitive-value"]) assert.ok(!text.includes(value));
+  assert.ok(text.includes("--approval-mode"));
+});
+
+for (const [name, mutate] of [
+  ["parent not in plan", rows => { rows[0].permission_mode = "default"; }],
+  ["no subagent", rows => { rows.splice(1, 2); }],
+  ["model absent", rows => { delete rows[0].model; }],
+  ["wrong reviewer", rows => { rows[1].message.content[0].input.subagent_type = "different-reviewer"; }],
+  ["a second reviewer call is made", rows => { rows.splice(2, 0, reviewerCall("agent-call-2")); }],
+  ["another subagent runs", rows => { rows.splice(2, 0, reviewerCall("agent-call-2", "general-purpose")); }],
+  ["the reviewer call fails", rows => { rows[2].message.content[0].is_error = true; }],
+  ["the reviewer tool_result is missing", rows => { rows.splice(2, 1); }],
+  ...["write_file", "edit", "run_shell_command", "Bash"].flatMap(name => ["parent", "subagent"].map(owner => [
+    `${owner} invokes ${name}`, rows => { rows.splice(2, 0, (owner === "parent" ? parentMessage : reviewerMessage)(
+      "assistant", [{ type: "tool_use", id: "unsafe-tool", name, input: {} }])); },
+  ])),
+]) {
+  test(`evidence gate prevents verdict advancement when ${name}`, async (t) => {
+    const f = await captureFixture(t);
+    await f.capture({ processResult: { exitCode: 0, stdout: stream(f.review, mutate), stderr: "" } });
+    const state = JSON.parse(await readFile(f.statePath, "utf8"));
+    const evidence = JSON.parse(await readFile(artifactPath(f, ".capture.json"), "utf8"));
+    assert.equal(state.currentPhase, "INCOMPLETE");
+    assert.equal(state.currentOwner, "CCR");
+    assert.equal(state.gateStatus.reviewPassed, false);
+    assert.equal(evidence.evidenceGate.passed, false);
+    assert.ok(evidence.evidenceGate.reasons.length > 0);
+    assert.equal(JSON.parse(await readFile(artifactPath(f), "utf8")).payload.verdict, "APPROVE");
+    assert.ok(contractValidators["current-state"](state));
+  });
+}
+
+function skillLoad(id, skill, result = { type: "tool_result", tool_use_id: id, content: "loaded" }) {
+  return [
+    reviewerMessage("assistant", [{ type: "tool_use", id, name: "skill", input: { skill } }]),
+    ...(result ? [reviewerMessage("user", [result])] : []),
+  ];
+}
+
+test("loading the reviewer contract skills keeps the evidence gate open", async (t) => {
+  const f = await captureFixture(t);
+  await f.capture({ processResult: { exitCode: 0, stdout: stream(f.review, rows => rows.splice(2, 0,
+    ...skillLoad("skill-1", "openspec-workflow-router"),
+    ...skillLoad("skill-2", "secondary-architecture-reviewer"),
+  )), stderr: "" } });
+  const evidence = JSON.parse(await readFile(artifactPath(f, ".capture.json"), "utf8"));
+  assert.equal(evidence.evidenceGate.passed, true);
+  const skills = evidence.observed.tools.filter(tool => tool.name === "skill");
+  assert.deepEqual(skills.map(tool => tool.skillName), ["openspec-workflow-router", "secondary-architecture-reviewer"]);
+  assert.ok(skills.every(tool => tool.owner === "subagent" && tool.status === "completed"));
+});
+
+for (const [name, rows] of [
+  ["an unlisted skill is loaded", skillLoad("skill-x", "deploy-to-production")],
+  ["a skill load has no tool_result", skillLoad("skill-1", "openspec-workflow-router", null)],
+  ["a skill load fails", skillLoad("skill-1", "openspec-workflow-router", { type: "tool_result", tool_use_id: "skill-1", is_error: true, content: "x" })],
+  ["a skill call omits its name", skillLoad("skill-1", undefined)],
+]) {
+  test(`evidence gate stays closed when ${name}`, async (t) => {
+    const f = await captureFixture(t);
+    await f.capture({ processResult: { exitCode: 0, stdout: stream(f.review, items => items.splice(2, 0, ...rows)), stderr: "" } });
+    const state = JSON.parse(await readFile(f.statePath, "utf8"));
+    const evidence = JSON.parse(await readFile(artifactPath(f, ".capture.json"), "utf8"));
+    assert.equal(state.currentPhase, "INCOMPLETE");
+    assert.equal(evidence.evidenceGate.passed, false);
+    assert.ok(evidence.evidenceGate.reasons.includes("tool_readonly_not_proven"));
+  });
+}
+
+test("reviewer skill allowlist matches the reviewer agent contract", async () => {
+  const contract = await readFile(new URL("../.qwen/agents/secondary-architecture-reviewer.md", import.meta.url), "utf8");
+  for (const skill of adapter.REVIEWER_SKILL_NAMES) assert.ok(contract.includes(`\`${skill}\``), skill);
+});
+
+test("text output cannot infer isolation or model evidence from CLI flags", async (t) => {
+  const f = await captureFixture(t);
+  await f.capture({ outputFormat: "text", commandArgs: ["--approval-mode", "plan", "--model", "claimed-model"],
+    processResult: { exitCode: 0, stdout: JSON.stringify(f.review), stderr: "" } });
+  const state = JSON.parse(await readFile(f.statePath, "utf8"));
+  const evidence = JSON.parse(await readFile(artifactPath(f, ".capture.json"), "utf8"));
+  assert.equal(state.currentPhase, "INCOMPLETE");
+  assert.equal(evidence.observed.model, null);
+  assert.equal(evidence.observed.approvalMode, null);
+});
+
+test("secret-bearing stderr is suppressed, hashed, and blocks advancement", async (t) => {
+  const f = await captureFixture(t);
+  const stderr = "Authorization: Bearer synthetic-secret-for-test-only";
+  await f.capture({ processResult: { exitCode: 0, stdout: stream(f.review), stderr } });
+  const evidenceText = await readFile(artifactPath(f, ".capture.json"), "utf8");
+  const evidence = JSON.parse(evidenceText);
+  assert.equal(evidence.hashes.stderr, sha(stderr));
+  assert.ok(evidenceText.includes("redactedForSecret"));
+  assert.ok(!evidenceText.includes("synthetic-secret-for-test-only"));
+  await assert.rejects(access(artifactPath(f, ".stderr.log")), /ENOENT/);
+  const state = JSON.parse(await readFile(f.statePath, "utf8"));
+  assert.equal(state.currentPhase, "INCOMPLETE");
+  assert.equal(state.latestArtifactRefs.reviewRawStderr, undefined);
+});
+
+test("secret-bearing review content is never persisted as result or raw stdout", async (t) => {
+  const f = await captureFixture(t);
+  f.review.summary = "Authorization: Bearer synthetic-secret-for-test-only";
+  const stdout = stream(f.review);
+  await assert.rejects(() => f.capture({ processResult: { exitCode: 0, stdout, stderr: "" } }));
+  await assert.rejects(access(artifactPath(f)), /ENOENT/);
+  await assert.rejects(access(artifactPath(f, ".stdout.ndjson")), /ENOENT/);
+  const evidence = JSON.parse(await readFile(artifactPath(f, ".capture.json"), "utf8"));
+  assert.equal(evidence.hashes.stdout, sha(stdout));
+  assert.equal(evidence.hashes.savedResult, null);
+  assert.equal(await readFile(f.statePath, "utf8"), JSON.stringify(f.state));
+});
+
+test("from-file CLI requires fresh matching artifact ID and preserves original review", async (t) => {
+  const f = await captureFixture(t);
+  const input = path.join(f.workspaceRoot, "input.json");
+  await writeFile(input, JSON.stringify(f.review));
+  const base = [path.resolve("tools/qwen-capture-adapter.mjs"), "--workspace-root", f.workspaceRoot,
+    "--change-id", f.review.changeId, "--run-id", f.review.runId, "--stage", f.review.stage, "--from-file", input];
+  for (const args of [[], ["--artifact-id", "../unsafe"], ["--artifact-id", "mismatched"]]) {
+    const result = spawnSync(process.execPath, [...base, ...args], { encoding: "utf8", windowsHide: true });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /artifact.?id/i);
+    assert.equal(await readFile(f.statePath, "utf8"), JSON.stringify(f.state));
+  }
+  const accepted = spawnSync(process.execPath, [...base, "--artifact-id", f.review.artifactId], { encoding: "utf8", windowsHide: true });
+  assert.equal(accepted.status, 0, accepted.stderr);
+  const before = sha(await readFile(artifactPath(f)));
+  const duplicate = spawnSync(process.execPath, [...base, "--artifact-id", f.review.artifactId], { encoding: "utf8", windowsHide: true });
+  assert.equal(duplicate.status, 1);
+  assert.equal(sha(await readFile(artifactPath(f))), before);
+  const state = JSON.parse(await readFile(f.statePath, "utf8"));
+  assert.equal(state.currentPhase, "INCOMPLETE");
+});
+
+test("an artifact write failure rolls back all prior new artifacts", async (t) => {
+  const f = await captureFixture(t);
+  const originalWriteFile = fsPromises.writeFile;
+  let writes = 0;
+  const mocked = t.mock.method(fsPromises, "writeFile", async (...args) => {
+    if (String(args[0]).includes(`${path.sep}artifacts${path.sep}`) && ++writes === 3) throw new Error("injected artifact write failure");
+    return originalWriteFile(...args);
+  });
+  syncBuiltinESMExports();
+  try { await assert.rejects(f.capture, /injected artifact write failure/); }
+  finally { mocked.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(await readFile(f.statePath, "utf8"), JSON.stringify(f.state));
+  const dir = path.join(path.dirname(f.statePath), "artifacts");
+  assert.deepEqual(await readdir(dir), []);
+});
+
+async function writeSettings(workspaceRoot, scope, text) {
+  const file = {
+    workspace: path.join(workspaceRoot, ".qwen", "settings.json"),
+    user: path.join(workspaceRoot, "qwen-home", "settings.json"),
+    system: path.join(workspaceRoot, "qwen-system", "settings.json"),
+    "system-defaults": path.join(workspaceRoot, "qwen-system", "system-defaults.json"),
+  }[scope];
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, text);
+}
+async function captureEvidence(f, overrides = {}) {
+  await f.capture(overrides);
+  return JSON.parse(await readFile(artifactPath(f, ".capture.json"), "utf8"));
+}
+
+test("a pinned launch with clean settings verifies the provider and records only the host", async (t) => {
+  const f = await captureFixture(t);
+  await writeSettings(f.workspaceRoot, "workspace", `{
+    // comments are allowed, and "//" inside strings must survive
+    "tools": { "approvalMode": "plan" },
+    "modelProviders": { "openai": [{ "id": "other-model", "baseUrl": "https://other.example.test/v1" }] }
+  }`);
+  const evidence = await captureEvidence(f);
+  assert.equal(evidence.evidenceGate.passed, true);
+  assert.equal(evidence.observed.provider.verified, true);
+  assert.equal(evidence.observed.provider.baseUrlHost, "provider.fixture.test");
+  assert.equal(evidence.observed.provider.wireObserved, false);
+  assert.ok(!evidence.observed.notObserved.includes("provider"));
+  const text = JSON.stringify(evidence);
+  assert.ok(!text.includes(PINNED_PROVIDER.baseUrl), "the full base URL must not be recorded");
+  assert.ok(!text.includes(f.workspaceRoot.replaceAll("\\", "\\\\")), "settings paths must not be recorded");
+});
+
+for (const [name, overrides] of [
+  ["no expected provider is supplied", { expectedProvider: null }],
+  ["the auth type flag is missing", t => ({ commandArgs: PINNED_ARGS.slice(2) })],
+  ["the base URL flag differs", { commandArgs: [...PINNED_ARGS.slice(0, 5), "https://elsewhere.test/v1"] }],
+  ["a pinned flag is repeated", { commandArgs: [...PINNED_ARGS, "--model", PINNED_PROVIDER.model] }],
+  ["qwen-oauth is expected", { expectedProvider: { ...PINNED_PROVIDER, authType: "qwen-oauth" },
+    commandArgs: ["--auth-type", "qwen-oauth", ...PINNED_ARGS.slice(2)] }],
+  ["the expected base URL is not a URL", { expectedProvider: { ...PINNED_PROVIDER, baseUrl: "not a url" },
+    commandArgs: [...PINNED_ARGS.slice(0, 5), "not a url"] }],
+]) {
+  test(`provider is unverified when ${name}`, async (t) => {
+    const f = await captureFixture(t);
+    const evidence = await captureEvidence(f, typeof overrides === "function" ? overrides(t) : overrides);
+    const state = JSON.parse(await readFile(f.statePath, "utf8"));
+    assert.equal(evidence.observed.provider.verified, false);
+    assert.ok(evidence.evidenceGate.reasons.includes("provider_not_verified"));
+    assert.equal(state.currentPhase, "INCOMPLETE");
+  });
+}
+
+test("equals-form flags pin the provider", async (t) => {
+  const f = await captureFixture(t);
+  const evidence = await captureEvidence(f, { commandArgs: [`--auth-type=${PINNED_PROVIDER.authType}`,
+    `--model=${PINNED_PROVIDER.model}`, `--openai-base-url=${PINNED_PROVIDER.baseUrl}`] });
+  assert.equal(evidence.observed.provider.verified, true);
+  assert.ok(evidence.argv.includes("--openai-base-url=[host:provider.fixture.test]"));
+});
+
+for (const [scope, text, conflict] of [
+  ["workspace", JSON.stringify({ modelProviders: { openai: [{ id: "fixture-model", baseUrl: "https://override.test/v1" }] } }), "workspace_model_provider_override"],
+  ["user", JSON.stringify({ modelProviders: { "custom-provider": [{ id: "fixture-model" }] } }), "user_model_provider_override"],
+  ["system", JSON.stringify({ modelProviders: { openai: [{ id: "$MODEL_FROM_ENV" }] } }), "system_model_provider_override"],
+  ["system-defaults", JSON.stringify({ modelProviders: { openai: [{ name: "no id" }] } }), "system-defaults_model_provider_override"],
+  ["user", JSON.stringify({ modelProviders: ["not", "an", "object"] }), "user_model_providers_unrecognized"],
+  ["workspace", JSON.stringify({ security: { auth: { enforcedType: "anthropic" } } }), "workspace_enforced_type_conflict"],
+  ["user", "{ \"broken\": ", "user_settings_unverifiable"],
+]) {
+  test(`provider is unverified when ${scope} settings could override the launch (${conflict})`, async (t) => {
+    const f = await captureFixture(t);
+    await writeSettings(f.workspaceRoot, scope, text);
+    const evidence = await captureEvidence(f);
+    assert.equal(evidence.observed.provider.verified, false);
+    assert.ok(evidence.observed.provider.conflicts.includes(conflict), JSON.stringify(evidence.observed.provider.conflicts));
+    assert.ok(evidence.evidenceGate.reasons.includes("provider_not_verified"));
+  });
+}
+
+test("a modelProviders entry for the model is accepted only with the identical base URL", async (t) => {
+  const f = await captureFixture(t);
+  await writeSettings(f.workspaceRoot, "user", JSON.stringify({ modelProviders: { openai: [
+    { id: PINNED_PROVIDER.model, baseUrl: PINNED_PROVIDER.baseUrl, envKey: "FIXTURE_KEY" }] } }));
+  assert.equal((await captureEvidence(f)).observed.provider.verified, true);
+
+  const g = await captureFixture(t);
+  await writeSettings(g.workspaceRoot, "user", JSON.stringify({ modelProviders: { openai: [
+    { id: PINNED_PROVIDER.model, baseUrl: `${PINNED_PROVIDER.baseUrl}/` }] } }));
+  assert.ok((await captureEvidence(g)).observed.provider.conflicts.includes("user_model_provider_override"));
+});
+
+test("a matching enforcedType does not block a pinned launch", async (t) => {
+  const f = await captureFixture(t);
+  await writeSettings(f.workspaceRoot, "user", JSON.stringify({ security: { auth: { enforcedType: "openai" } } }));
+  assert.equal((await captureEvidence(f)).observed.provider.verified, true);
+});
+
+test("the init model must match the pinned model", async (t) => {
+  const f = await captureFixture(t);
+  const evidence = await captureEvidence(f, { processResult: { exitCode: 0,
+    stdout: stream(f.review, rows => { rows[0].model = "substituted-model"; }), stderr: "" } });
+  assert.ok(evidence.evidenceGate.reasons.includes("model_differs_from_pinned_launch"));
+});
+
+test("from-file captures cannot verify the provider", async (t) => {
+  const f = await captureFixture(t);
+  const file = path.join(f.workspaceRoot, "capture.ndjson");
+  await writeFile(file, stream(f.review));
+  const evidence = await captureEvidence(f, { processResult: undefined, fromFile: file });
+  assert.ok(evidence.observed.provider.conflicts.some(conflict => conflict.startsWith("argv_")));
+  assert.equal(evidence.evidenceGate.passed, false);
+});
+
+test("settings paths follow Qwen 0.25.3", () => {
+  const root = path.resolve("workspace-root");
+  const home = path.resolve("home-dir");
+  const defaults = adapter.qwenSettingsPaths({ workspaceRoot: root, env: {}, platform: "win32", homedir: home });
+  assert.deepEqual(Object.fromEntries(defaults), {
+    system: "C:\\ProgramData\\qwen-code\\settings.json",
+    "system-defaults": path.join(path.dirname("C:\\ProgramData\\qwen-code\\settings.json"), "system-defaults.json"),
+    user: path.join(home, ".qwen", "settings.json"),
+    workspace: path.join(root, ".qwen", "settings.json"),
+  });
+  const overridden = Object.fromEntries(adapter.qwenSettingsPaths({ workspaceRoot: root, platform: "linux", homedir: home,
+    env: { QWEN_HOME: "~/custom-qwen", QWEN_CODE_SYSTEM_SETTINGS_PATH: "/opt/qwen/settings.json",
+      QWEN_CODE_SYSTEM_DEFAULTS_PATH: "/opt/qwen/defaults.json" } }));
+  assert.equal(overridden.user, path.join(home, "custom-qwen", "settings.json"));
+  assert.equal(overridden.system, "/opt/qwen/settings.json");
+  assert.equal(overridden["system-defaults"], "/opt/qwen/defaults.json");
+  assert.equal(Object.fromEntries(adapter.qwenSettingsPaths({ workspaceRoot: root, env: {}, platform: "linux", homedir: home })).system,
+    "/etc/qwen-code/settings.json");
 });

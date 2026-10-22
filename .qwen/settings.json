@@ -3,17 +3,47 @@
     "name": "qwen3.7-plus"
   },
   "tools": {
-    "approvalMode": "plan"
+    "approvalMode": "plan",
+    "toolSearch": {
+      "enabled": false
+    }
   },
   "permissions": {
     "deny": [
-      "WebFetch"
+      "WebFetch",
+      "write_file",
+      "edit",
+      "notebook_edit",
+      "run_shell_command",
+      "monitor",
+      "save_memory",
+      "manage_memory",
+      "update_goal",
+      "report_findings",
+      "tool_call",
+      "todo_write",
+      "exit_plan_mode",
+      "enter_worktree",
+      "exit_worktree",
+      "cron_create",
+      "cron_delete",
+      "loop_wakeup",
+      "create_sub_session",
+      "task_create",
+      "task_update",
+      "task_stop",
+      "team_create",
+      "team_delete",
+      "team_plan_approval",
+      "send_message",
+      "workflow",
+      "artifact",
+      "record_artifact"
     ],
     "allow": [
       "Agent(secondary-architecture-reviewer)",
-      "Write",
-      "Edit",
-      "Bash"
+      "Skill(openspec-workflow-router)",
+      "Skill(secondary-architecture-reviewer)"
     ]
   },
   "memory": {
