@@ -62,12 +62,49 @@ Chat Gun is a full-stack agent chat application built with React, TypeScript, an
 
 ## Architecture
 
-```text
-Browser
-  -> frontend: Vite + React 19 + TypeScript
-  -> bff: Node.js + TypeScript
-  -> backend: LangGraph JS + TypeScript
-  -> Model Provider / Native Tools / MCP Tools
+This diagram shows the layers a request passes through from the browser to the model provider, and where observability attaches.
+
+```mermaid
+flowchart LR
+  B["Browser"]
+  F["Frontend<br/>Vite + React 19"]
+  G["BFF<br/>Auth · CORS · Rate limit · Timeout"]
+  L["LangGraph Agent Server"]
+  A1["deep_researcher"]
+  A2["chatbot"]
+  A3["math_agent"]
+  A4["mcp_agent"]
+  GW["LLM Gateway"]
+  Q["Qwen"]
+  O["OpenAI-compatible"]
+  C["CCR"]
+  TR["Tool Registry<br/>X14 dispatch"]
+  NT["Native tools"]
+  MT["MCP servers"]
+  OT["OpenTelemetry"]
+  OP["Opik"]
+
+  B --> F
+  F -->|"/api/langgraph/*"| G
+  G --> L
+  L --> A1
+  L --> A2
+  L --> A3
+  L --> A4
+  A1 --> GW
+  A2 --> GW
+  A3 --> GW
+  A4 --> GW
+  GW --> Q
+  GW --> O
+  GW --> C
+  A1 --> TR
+  A3 --> TR
+  A4 --> TR
+  TR --> NT
+  TR --> MT
+  L -.->|"spans"| OT
+  L -.->|"traces / evals"| OP
 ```
 
 | Directory | Purpose | Default local port |
