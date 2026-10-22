@@ -16,9 +16,10 @@ At the start of every task in this repository:
 3. If CurrentState exists, use `currentPhase` as the source of truth and verify `currentOwner`; reject a conflicting requested stage.
 4. Select exactly one stage and read only that reference.
 5. Read only artifacts named by `latestArtifactRefs` or the current Handoff `requiredInputRefs`.
-6. If CurrentState is missing, only CCR may initialize it during `plan-change`; every other role or stage must stop.
+6. If CurrentState is missing, only CCR may initialize it during `plan-change`, or Codex acting as `planning_secondary` under a valid Master authorization (`rolePolicyVersion: "2"`); every other role or stage must stop.
 7. If it is not a lifecycle task, keep the context policy below in force and continue with the normal project rules.
 8. If another host owns the stage, produce the handoff prompt or perform only the requested role.
+9. Under `rolePolicyVersion: "2"`, Codex acts outside its primary domain (planning/coordination) only with a valid Master authorization whose changeId/runId/handoffId match CurrentState and whose `writeScope` covers the target. Codex must never accept an implementation it produced unless the authorization grants `self_acceptance` for the current task. Never write `.agent-runtime/master-authorization.json`.
 
 ## Context Policy
 

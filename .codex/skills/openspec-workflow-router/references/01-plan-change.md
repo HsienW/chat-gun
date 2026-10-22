@@ -39,7 +39,7 @@ Use this prompt when a requirement is not yet formalized as an OpenSpec change.
 
 ## Artifact Contract
 
-- **Input**：目前 Change 的 CurrentState；不存在時只有 CCR 可初始化。
+- **Input**：目前 Change 的 CurrentState；不存在時只有 CCR 可初始化，或在 `rolePolicyVersion: "2"` 下持有有效 Master 授權的 Codex（planning_secondary）可初始化。
 - **Output**：proposal/design/tasks、`artifacts/coordinator-result.json`、`artifacts/handoff.json`。
 - **State Transition**：`PLAN_DRAFT` → `PLAN_REVIEW`，owner → Qwen。
 - **Validation**：Result／Handoff 通過 Schema，References 使用安全相對路徑。

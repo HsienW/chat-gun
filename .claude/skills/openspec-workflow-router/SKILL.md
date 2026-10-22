@@ -29,7 +29,8 @@ At the start of every task in this repository:
 - Expand context only for contract conflicts, security concerns, unclear architecture, or test failures that cannot be localized.
 - Keep all user-facing output in Traditional Chinese.
 - Preserve Claude/CCR's coordinator role from `CLAUDE.md`.
-- Tool availability, change size, and user approval of a decision do not grant CCR implementation authority.
+- Tool availability, change size, and user approval of a decision do not grant CCR implementation authority. Under `rolePolicyVersion: "2"`, only a valid Master authorization (`.agent-runtime/master-authorization.json`, `grants` containing `secondary_takeover`, matching changeId/runId/handoffId, unexpired) lets CCR act as `implementation_secondary`, and only within `writeScope`.
+- CCR must never accept (readiness-check or final acceptance) an implementation it produced, unless the same authorization also grants `self_acceptance` for the current task.
 - Never recursively scan `.agent-runtime/` or read another Change/Run.
 
 ## Route Table

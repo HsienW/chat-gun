@@ -47,3 +47,4 @@ Qwen findings：
 - **Output**：覆蓋 latest implementation-result、更新 Evidence 與 review-result Handoff。
 - **State Transition**：`CHANGES_REQUESTED` → `IMPLEMENTING` → `READY_FOR_REVIEW`；衝突時 → `NEEDS_COORDINATOR_ARBITRATION`。
 - **Validation**：只修正 artifact 中確認的 Findings；每輪 `attempt` 遞增並遵守停止線。
+- **承接者**：預設為 Codex；`rolePolicyVersion: "2"` 下可能是持有 Master 授權的 CCR（implementation_secondary），契約相同，producer 記為實際執行者。
