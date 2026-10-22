@@ -1,11 +1,36 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { constants as fsConstants } from "node:fs";
-import { access, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { constants as fsConstants, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { randomUUID } from "node:crypto";
+import { access, mkdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 import process from "node:process";
+
+// This repository tool uses the validator installed with the backend tooling.
+// Resolve from the adapter location, not the possibly temporary capture workspace.
+const requireBackend = createRequire(new URL("../backend/package.json", import.meta.url));
+const Ajv = requireBackend("ajv/dist/2020.js").default;
+const ajv = new Ajv({ strict: false, allErrors: true });
+requireBackend("ajv-formats")(ajv);
+const contractRoot = new URL("../openspec/changes/archive/2026-06-29-add-agent-artifact-shared-state-handoff/specs/", import.meta.url);
+const contractValidators = new Map();
+for (const name of ["current-state", "handoff", "agent-result"]) {
+  contractValidators.set(name, ajv.compile(JSON.parse(readFileSync(
+    new URL(`${name}-contract/${name}.schema.json`, contractRoot), "utf8",
+  ))));
+}
+
+function validateContract(name, value) {
+  const validate = contractValidators.get(name);
+  if (!validate(value)) {
+    // Schema locations are useful diagnostics; never echo input values.
+    const errors = validate.errors.map(error => `${error.instancePath || "/"}: ${error.message}`).join("; ");
+    throw new Error(`${name} schema validation failed: ${errors}`);
+  }
+}
 
 const DEFAULT_STAGE = "review-result";
 const EXPECTED_KIND = "review_result";
@@ -22,7 +47,6 @@ const VALID_CURRENT_STATE_PHASES = new Set([
   "IMPLEMENTING",
   "READY_FOR_REVIEW",
   "REVIEWING",
-  "REVIEW_RESULT",
   "CHANGES_REQUESTED",
   "NEEDS_COORDINATOR_ARBITRATION",
   "READY_FOR_READINESS_CHECK",
@@ -214,6 +238,7 @@ export function validateReviewResult(
 
   validateVerification(value.verification);
   validateReviewPayload(value.payload);
+  validateContract("agent-result", value);
 
   return value;
 }
@@ -231,14 +256,14 @@ export async function captureQwenReviewResult({
   validatePathSegment("changeId", changeId);
   requireNonEmptyString("runId", runId);
   requireNonEmptyString("stage", stage);
+  if (stage !== "review-plan" && stage !== "review-result") throw new Error(`Unsupported review stage: ${stage}`);
 
   const root = path.resolve(workspaceRoot);
   const runtimeDir = path.join(root, ".agent-runtime", changeId);
   const artifactsDir = path.join(runtimeDir, "artifacts");
   const currentStatePath = path.join(runtimeDir, "current-state.json");
   const artifactPath = path.join(artifactsDir, "review-result.json");
-  const artifactTempPath = `${artifactPath}.${process.pid}.${Date.now()}.tmp`;
-  const currentStateTempPath = `${currentStatePath}.${process.pid}.${Date.now()}.tmp`;
+  const handoffPath = path.join(artifactsDir, "review-handoff.json");
 
   ensureInside(root, runtimeDir);
   ensureInside(root, artifactsDir);
@@ -263,6 +288,10 @@ export async function captureQwenReviewResult({
   });
 
   const currentState = await readCurrentState(currentStatePath, { expectedChangeId: changeId, expectedRunId: runId });
+  const reviewPhases = stage === "review-plan" ? ["PLAN_REVIEW"] : ["READY_FOR_REVIEW", "REVIEWING"];
+  if (currentState.currentOwner !== "Qwen" || !reviewPhases.includes(currentState.currentPhase)) {
+    throw new Error("CurrentState review owner/phase does not authorize capture.");
+  }
   const updatedState = applyVerdictTransition(currentState, reviewResult, {
     changeId,
     runId,
@@ -270,13 +299,32 @@ export async function captureQwenReviewResult({
     now,
   });
 
+  const handoff = buildHandoff(currentState, updatedState, reviewResult);
+  updatedState.latestArtifactRefs.handoff = {
+    artifactId: handoff.handoffId, changeId, runId, kind: "handoff",
+    relativePath: toPosixPath(path.relative(root, handoffPath)),
+  };
+  validateContract("handoff", handoff);
+  validateCanonicalCurrentState(updatedState, { expectedChangeId: changeId, expectedRunId: runId });
+  for (const ref of handoff.requiredInputRefs) {
+    validateArtifactPath(ref, changeId);
+    const inputPath = path.resolve(root, ref.relativePath);
+    ensureInside(root, inputPath);
+    if (ref.artifactId === reviewResult.artifactId && inputPath === artifactPath) continue;
+    await access(inputPath, fsConstants.R_OK);
+    ensureInside(await realpath(root), await realpath(inputPath));
+  }
+
   await mkdir(artifactsDir, { recursive: true });
-  await writeJsonAtomic(artifactPath, artifactTempPath, reviewResult);
-  await writeJsonAtomic(currentStatePath, currentStateTempPath, updatedState);
+  // Publish the state last, after all referenced documents have been staged.
+  await writeCapture([
+    [artifactPath, reviewResult], [handoffPath, handoff], [currentStatePath, updatedState],
+  ]);
 
   return {
     artifactPath,
     currentStatePath,
+    handoffPath,
     artifactReference: updatedState.latestArtifactRefs.reviewResult,
   };
 }
@@ -285,7 +333,9 @@ function applyVerdictTransition(currentState, reviewResult, { changeId, runId, r
   const verdict = reviewResult.payload.verdict;
   const stage = reviewResult.stage;
   const transition = resolveTransition(verdict, stage);
-  const stageHandoff = buildStageHandoff(verdict, stage);
+  const stageHandoff = buildStageHandoff(verdict, stage) ?? {
+    stage: "readiness-check", from: "Qwen", to: "CCR", status: transition.handoffStatus,
+  };
 
   return {
     ...currentState,
@@ -302,19 +352,10 @@ function applyVerdictTransition(currentState, reviewResult, { changeId, runId, r
         relativePath,
       },
     },
-    latestHandoff: stageHandoff
-      ? {
-          handoffId: `handoff-${changeId}-${stageHandoff.from.toLowerCase()}-to-${stageHandoff.to.toLowerCase()}-${stageHandoff.stage}-${Date.now()}`,
-          stage: stageHandoff.stage,
-          from: stageHandoff.from,
-          to: stageHandoff.to,
-          reason: `Qwen ${stage} verdict=${verdict}; ${verdict === "REQUEST_CHANGES" ? "退回修訂" : "推進下一阶段"}`,
-          status: stageHandoff.status,
-        }
-      : {
-          ...currentState.latestHandoff,
-          status: transition.handoffStatus,
-        },
+    latestHandoff: {
+      handoffId: `handoff-${changeId}-${randomUUID()}`,
+      ...stageHandoff,
+    },
     gateStatus: {
       ...currentState.gateStatus,
       reviewPassed: transition.reviewPassed,
@@ -323,6 +364,38 @@ function applyVerdictTransition(currentState, reviewResult, { changeId, runId, r
     nextActions: buildNextActions(verdict, reviewResult),
     updatedAt: now().toISOString(),
   };
+}
+
+function buildHandoff(currentState, updatedState, reviewResult) {
+  const identity = updatedState.latestHandoff;
+  const reviewRef = updatedState.latestArtifactRefs.reviewResult;
+  const requiredInputRefs = [reviewRef];
+  for (const ref of reviewResult.inputRefs) {
+    if (!requiredInputRefs.some(input => input.artifactId === ref.artifactId)) requiredInputRefs.push(ref);
+  }
+  const implementation = identity.to === "Codex";
+  return {
+    schemaVersion: "1.0.0", ...identity,
+    changeId: currentState.changeId, runId: currentState.runId,
+    reason: `Qwen ${reviewResult.stage}: ${reviewResult.payload.verdict}. Follow CurrentState owner and gates before execution.`,
+    requiredInputRefs,
+    expectedOutputKind: implementation ? "implementation_result" : "coordinator_result",
+    onSuccess: {
+      nextStage: implementation ? "READY_FOR_REVIEW" : "NEEDS_COORDINATOR_ARBITRATION",
+      nextOwner: implementation ? "Qwen" : "CCR",
+    },
+    onFailure: { nextStage: "NEEDS_COORDINATOR_ARBITRATION", nextOwner: "CCR" },
+    requiresHumanApproval: false,
+    createdAt: updatedState.updatedAt,
+  };
+}
+
+function validateArtifactPath(ref, changeId) {
+  if (ref.changeId !== changeId || ref.relativePath.includes("..") || ref.relativePath.includes("\\")
+      || !(ref.relativePath.startsWith(`openspec/changes/${changeId}/`) || ref.relativePath.startsWith(`.agent-runtime/${changeId}/`))
+      || path.isAbsolute(ref.relativePath)) {
+    throw new Error("Invalid handoff input reference.");
+  }
 }
 
 function buildBlockerEntries(reviewResult, changeId, runId, existingBlockers) {
@@ -346,7 +419,8 @@ function buildBlockerEntries(reviewResult, changeId, runId, existingBlockers) {
 
   for (const finding of reviewResult.payload.findings.major) {
     entries.push({
-      severity: "Major",
+      // CurrentState records blocking work; the original review retains Major.
+      severity: "Blocker",
       description: finding.description ?? finding.summary ?? JSON.stringify(finding),
       source: `${reviewResult.artifactId}:major:${finding.id ?? finding.title ?? ""}`,
       status: "unresolved",
@@ -435,6 +509,8 @@ function validateCanonicalCurrentState(currentState, { expectedChangeId, expecte
     throw new Error("current-state.json attempt must be a positive integer.");
   }
 
+  validateContract("current-state", currentState);
+
   return currentState;
 }
 
@@ -455,17 +531,41 @@ async function readCurrentState(currentStatePath, { expectedChangeId, expectedRu
   return validateCanonicalCurrentState(currentState, { expectedChangeId, expectedRunId });
 }
 
-async function writeJsonAtomic(finalPath, tempPath, value) {
-  await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf8",
-    flag: "wx",
-  });
-
+async function writeCapture(entries) {
+  const pending = [];
+  const published = [];
   try {
-    await rename(tempPath, finalPath);
+    // Read every previous value before creating any staging file.
+    for (const [finalPath, value] of entries) {
+      let previous;
+      try { previous = await readFile(finalPath); }
+      catch (error) { if (error.code !== "ENOENT") throw error; }
+      pending.push({ finalPath, value, previous, tempPath: `${finalPath}.${randomUUID()}.tmp` });
+    }
+    for (const item of pending) {
+      await writeFile(item.tempPath, `${JSON.stringify(item.value, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+    }
+    for (const item of pending) {
+      await rename(item.tempPath, item.finalPath);
+      published.push(item);
+    }
   } catch (error) {
-    await unlink(tempPath).catch(() => {});
+    const failures = [error];
+    for (const item of published.reverse()) {
+      try {
+        if (item.previous === undefined) await unlink(item.finalPath);
+        else {
+          await writeFile(item.tempPath, item.previous, { flag: "wx" });
+          await rename(item.tempPath, item.finalPath);
+        }
+      } catch (rollbackError) { failures.push(rollbackError); }
+    }
+    if (failures.length > 1) throw new AggregateError(failures, "Capture failed and rollback was incomplete.");
     throw error;
+  } finally {
+    for (const item of pending) {
+      await unlink(item.tempPath).catch(error => { if (error.code !== "ENOENT") throw error; });
+    }
   }
 }
 
@@ -750,6 +850,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
           ok: true,
           artifactPath: result.artifactPath,
           artifactReference: result.artifactReference,
+          handoffPath: result.handoffPath,
         },
         null,
         2,

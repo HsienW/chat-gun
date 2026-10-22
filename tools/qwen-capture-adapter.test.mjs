@@ -1,14 +1,149 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import fsPromises, { access, mkdir, mkdtemp, readFile, rm, writeFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 
 import {
   captureQwenReviewResult,
   extractJsonObjectFromOutput,
   validateReviewResult,
 } from "./qwen-capture-adapter.mjs";
+
+// Independent validator for the repository's canonical contracts.
+const requireBackend = createRequire(new URL("../backend/package.json", import.meta.url));
+const Ajv = requireBackend("ajv/dist/2020.js").default;
+const ajv = new Ajv({ strict: false, allErrors: true });
+requireBackend("ajv-formats")(ajv);
+const contractRoot = new URL("../openspec/changes/archive/2026-06-29-add-agent-artifact-shared-state-handoff/specs/", import.meta.url);
+const contractValidators = {};
+for (const name of ["current-state", "handoff", "agent-result"]) {
+  contractValidators[name] = ajv.compile(JSON.parse(await readFile(
+    new URL(`${name}-contract/${name}.schema.json`, contractRoot), "utf8",
+  )));
+}
+
+async function captureFixture(t, stage = "review-plan") {
+  const workspaceRoot = await mkdtemp(path.join(tmpdir(), "qwen-contract-"));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+  const review = validReviewResult({ changeId: "contract-test", runId: "run-contract", stage });
+  const state = {
+    schemaVersion: "1.0.0", changeId: review.changeId, runId: review.runId,
+    currentPhase: stage === "review-plan" ? "PLAN_REVIEW" : "REVIEWING", currentOwner: "Qwen",
+    attempt: 1, latestArtifactRefs: {},
+    latestHandoff: { handoffId: "input", stage, from: "CCR", to: "Qwen", status: "PENDING" },
+    gateStatus: { proposalApproved: false, reviewPassed: false, implementationVerified: false, readinessConfirmed: false },
+    blockers: [], nextActions: [], updatedAt: review.createdAt, terminalStatus: "NON_TERMINAL",
+  };
+  const statePath = path.join(workspaceRoot, ".agent-runtime", review.changeId, "current-state.json");
+  await mkdir(path.dirname(statePath), { recursive: true });
+  await writeFile(statePath, JSON.stringify(state));
+  return { workspaceRoot, state, statePath, review, capture: () => captureQwenReviewResult({
+    workspaceRoot, changeId: review.changeId, runId: review.runId, stage,
+    processResult: { exitCode: 0, stdout: JSON.stringify(review), stderr: "" },
+  }) };
+}
+
+for (const stage of ["review-plan", "review-result"]) {
+  for (const verdict of ["APPROVE", "COMMENT_ONLY", "REQUEST_CHANGES", "INCOMPLETE"]) {
+    test(`${stage}/${verdict} publishes canonical state and a matching physical handoff`, async (t) => {
+      const f = await captureFixture(t, stage);
+      f.review.payload.verdict = verdict;
+      if (verdict === "REQUEST_CHANGES") f.review.payload.findings.major.push({ id: "major-1", description: "Needs correction" });
+      await f.capture();
+      const state = JSON.parse(await readFile(f.statePath, "utf8"));
+      assert.ok(contractValidators["current-state"](state), JSON.stringify(contractValidators["current-state"].errors));
+      const ref = state.latestArtifactRefs.handoff;
+      assert.ok(ref, "physical handoff must be referenced");
+      const handoff = JSON.parse(await readFile(path.join(f.workspaceRoot, ref.relativePath), "utf8"));
+      assert.ok(contractValidators.handoff(handoff), JSON.stringify(contractValidators.handoff.errors));
+      assert.equal(ref.artifactId, handoff.handoffId);
+      assert.equal(handoff.changeId, state.changeId);
+      assert.equal(handoff.runId, state.runId);
+      for (const key of ["handoffId", "stage", "from", "to", "status"]) assert.equal(state.latestHandoff[key], handoff[key]);
+      assert.ok(handoff.requiredInputRefs.some(r => r.artifactId === f.review.artifactId));
+      for (const input of handoff.requiredInputRefs) await access(path.join(f.workspaceRoot, input.relativePath));
+      assert.equal(state.gateStatus.proposalApproved, false, "capture must not grant coordinator approval");
+    });
+  }
+}
+
+for (const mutation of [
+  state => { state.latestHandoff.reason = "not allowed in reference"; },
+  state => { state.gateStatus.reviewPassed = "yes"; },
+  state => { state.attempt = 1.5; },
+]) {
+  test("malformed nested state is rejected without writing artifacts", async (t) => {
+    const f = await captureFixture(t);
+    mutation(f.state);
+    const before = JSON.stringify(f.state);
+    await writeFile(f.statePath, before);
+    await assert.rejects(f.capture);
+    assert.equal(await readFile(f.statePath, "utf8"), before);
+    await assert.rejects(access(path.join(path.dirname(f.statePath), "artifacts")), /ENOENT/);
+  });
+}
+
+test("invalid review envelope is rejected before overwriting existing artifacts", async (t) => {
+  const f = await captureFixture(t);
+  f.review.verification.passed.push({ invalid: "not a string" });
+  const artifact = path.join(path.dirname(f.statePath), "artifacts", "review-result.json");
+  await mkdir(path.dirname(artifact));
+  await writeFile(artifact, "original");
+  await assert.rejects(f.capture);
+  assert.equal(await readFile(artifact, "utf8"), "original");
+});
+
+test("missing or unsafe handoff inputs do not publish state", async (t) => {
+  const f = await captureFixture(t);
+  for (const relativePath of [".agent-runtime/contract-test/artifacts/missing.json", "../outside.json"]) {
+    f.review.inputRefs = [{ artifactId: "missing", changeId: f.review.changeId, runId: f.review.runId, kind: "evidence", relativePath }];
+    await assert.rejects(f.capture);
+    assert.equal(await readFile(f.statePath, "utf8"), JSON.stringify(f.state));
+  }
+});
+
+test("unapproved owner or phase cannot be advanced by capture", async (t) => {
+  const f = await captureFixture(t);
+  for (const patch of [{ currentOwner: "CCR" }, { currentPhase: "INCOMPLETE" }]) {
+    const before = JSON.stringify({ ...f.state, ...patch });
+    await writeFile(f.statePath, before);
+    await assert.rejects(f.capture, /review owner\/phase/);
+    assert.equal(await readFile(f.statePath, "utf8"), before);
+  }
+});
+
+test("state publication failure restores both prior artifacts and removes staging files", async (t) => {
+  const f = await captureFixture(t);
+  const artifactsDir = path.join(path.dirname(f.statePath), "artifacts");
+  await mkdir(artifactsDir);
+  const reviewPath = path.join(artifactsDir, "review-result.json");
+  const handoffPath = path.join(artifactsDir, "review-handoff.json");
+  await writeFile(reviewPath, "previous review");
+  await writeFile(handoffPath, "previous handoff");
+  const rename = fsPromises.rename;
+  let injected = false;
+  const mocked = t.mock.method(fsPromises, "rename", async (source, destination) => {
+    if (destination === f.statePath && !injected) {
+      injected = true;
+      throw new Error("injected publication failure");
+    }
+    return rename(source, destination);
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(f.capture, /injected publication failure/);
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+  }
+  assert.equal(await readFile(f.statePath, "utf8"), JSON.stringify(f.state));
+  assert.equal(await readFile(reviewPath, "utf8"), "previous review");
+  assert.equal(await readFile(handoffPath, "utf8"), "previous handoff");
+  assert.deepEqual((await readdir(artifactsDir)).sort(), ["review-handoff.json", "review-result.json"]);
+  assert.ok(!(await readdir(path.dirname(f.statePath))).some(file => file.endsWith(".tmp")));
+});
 
 function validReviewResult(overrides = {}) {
   return {
@@ -517,7 +652,10 @@ test("captureQwenReviewResult transitions to CHANGES_REQUESTED on REQUEST_CHANGE
     assert.equal(updatedState.blockers.length, 2);
     assert.ok(updatedState.blockers.some((b) => b.description === "Cross-layer contract broken"));
     assert.ok(updatedState.blockers.some((b) => b.description === "Missing error handling"));
-    assert.ok(updatedState.blockers.every((b) => b.severity !== "Blocker" || b.source.includes(":blocker:")));
+    assert.ok(updatedState.blockers.every((b) => b.severity === "Blocker"));
+    assert.ok(updatedState.blockers.some((b) => b.source.includes(":major:")));
+    const preservedReview = JSON.parse(await readFile(path.join(path.dirname(currentStatePath), "artifacts", "review-result.json"), "utf8"));
+    assert.equal(preservedReview.payload.findings.major[0].severity, "Major");
     assert.ok(updatedState.nextActions.some((a) => a.includes("Codex 修正")));
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
@@ -673,7 +811,8 @@ test("captureQwenReviewResult review-plan REQUEST_CHANGES transitions to PLAN_DR
     assert.equal(updatedState.latestHandoff.to, "CCR");
     assert.equal(updatedState.latestHandoff.status, "PENDING");
     assert.equal(updatedState.blockers.length, 1);
-    assert.equal(updatedState.blockers[0].severity, "Major");
+    assert.equal(updatedState.blockers[0].severity, "Blocker");
+    assert.ok(updatedState.blockers[0].source.includes(":major:"));
     assert.ok(updatedState.nextActions.some((a) => a.includes("CCR")));
     assert.ok(updatedState.nextActions.some((a) => a.includes("PLAN_DRAFT")));
   } finally {
