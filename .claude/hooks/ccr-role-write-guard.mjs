@@ -19,6 +19,79 @@ const CURRENT_STATE_REQUIRED_FIELDS = [
   "terminalStatus",
 ];
 const CCR_RUNTIME_ARTIFACT_PATTERN = /^(?:coordinator-result(?:-[\w.-]+)?|readiness-result|handoff(?:-[\w.-]+)?)\.json$/u;
+const MASTER_AUTHORIZATION_PATH = ".agent-runtime/master-authorization.json";
+const ACTIVE_HANDOFF_STATUSES = new Set(["PENDING", "ACCEPTED", "IN_PROGRESS"]);
+const CCR_GUARD_PROTECTED_PATHS = [
+  ".claude/hooks/",
+  ".claude/settings.json",
+  ".claude/settings.local.json",
+  MASTER_AUTHORIZATION_PATH,
+];
+
+function isProtectedGuardPath(relativeTarget) {
+  return CCR_GUARD_PROTECTED_PATHS.some((entry) =>
+      entry.endsWith("/") ? relativeTarget.startsWith(entry) : relativeTarget === entry,
+  );
+}
+
+function isSafeScopeEntry(entry) {
+  return typeof entry === "string" && entry !== "" && !entry.includes("..") &&
+      !entry.startsWith("/") && !/^[A-Za-z]:/u.test(entry);
+}
+
+function isWithinWriteScope(relativeTarget, writeScope) {
+  return writeScope.every(isSafeScopeEntry) && writeScope.some((entry) =>
+      entry.endsWith("/") ? relativeTarget.startsWith(entry) : relativeTarget === entry,
+  );
+}
+
+async function resolveCcrImplementerGrant(workspaceRoot, now = Date.now()) {
+  let authorization;
+  try {
+    authorization = parseJsonObject(
+        await readFile(path.join(workspaceRoot, ...MASTER_AUTHORIZATION_PATH.split("/")), "utf8"),
+    );
+  } catch {
+    return null;
+  }
+  const expiresAt = Date.parse(authorization?.expiresAt);
+  if (
+      !authorization ||
+      authorization.rolePolicyVersion !== "2" ||
+      authorization.grantedBy !== "Master" ||
+      authorization.grantee !== "CCR" ||
+      authorization.actingRole !== "implementation_secondary" ||
+      !Array.isArray(authorization.grants) ||
+      !authorization.grants.includes("secondary_takeover") ||
+      typeof authorization.changeId !== "string" ||
+      !/^[\w.-]+$/u.test(authorization.changeId) ||
+      authorization.changeId.includes("..") ||
+      !Array.isArray(authorization.writeScope) ||
+      authorization.writeScope.length === 0 ||
+      Number.isNaN(expiresAt) ||
+      expiresAt <= now
+  ) {
+    return null;
+  }
+
+  const stateResult = await readCurrentState(workspaceRoot, authorization.changeId);
+  if (stateResult.status !== "valid") {
+    return null;
+  }
+  const state = stateResult.value;
+  const handoff = isRecord(state.latestHandoff) ? state.latestHandoff : {};
+  if (
+      state.runId !== authorization.runId ||
+      state.currentOwner !== "CCR" ||
+      state.terminalStatus !== "NON_TERMINAL" ||
+      handoff.handoffId !== authorization.handoffId ||
+      handoff.to !== "CCR" ||
+      !ACTIVE_HANDOFF_STATUSES.has(handoff.status)
+  ) {
+    return null;
+  }
+  return authorization;
+}
 
 function allow(reason) {
   return { decision: "allow", reason };
@@ -142,6 +215,15 @@ async function evaluateFileWrite(toolName, toolInput, workspaceRoot) {
     return deny("寫入路徑缺失、越界或無法驗證。");
   }
 
+  if (isProtectedGuardPath(target.relativeTarget)) {
+    return deny("CCR 不得修改自身寫入守門、宿主設定或 Master 授權。");
+  }
+
+  const implementerGrant = await resolveCcrImplementerGrant(workspaceRoot);
+  if (implementerGrant && isWithinWriteScope(target.relativeTarget, implementerGrant.writeScope)) {
+    return allow(`CCR 以 implementation_secondary 執行 ${implementerGrant.handoffId}（Master 授權 ${implementerGrant.authorizationId}）。`);
+  }
+
   const openSpecTarget = getOpenSpecChangeTarget(target.relativeTarget);
   if (openSpecTarget) {
     const currentStateResult = await readCurrentState(workspaceRoot, openSpecTarget.changeId);
@@ -217,8 +299,15 @@ export async function evaluateCcrToolUse(event, { workspaceRoot } = {}) {
   );
   const toolName = event.tool_name;
 
-  if (toolName === "Bash" || toolName === "NotebookEdit") {
-    return deny(`${toolName} 無法可靠證明不會繞過角色寫入邊界。`);
+  if (toolName === "Bash") {
+    const implementerGrant = await resolveCcrImplementerGrant(resolvedWorkspaceRoot);
+    return implementerGrant
+        ? allow(`CCR 以 implementation_secondary 執行 ${implementerGrant.handoffId}；Shell 交由一般權限確認。`)
+        : deny("Bash 無法可靠證明不會繞過角色寫入邊界。");
+  }
+
+  if (toolName === "NotebookEdit") {
+    return deny("NotebookEdit 無法可靠證明不會繞過角色寫入邊界。");
   }
 
   if (toolName.startsWith("mcp__")) {
@@ -257,14 +346,18 @@ async function main() {
     result = deny(`CCR 寫入守門發生錯誤：${error instanceof Error ? error.message : "unknown error"}。`);
   }
 
+  if (result.decision !== "deny") {
+    return;
+  }
+
   process.stdout.write(
-    `${JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: result.decision === "deny" ? "deny" : "defer",
-        permissionDecisionReason: result.reason,
-      },
-    })}\n`,
+      `${JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: result.reason,
+        },
+      })}\n`,
   );
 }
 
