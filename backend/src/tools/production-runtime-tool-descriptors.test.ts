@@ -12,7 +12,7 @@ describe("local production runtime tool descriptors", () => {
     const descriptorRegistry = createLocalRuntimeToolDescriptorRegistry();
     const profileRegistry = createLocalExecutionProfileRegistry();
 
-    expect(descriptorRegistry.list()).toHaveLength(5);
+    expect(descriptorRegistry.list()).toHaveLength(LOCAL_PRODUCTION_TOOL_NAMES.length);
     for (const descriptor of descriptorRegistry.list()) {
       expect(descriptor.executionProfileRef).toBeDefined();
       const profile = profileRegistry.resolve(descriptor.executionProfileRef!);

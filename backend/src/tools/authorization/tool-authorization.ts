@@ -35,6 +35,7 @@ import {
 export const LOCAL_PRODUCTION_TOOL_NAMES = [
   "calculator_tool",
   "current_weather",
+  "kb_search",
   "weather_forecast",
   "web_fetch",
   "web_search",
