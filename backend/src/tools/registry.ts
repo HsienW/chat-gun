@@ -21,6 +21,7 @@ import {
   LOCAL_PRODUCTION_TOOLS,
 } from "./production-runtime-tool-descriptors.js";
 import { stageCurrentWeatherSdkDescriptor } from "./sdk/current-weather-manifest-adapter.js";
+import { stageKbSearchSdkDescriptor } from "./sdk/kb-search-manifest-adapter.js";
 
 const PIPELINE_FLAG_BY_SOURCE = {
   math_agent: "TOOL_DISPATCH_PIPELINE_MATH_ENABLED",
@@ -81,6 +82,16 @@ export async function loadAgentToolRuntime(
   const profileRegistry = createLocalExecutionProfileRegistry();
   const localDescriptors = createLocalRuntimeToolDescriptors();
   const stagedDescriptors = await Promise.all(localDescriptors.map(async (descriptor) => {
+    if (descriptor.toolName === "kb_search") {
+      const tool = LOCAL_PRODUCTION_TOOLS.find((candidate) => candidate.name === descriptor.toolName);
+      if (tool === undefined) throw new Error("kb_search implementation is unavailable");
+      return stageKbSearchSdkDescriptor({
+        tool,
+        descriptor,
+        riskPolicy: authorization.riskRegistry.get(descriptor.toolName),
+        profileRegistry,
+      });
+    }
     if (descriptor.toolName !== "current_weather" || options.currentWeatherRegistration === "legacy") {
       return descriptor;
     }
@@ -104,6 +115,7 @@ export async function loadAgentToolRuntime(
         references: {
           "env:TAVILY_API_KEY": "TAVILY_API_KEY",
           "env:BRAVE_API_KEY": "BRAVE_API_KEY",
+          "env:QWEN_API_KEY": "QWEN_API_KEY",
         },
       }),
       isEnabled: () =>

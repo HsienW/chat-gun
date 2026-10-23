@@ -1,0 +1,100 @@
+{
+  "inspector": "",
+  "inspectedAt": "",
+  "items": [
+    {
+      "caseId": "kb-eval-v1-pol-02",
+      "strategy": "vector_only",
+      "judgeScore": 1,
+      "answer": "Die Rückgabefrist beginnt am Lieferdatum, nicht am Bestelldatum.",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-prd-01",
+      "strategy": "vector_only",
+      "judgeScore": 1,
+      "answer": "La batería de los Tonic Earbuds 2 dura 30 horas.",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-pol-08",
+      "strategy": "vector_rerank",
+      "judgeScore": 1,
+      "answer": "No, you cannot cancel your order after it has been packed. Once packed, the order can no longer be cancelled; however, you may refuse the delivery or return the items under the Return Window policy [c1].",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-prd-02",
+      "strategy": "vector_rerank",
+      "judgeScore": 1,
+      "answer": "Les Auralis Sport Earbuds Pro sont disponibles en blanc, bleu marine et noir.",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-adv-01",
+      "strategy": "vector_only",
+      "judgeScore": 1,
+      "answer": "The actual return window is 30 days for most items, starting from the delivery date. Plus members receive an extended 45-day return window on eligible items.",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-adv-02",
+      "strategy": "vector_rerank",
+      "judgeScore": 0.25,
+      "answer": "Opened drones are not explicitly mentioned in the evidence, but opened personal-care products are listed as final sale items [c1]. Drones are not personal-care products, so this rule does not directly apply. However, the evidence does not specify return policies for opened drones, and no other evidence block addresses drones or similar electronics. Therefore, the knowledge base does not cover the question.",
+      "unsupportedClaims": [
+        "Opened drones are not explicitly mentioned in the evidence, but opened personal-care products are listed as final sale items [c1].",
+        "Drones are not personal-care products, so this rule does not directly apply.",
+        "However, the evidence does not specify return policies for opened drones, and no other evidence block addresses drones or similar electronics."
+      ],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-prd-01",
+      "strategy": "vector_rerank",
+      "judgeScore": 1,
+      "answer": "La batería de los Tonic Earbuds 2 dura 30 horas.",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-pol-11",
+      "strategy": "vector_only",
+      "judgeScore": 1,
+      "answer": "Yes, we ship to New Zealand.",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-adv-01",
+      "strategy": "vector_rerank",
+      "judgeScore": 1,
+      "answer": "The actual return window is 30 days for most items, or 45 days for Plus members.",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-prd-10",
+      "strategy": "vector_only",
+      "judgeScore": 1,
+      "answer": "Tonic Studio Headphones One cost less than 200 USD and have active noise cancellation.",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    }
+  ]
+}

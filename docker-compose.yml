@@ -1,6 +1,8 @@
 volumes:
   langgraph-data:
     driver: local
+  knowledge-data:
+    driver: local
 services:
   langgraph-redis:
     image: docker.io/redis:6
@@ -25,6 +27,23 @@ services:
       timeout: 1s
       retries: 5
       interval: 5s
+  # Derived knowledge index (X42). Kept separate from the orchestration checkpoint store.
+  knowledge-postgres:
+    image: docker.io/pgvector/pgvector:pg16
+    ports:
+      - '5434:5432'
+    environment:
+      POSTGRES_DB: knowledge
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - knowledge-data:/var/lib/postgresql/data
+    healthcheck:
+      test: pg_isready -U postgres -d knowledge
+      start_period: 10s
+      timeout: 1s
+      retries: 5
+      interval: 5s
   langgraph-api:
     build:
       context: .
@@ -37,6 +56,8 @@ services:
       langgraph-redis:
         condition: service_healthy
       langgraph-postgres:
+        condition: service_healthy
+      knowledge-postgres:
         condition: service_healthy
     environment:
       LLM_PROVIDER: ${LLM_PROVIDER:-qwen}
@@ -61,6 +82,10 @@ services:
       REDIS_URI: redis://langgraph-redis:6379
       POSTGRES_URI: postgres://postgres:postgres@langgraph-postgres:5432/postgres?sslmode=disable
       DATABASE_URL: postgres://postgres:postgres@langgraph-postgres:5432/postgres?sslmode=disable
+      # 知識庫（X42）：連線字串經 SecretBroker 解析；rerank URL 含 workspace 與地域，未設定時降級為 recall-only
+      KNOWLEDGE_DATABASE_URL: ${KNOWLEDGE_DATABASE_URL:-postgres://postgres:postgres@knowledge-postgres:5432/knowledge?sslmode=disable}
+      KB_RERANK_URL: ${KB_RERANK_URL:-}
+      KB_CORPUS_TENANT_ID: ${KB_CORPUS_TENANT_ID:-public}
       # MCP 設定
       MCP_LOAD_ON_START: ${MCP_LOAD_ON_START}
       DEEP_RESEARCHER_MCP_ENABLED: ${DEEP_RESEARCHER_MCP_ENABLED}

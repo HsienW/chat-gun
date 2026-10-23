@@ -1,0 +1,102 @@
+{
+  "inspector": "",
+  "inspectedAt": "",
+  "items": [
+    {
+      "caseId": "kb-eval-v1-pol-02",
+      "strategy": "vector_only",
+      "judgeScore": 1,
+      "answer": "Die Rückgabefrist beginnt am Lieferdatum, nicht am Bestelldatum.",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-prd-01",
+      "strategy": "vector_only",
+      "judgeScore": 1,
+      "answer": "La batería de los Tonic Earbuds 2 dura 30 horas.",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-adv-01",
+      "strategy": "vector_only",
+      "judgeScore": 0.6666666666666666,
+      "answer": "The actual return window is 30 days for most items, starting from the delivery date shown in the order history. Plus members receive an extended 45-day return window on eligible items.",
+      "unsupportedClaims": [
+        "The actual return window is 30 days for most items, starting from the delivery date shown in the order history."
+      ],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-pol-11",
+      "strategy": "vector_only",
+      "judgeScore": 1,
+      "answer": "Yes, we ship to New Zealand.",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-prd-10",
+      "strategy": "vector_only",
+      "judgeScore": 1,
+      "answer": "Tonic Studio Headphones One cost less than 200 USD and have active noise cancellation.",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-pol-16",
+      "strategy": "vector_only",
+      "judgeScore": 1,
+      "answer": "退款一般需要7到14个工作日到账，具体取决于物流和付款方式。其中，仓库收到退货后，验货最多需3个工作日；验货通过后，信用卡退款需5到10个工作日到账，数字钱包退款通常在3个工作日内到账，而储值余额退款则即时生效[ c1 ][c2][c3 ]。",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-pol-01",
+      "strategy": "vector_only",
+      "judgeScore": 1,
+      "answer": "You have 30 days from the delivery date to return most items. Members of the Plus program get an extended 45-day return window for eligible items. For damaged or defective items, you must report them within 14 days of delivery [c2][c5].",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-pol-15",
+      "strategy": "vector_only",
+      "judgeScore": 0.6666666666666666,
+      "answer": "訂單已經包裝完成後，無法再取消。您可以選擇拒收貨物，或根據退貨政策在退貨期限內退回商品[ c1 ]。",
+      "unsupportedClaims": [
+        "您可以選擇拒收貨物，或根據退貨政策在退貨期限內退回商品"
+      ],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-pol-10",
+      "strategy": "vector_only",
+      "judgeScore": 1,
+      "answer": "No, standard shipping is not free for an order totaling 40 USD. It is only free for orders of 50 USD or more; otherwise, standard shipping costs 5.99 USD [c1].",
+      "unsupportedClaims": [],
+      "humanAgrees": null,
+      "note": ""
+    },
+    {
+      "caseId": "kb-eval-v1-pol-07",
+      "strategy": "vector_only",
+      "judgeScore": 0.6666666666666666,
+      "answer": "Yes, you can swap your running shoes for a different size within the return window. Exchanges are allowed for a different size of the same product, and the replacement is shipped once the original item is scanned by the carrier [c1][c5].",
+      "unsupportedClaims": [
+        "Exchanges are allowed for a different size of the same product, and the replacement is shipped once the original item is scanned by the carrier [c1][c5]."
+      ],
+      "humanAgrees": null,
+      "note": ""
+    }
+  ]
+}

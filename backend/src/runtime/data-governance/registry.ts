@@ -146,6 +146,7 @@ const NON_MIGRATION_ENTRIES: readonly EntryOptions[] = [
   { dataClassId: "runtime.checkpoints", authoritativeStore: "langgraph.checkpoint_store", purpose: "durable graph checkpoints", tier: "correlation", key: "threadId" },
   { dataClassId: "runtime.cache", authoritativeStore: "redis.runtime_cache", purpose: "rebuildable runtime cache", tier: "correlation", key: "correlationKey", deletionBehavior: "clear_projection", derivedCopiesCaches: [{ id: "redis-runtime-cache", kind: "cache", rebuildable: true, clearable: true, authoritative: false }] },
   { dataClassId: "runtime.observability-projection", authoritativeStore: "opik.trace_projection", purpose: "identifier-minimized observability projection", tier: "correlation", key: "runId", sensitivity: "internal", exportBehavior: "excluded", deletionBehavior: "clear_projection", derivedCopiesCaches: [{ id: "opik-trace-projection", kind: "projection", rebuildable: true, clearable: true, authoritative: false }] },
+  { dataClassId: "knowledge.corpus-index", authoritativeStore: "pgvector.knowledge_store", purpose: "derived retrieval index over the curated synthetic corpus", tier: "direct", key: "tenantId", sensitivity: "internal", exportBehavior: "excluded", deletionBehavior: "clear_projection", derivedCopiesCaches: [{ id: "knowledge-vector-index", kind: "projection", rebuildable: true, clearable: true, authoritative: false }] },
 ];
 
 export function createDefaultInventoryEntries(): DataInventoryEntry[] {

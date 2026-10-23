@@ -1,0 +1,3027 @@
+{
+  "strategy": "vector_only",
+  "status": "completed",
+  "failedCases": [],
+  "results": [
+    {
+      "caseId": "kb-eval-v1-pol-01",
+      "split": "dev",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "faq-wrong-item",
+        "policy-return-window",
+        "policy-gift-returns",
+        "policy-international-returns",
+        "policy-damaged-defective",
+        "faq-missing-item",
+        "faq-where-is-my-refund",
+        "policy-final-sale",
+        "policy-refund-timeline",
+        "policy-order-cancellation"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.6302345460233916
+        },
+        {
+          "sourceId": "policy-return-window",
+          "similarity": 0.6041249148622319
+        },
+        {
+          "sourceId": "policy-gift-returns",
+          "similarity": 0.5628547500713267
+        },
+        {
+          "sourceId": "policy-international-returns",
+          "similarity": 0.5425292849540749
+        },
+        {
+          "sourceId": "policy-damaged-defective",
+          "similarity": 0.5208222841236253
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.5201233315394332
+        },
+        {
+          "sourceId": "faq-where-is-my-refund",
+          "similarity": 0.5174361467361487
+        },
+        {
+          "sourceId": "policy-final-sale",
+          "similarity": 0.498011410473417
+        },
+        {
+          "sourceId": "policy-refund-timeline",
+          "similarity": 0.4740666464527469
+        },
+        {
+          "sourceId": "policy-order-cancellation",
+          "similarity": 0.46867385693348385
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 0.5,
+      "abstained": false,
+      "answer": "You have 30 days from the delivery date to return most items. Members of the Plus program get an extended 45-day return window for eligible items. For damaged or defective items, you must report them within 14 days of delivery [c2][c5].",
+      "citationAccuracy": 0.5,
+      "citationJudgements": [
+        {
+          "citationId": "c2",
+          "resolvable": true,
+          "sourceId": "policy-return-window",
+          "relevant": true
+        },
+        {
+          "citationId": "c5",
+          "resolvable": true,
+          "sourceId": "policy-damaged-defective",
+          "relevant": false
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 3478
+    },
+    {
+      "caseId": "kb-eval-v1-pol-02",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "policy-return-window",
+        "policy-gift-returns",
+        "policy-order-cancellation",
+        "faq-wrong-item",
+        "policy-international-returns",
+        "faq-where-is-my-refund",
+        "policy-refund-timeline",
+        "policy-refund-methods",
+        "policy-exchanges",
+        "policy-return-shipping-cost"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "policy-return-window",
+          "similarity": 0.7668353140052605
+        },
+        {
+          "sourceId": "policy-gift-returns",
+          "similarity": 0.6073637423704964
+        },
+        {
+          "sourceId": "policy-order-cancellation",
+          "similarity": 0.5923863296278529
+        },
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.5693784530082141
+        },
+        {
+          "sourceId": "policy-international-returns",
+          "similarity": 0.5619040727615396
+        },
+        {
+          "sourceId": "faq-where-is-my-refund",
+          "similarity": 0.5538203716278115
+        },
+        {
+          "sourceId": "policy-refund-timeline",
+          "similarity": 0.5265220089839701
+        },
+        {
+          "sourceId": "policy-refund-methods",
+          "similarity": 0.5173412561416663
+        },
+        {
+          "sourceId": "policy-exchanges",
+          "similarity": 0.5011707841652173
+        },
+        {
+          "sourceId": "policy-return-shipping-cost",
+          "similarity": 0.4915238765336293
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "Die Rückgabefrist beginnt am Lieferdatum, nicht am Bestelldatum.",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "policy-return-window",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 2545
+    },
+    {
+      "caseId": "kb-eval-v1-pol-03",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "policy-gift-returns",
+        "policy-refund-methods",
+        "policy-final-sale",
+        "faq-store-credit",
+        "policy-refund-request-steps",
+        "policy-return-window",
+        "policy-payment-methods",
+        "faq-where-is-my-refund",
+        "policy-international-returns",
+        "policy-return-shipping-cost"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "policy-gift-returns",
+          "similarity": 0.7110239823737239
+        },
+        {
+          "sourceId": "policy-refund-methods",
+          "similarity": 0.5592022204874711
+        },
+        {
+          "sourceId": "policy-final-sale",
+          "similarity": 0.5318707468740806
+        },
+        {
+          "sourceId": "faq-store-credit",
+          "similarity": 0.5214701839756527
+        },
+        {
+          "sourceId": "policy-refund-request-steps",
+          "similarity": 0.48210993622423315
+        },
+        {
+          "sourceId": "policy-return-window",
+          "similarity": 0.4757208285997323
+        },
+        {
+          "sourceId": "policy-payment-methods",
+          "similarity": 0.4718385107902263
+        },
+        {
+          "sourceId": "faq-where-is-my-refund",
+          "similarity": 0.46338483909459627
+        },
+        {
+          "sourceId": "policy-international-returns",
+          "similarity": 0.46170318354946027
+        },
+        {
+          "sourceId": "policy-return-shipping-cost",
+          "similarity": 0.460102484819229
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 0.3333333333333333,
+      "abstained": false,
+      "answer": "No, gift cards are final sale and cannot be returned or exchanged, except if they arrive damaged or defective, in which case they can be replaced under the Damaged or Defective Items policy [c3].",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c3",
+          "resolvable": true,
+          "sourceId": "policy-final-sale",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 0.75,
+      "unsupportedClaims": [
+        "No, gift cards are final sale and cannot be returned or exchanged"
+      ],
+      "latencyMs": 3868
+    },
+    {
+      "caseId": "kb-eval-v1-pol-04",
+      "split": "dev",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "policy-refund-methods",
+        "faq-where-is-my-refund",
+        "policy-refund-timeline",
+        "policy-gift-returns",
+        "policy-refund-request-steps",
+        "policy-order-cancellation",
+        "policy-international-returns",
+        "policy-return-window",
+        "faq-wrong-item",
+        "faq-missing-item"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "policy-refund-methods",
+          "similarity": 0.6955963373184254
+        },
+        {
+          "sourceId": "faq-where-is-my-refund",
+          "similarity": 0.6699182987213183
+        },
+        {
+          "sourceId": "policy-refund-timeline",
+          "similarity": 0.6085611219071684
+        },
+        {
+          "sourceId": "policy-gift-returns",
+          "similarity": 0.48232458584533566
+        },
+        {
+          "sourceId": "policy-refund-request-steps",
+          "similarity": 0.4738227740631842
+        },
+        {
+          "sourceId": "policy-order-cancellation",
+          "similarity": 0.4188835073182884
+        },
+        {
+          "sourceId": "policy-international-returns",
+          "similarity": 0.41439002752304366
+        },
+        {
+          "sourceId": "policy-return-window",
+          "similarity": 0.41288016804215366
+        },
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.4125461436725606
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.4079222734020793
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "A card refund appears on your statement within 5 to 10 business days after the return is approved [c1].",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "policy-refund-methods",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 2493
+    },
+    {
+      "caseId": "kb-eval-v1-pol-05",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "policy-return-shipping-cost",
+        "policy-international-returns",
+        "faq-wrong-item",
+        "policy-plus-membership",
+        "policy-shipping-fees",
+        "policy-exchanges",
+        "policy-partial-cancellation",
+        "policy-gift-returns",
+        "faq-missing-item",
+        "policy-final-sale"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "policy-return-shipping-cost",
+          "similarity": 0.6119916621444192
+        },
+        {
+          "sourceId": "policy-international-returns",
+          "similarity": 0.5590925216674845
+        },
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.5409746394798813
+        },
+        {
+          "sourceId": "policy-plus-membership",
+          "similarity": 0.5244422213240475
+        },
+        {
+          "sourceId": "policy-shipping-fees",
+          "similarity": 0.5046001667260925
+        },
+        {
+          "sourceId": "policy-exchanges",
+          "similarity": 0.5022151170840798
+        },
+        {
+          "sourceId": "policy-partial-cancellation",
+          "similarity": 0.48547256079479784
+        },
+        {
+          "sourceId": "policy-gift-returns",
+          "similarity": 0.4795769310123662
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.4783405972516189
+        },
+        {
+          "sourceId": "policy-final-sale",
+          "similarity": 0.47267550555759597
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "It costs 6.95 USD to send back an item if you simply changed your mind, unless you are a Plus member, in which case return shipping is free.",
+      "citationAccuracy": 0.5,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "policy-return-shipping-cost",
+          "relevant": true
+        },
+        {
+          "citationId": "c4",
+          "resolvable": true,
+          "sourceId": "policy-plus-membership",
+          "relevant": false
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 3052
+    },
+    {
+      "caseId": "kb-eval-v1-pol-06",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "faq-battery-care",
+        "product-hp-1025",
+        "product-hp-1024",
+        "product-hp-1004",
+        "product-hp-1020",
+        "product-hp-1003",
+        "product-hp-1008",
+        "product-hp-1002",
+        "product-hp-1023",
+        "product-hp-1012"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "faq-battery-care",
+          "similarity": 0.5187678027887471
+        },
+        {
+          "sourceId": "product-hp-1025",
+          "similarity": 0.4651401361739562
+        },
+        {
+          "sourceId": "product-hp-1024",
+          "similarity": 0.4602207815778795
+        },
+        {
+          "sourceId": "product-hp-1004",
+          "similarity": 0.45784893883175104
+        },
+        {
+          "sourceId": "product-hp-1020",
+          "similarity": 0.4575907451632415
+        },
+        {
+          "sourceId": "product-hp-1003",
+          "similarity": 0.44607178341058873
+        },
+        {
+          "sourceId": "product-hp-1008",
+          "similarity": 0.4401691960985914
+        },
+        {
+          "sourceId": "product-hp-1002",
+          "similarity": 0.44016358612992923
+        },
+        {
+          "sourceId": "product-hp-1023",
+          "similarity": 0.4348876851930994
+        },
+        {
+          "sourceId": "product-hp-1012",
+          "similarity": 0.4179007161914883
+        }
+      ],
+      "recallAt5": 0,
+      "reciprocalRank": 0.0625,
+      "abstained": true,
+      "answer": "The knowledge base does not cover what to do if headphones arrive with a cracked headband.",
+      "latencyMs": 1349
+    },
+    {
+      "caseId": "kb-eval-v1-pol-07",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "faq-size-guide",
+        "product-rs-1020",
+        "product-rs-1022",
+        "product-rs-1013",
+        "policy-exchanges",
+        "product-rs-1001",
+        "product-rs-1016",
+        "product-rs-1008",
+        "product-rs-1011",
+        "product-rs-1015"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "faq-size-guide",
+          "similarity": 0.7206245112977488
+        },
+        {
+          "sourceId": "product-rs-1020",
+          "similarity": 0.4888726757613042
+        },
+        {
+          "sourceId": "product-rs-1022",
+          "similarity": 0.48022527933792136
+        },
+        {
+          "sourceId": "product-rs-1013",
+          "similarity": 0.4781701681271465
+        },
+        {
+          "sourceId": "policy-exchanges",
+          "similarity": 0.4685821374828263
+        },
+        {
+          "sourceId": "product-rs-1001",
+          "similarity": 0.45993949114735366
+        },
+        {
+          "sourceId": "product-rs-1016",
+          "similarity": 0.4584483914180154
+        },
+        {
+          "sourceId": "product-rs-1008",
+          "similarity": 0.4583711301309543
+        },
+        {
+          "sourceId": "product-rs-1011",
+          "similarity": 0.458038446786311
+        },
+        {
+          "sourceId": "product-rs-1015",
+          "similarity": 0.4569776790433433
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "Yes, you can swap your running shoes for a different size within the return window. Exchanges are allowed for a different size of the same product, and the replacement is shipped once the original item is scanned by the carrier [c1][c5].",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "faq-size-guide",
+          "relevant": true
+        },
+        {
+          "citationId": "c5",
+          "resolvable": true,
+          "sourceId": "policy-exchanges",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 0.6666666666666666,
+      "unsupportedClaims": [
+        "Exchanges are allowed for a different size of the same product, and the replacement is shipped once the original item is scanned by the carrier [c1][c5]."
+      ],
+      "latencyMs": 4158
+    },
+    {
+      "caseId": "kb-eval-v1-pol-08",
+      "split": "dev",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "policy-order-cancellation",
+        "policy-partial-cancellation",
+        "faq-change-address",
+        "faq-missing-item",
+        "faq-order-tracking",
+        "faq-wrong-item",
+        "policy-refund-request-steps",
+        "policy-final-sale",
+        "policy-payment-methods",
+        "faq-where-is-my-refund"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "policy-order-cancellation",
+          "similarity": 0.7836223373638205
+        },
+        {
+          "sourceId": "policy-partial-cancellation",
+          "similarity": 0.6872082539076666
+        },
+        {
+          "sourceId": "faq-change-address",
+          "similarity": 0.636545381751933
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.5478155286422066
+        },
+        {
+          "sourceId": "faq-order-tracking",
+          "similarity": 0.501293569726136
+        },
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.49002558171291766
+        },
+        {
+          "sourceId": "policy-refund-request-steps",
+          "similarity": 0.4816481183977065
+        },
+        {
+          "sourceId": "policy-final-sale",
+          "similarity": 0.44941288835848714
+        },
+        {
+          "sourceId": "policy-payment-methods",
+          "similarity": 0.44561950344690704
+        },
+        {
+          "sourceId": "faq-where-is-my-refund",
+          "similarity": 0.4409824013710053
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "No, you cannot cancel your order after it has been packed. Once packed, the order can no longer be cancelled; however, you may refuse the delivery or return the items under the Return Window policy [c1].",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "policy-order-cancellation",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 0.6666666666666666,
+      "unsupportedClaims": [
+        "Once packed, the order can no longer be cancelled; however, you may refuse the delivery or return the items under the Return Window policy."
+      ],
+      "latencyMs": 3503
+    },
+    {
+      "caseId": "kb-eval-v1-pol-09",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "policy-shipping-times",
+        "policy-international-returns",
+        "policy-shipping-fees",
+        "policy-shipping-regions",
+        "faq-missing-item",
+        "faq-wrong-item",
+        "policy-return-shipping-cost",
+        "faq-order-tracking",
+        "faq-where-is-my-refund",
+        "policy-return-window"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "policy-shipping-times",
+          "similarity": 0.7989033700342986
+        },
+        {
+          "sourceId": "policy-international-returns",
+          "similarity": 0.5528118343837173
+        },
+        {
+          "sourceId": "policy-shipping-fees",
+          "similarity": 0.5453186306167475
+        },
+        {
+          "sourceId": "policy-shipping-regions",
+          "similarity": 0.5398483872413635
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.4367303252220154
+        },
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.4263658015291958
+        },
+        {
+          "sourceId": "policy-return-shipping-cost",
+          "similarity": 0.4180536941933971
+        },
+        {
+          "sourceId": "faq-order-tracking",
+          "similarity": 0.4139602780342102
+        },
+        {
+          "sourceId": "faq-where-is-my-refund",
+          "similarity": 0.3985491632550463
+        },
+        {
+          "sourceId": "policy-return-window",
+          "similarity": 0.3950535184081203
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "Express shipping within the European Union takes 2 to 5 business days.",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "policy-shipping-times",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 2155
+    },
+    {
+      "caseId": "kb-eval-v1-pol-10",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "policy-shipping-fees",
+        "policy-return-shipping-cost",
+        "policy-shipping-times",
+        "policy-partial-cancellation",
+        "policy-shipping-regions",
+        "policy-international-returns",
+        "policy-plus-membership",
+        "faq-wrong-item",
+        "policy-payment-methods",
+        "faq-missing-item"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "policy-shipping-fees",
+          "similarity": 0.7714146375656182
+        },
+        {
+          "sourceId": "policy-return-shipping-cost",
+          "similarity": 0.5773169662530673
+        },
+        {
+          "sourceId": "policy-shipping-times",
+          "similarity": 0.5764141931287027
+        },
+        {
+          "sourceId": "policy-partial-cancellation",
+          "similarity": 0.514854104212172
+        },
+        {
+          "sourceId": "policy-shipping-regions",
+          "similarity": 0.4994981586634024
+        },
+        {
+          "sourceId": "policy-international-returns",
+          "similarity": 0.4936979107496632
+        },
+        {
+          "sourceId": "policy-plus-membership",
+          "similarity": 0.48517358391443177
+        },
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.46175959934237754
+        },
+        {
+          "sourceId": "policy-payment-methods",
+          "similarity": 0.4561438884649416
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.4337374230466745
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "No, standard shipping is not free for an order totaling 40 USD. It is only free for orders of 50 USD or more; otherwise, standard shipping costs 5.99 USD [c1].",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "policy-shipping-fees",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 3221
+    },
+    {
+      "caseId": "kb-eval-v1-pol-11",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "policy-shipping-regions",
+        "policy-shipping-times",
+        "policy-shipping-fees",
+        "policy-payment-methods",
+        "faq-missing-item",
+        "faq-wrong-item",
+        "policy-international-returns",
+        "faq-order-tracking",
+        "policy-return-shipping-cost",
+        "faq-change-address"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "policy-shipping-regions",
+          "similarity": 0.7078938062254319
+        },
+        {
+          "sourceId": "policy-shipping-times",
+          "similarity": 0.5135355269547364
+        },
+        {
+          "sourceId": "policy-shipping-fees",
+          "similarity": 0.4645672482768002
+        },
+        {
+          "sourceId": "policy-payment-methods",
+          "similarity": 0.4247458413697772
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.4244245037779515
+        },
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.4118202784382806
+        },
+        {
+          "sourceId": "policy-international-returns",
+          "similarity": 0.40692487359047225
+        },
+        {
+          "sourceId": "faq-order-tracking",
+          "similarity": 0.38517916886930714
+        },
+        {
+          "sourceId": "policy-return-shipping-cost",
+          "similarity": 0.36984784513258884
+        },
+        {
+          "sourceId": "faq-change-address",
+          "similarity": 0.36779946876767533
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "Yes, we ship to New Zealand.",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "policy-shipping-regions",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 2054
+    },
+    {
+      "caseId": "kb-eval-v1-pol-12",
+      "split": "dev",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "policy-warranty",
+        "faq-water-resistance",
+        "policy-extended-protection",
+        "policy-damaged-defective",
+        "policy-final-sale",
+        "product-pc-1017",
+        "product-pc-1023",
+        "product-cm-1008",
+        "product-pc-1001",
+        "product-sw-1014"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "policy-warranty",
+          "similarity": 0.6912994384765625
+        },
+        {
+          "sourceId": "faq-water-resistance",
+          "similarity": 0.5618336200714111
+        },
+        {
+          "sourceId": "policy-extended-protection",
+          "similarity": 0.5007650256156921
+        },
+        {
+          "sourceId": "policy-damaged-defective",
+          "similarity": 0.4731357709684516
+        },
+        {
+          "sourceId": "policy-final-sale",
+          "similarity": 0.4269761784686943
+        },
+        {
+          "sourceId": "product-pc-1017",
+          "similarity": 0.4241748795405109
+        },
+        {
+          "sourceId": "product-pc-1023",
+          "similarity": 0.4234112501144409
+        },
+        {
+          "sourceId": "product-cm-1008",
+          "similarity": 0.40524234802975423
+        },
+        {
+          "sourceId": "product-pc-1001",
+          "similarity": 0.4027489125728607
+        },
+        {
+          "sourceId": "product-sw-1014",
+          "similarity": 0.40078505873680115
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "No, the warranty does not cover water damage on a product that is not waterproof. The manufacturer warranty explicitly excludes water damage on non-waterproof products [c1].",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "policy-warranty",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 3654
+    },
+    {
+      "caseId": "kb-eval-v1-pol-13",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "policy-price-adjustment",
+        "faq-wrong-item",
+        "policy-return-shipping-cost",
+        "faq-missing-item",
+        "policy-international-returns",
+        "policy-return-window",
+        "policy-final-sale",
+        "policy-exchanges",
+        "faq-where-is-my-refund",
+        "policy-order-cancellation"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "policy-price-adjustment",
+          "similarity": 0.6205795263553274
+        },
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.6095212436863795
+        },
+        {
+          "sourceId": "policy-return-shipping-cost",
+          "similarity": 0.5615080427674165
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.5450939482338529
+        },
+        {
+          "sourceId": "policy-international-returns",
+          "similarity": 0.529152004173287
+        },
+        {
+          "sourceId": "policy-return-window",
+          "similarity": 0.5266455348383106
+        },
+        {
+          "sourceId": "policy-final-sale",
+          "similarity": 0.5225298066383955
+        },
+        {
+          "sourceId": "policy-exchanges",
+          "similarity": 0.5144531709607673
+        },
+        {
+          "sourceId": "faq-where-is-my-refund",
+          "similarity": 0.5075037176904927
+        },
+        {
+          "sourceId": "policy-order-cancellation",
+          "similarity": 0.5046868914739059
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "Oui, vous pouvez demander un ajustement de prix pour la différence si le prix a baissé dans les 14 jours suivant la livraison. Cela ne s'applique pas aux soldes, aux ventes éclair de moins de 24 heures ou aux prix proposés par d'autres détaillants.",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "policy-price-adjustment",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 3521
+    },
+    {
+      "caseId": "kb-eval-v1-pol-14",
+      "split": "dev",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "policy-plus-membership",
+        "policy-return-window",
+        "faq-wrong-item",
+        "policy-extended-protection",
+        "policy-return-shipping-cost",
+        "faq-missing-item",
+        "policy-price-adjustment",
+        "faq-where-is-my-refund",
+        "policy-gift-returns",
+        "policy-international-returns"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "policy-plus-membership",
+          "similarity": 0.633341952163945
+        },
+        {
+          "sourceId": "policy-return-window",
+          "similarity": 0.5730876239433778
+        },
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.48610901998174305
+        },
+        {
+          "sourceId": "policy-extended-protection",
+          "similarity": 0.4790155589580536
+        },
+        {
+          "sourceId": "policy-return-shipping-cost",
+          "similarity": 0.46715001468211725
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.45897340774536133
+        },
+        {
+          "sourceId": "policy-price-adjustment",
+          "similarity": 0.45240747928619385
+        },
+        {
+          "sourceId": "faq-where-is-my-refund",
+          "similarity": 0.4420127536066035
+        },
+        {
+          "sourceId": "policy-gift-returns",
+          "similarity": 0.4393926989851209
+        },
+        {
+          "sourceId": "policy-international-returns",
+          "similarity": 0.4378720186872501
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "一般退貨期限為30天，從物流標示的送達日開始計算。Plus會員享有較長的退貨期限，為45天[c2]。",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c2",
+          "resolvable": true,
+          "sourceId": "policy-return-window",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 2602
+    },
+    {
+      "caseId": "kb-eval-v1-pol-15",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "policy-order-cancellation",
+        "policy-partial-cancellation",
+        "faq-change-address",
+        "faq-missing-item",
+        "policy-refund-request-steps",
+        "faq-wrong-item",
+        "policy-return-window",
+        "faq-order-tracking",
+        "policy-plus-membership",
+        "policy-final-sale"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "policy-order-cancellation",
+          "similarity": 0.6540668216903923
+        },
+        {
+          "sourceId": "policy-partial-cancellation",
+          "similarity": 0.6415119384818125
+        },
+        {
+          "sourceId": "faq-change-address",
+          "similarity": 0.5056612190210101
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.49608799838495354
+        },
+        {
+          "sourceId": "policy-refund-request-steps",
+          "similarity": 0.4784301234227354
+        },
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.45781070748376196
+        },
+        {
+          "sourceId": "policy-return-window",
+          "similarity": 0.40600978028599455
+        },
+        {
+          "sourceId": "faq-order-tracking",
+          "similarity": 0.4042840359041677
+        },
+        {
+          "sourceId": "policy-plus-membership",
+          "similarity": 0.39149083647295846
+        },
+        {
+          "sourceId": "policy-final-sale",
+          "similarity": 0.38807274245348666
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "訂單已經包裝完成後，無法再取消。您可以選擇拒收貨物，或根據退貨政策在退貨期限內退回商品[ c1 ]。",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "policy-order-cancellation",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 0.6666666666666666,
+      "unsupportedClaims": [
+        "您可以選擇拒收貨物，或根據退貨政策在退貨期限內退回商品"
+      ],
+      "latencyMs": 3049
+    },
+    {
+      "caseId": "kb-eval-v1-pol-16",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "faq-where-is-my-refund",
+        "policy-refund-methods",
+        "policy-refund-timeline",
+        "policy-gift-returns",
+        "policy-order-cancellation",
+        "faq-wrong-item",
+        "faq-missing-item",
+        "policy-return-window",
+        "policy-return-shipping-cost",
+        "policy-refund-request-steps"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "faq-where-is-my-refund",
+          "similarity": 0.5882614850997967
+        },
+        {
+          "sourceId": "policy-refund-methods",
+          "similarity": 0.5695688128471414
+        },
+        {
+          "sourceId": "policy-refund-timeline",
+          "similarity": 0.5558502938836648
+        },
+        {
+          "sourceId": "policy-gift-returns",
+          "similarity": 0.5165958250583483
+        },
+        {
+          "sourceId": "policy-order-cancellation",
+          "similarity": 0.5122289352280546
+        },
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.51058491875203
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.49283590955520307
+        },
+        {
+          "sourceId": "policy-return-window",
+          "similarity": 0.4918063595641218
+        },
+        {
+          "sourceId": "policy-return-shipping-cost",
+          "similarity": 0.45711545518385255
+        },
+        {
+          "sourceId": "policy-refund-request-steps",
+          "similarity": 0.44565698828357614
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "退款一般需要7到14个工作日到账，具体取决于物流和付款方式。其中，仓库收到退货后，验货最多需3个工作日；验货通过后，信用卡退款需5到10个工作日到账，数字钱包退款通常在3个工作日内到账，而储值余额退款则即时生效[ c1 ][c2][c3 ]。",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "faq-where-is-my-refund",
+          "relevant": true
+        },
+        {
+          "citationId": "c2",
+          "resolvable": true,
+          "sourceId": "policy-refund-methods",
+          "relevant": true
+        },
+        {
+          "citationId": "c3",
+          "resolvable": true,
+          "sourceId": "policy-refund-timeline",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 3552
+    },
+    {
+      "caseId": "kb-eval-v1-faq-01",
+      "split": "dev",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "faq-coffee-maker-descaling",
+        "product-cm-1013",
+        "product-cm-1024",
+        "product-cm-1020",
+        "product-cm-1012",
+        "product-cm-1018",
+        "product-cm-1015",
+        "product-cm-1007",
+        "product-cm-1025",
+        "product-cm-1006"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "faq-coffee-maker-descaling",
+          "similarity": 0.9024814963340759
+        },
+        {
+          "sourceId": "product-cm-1013",
+          "similarity": 0.4245603337621895
+        },
+        {
+          "sourceId": "product-cm-1024",
+          "similarity": 0.41588939238913447
+        },
+        {
+          "sourceId": "product-cm-1020",
+          "similarity": 0.4079269523664153
+        },
+        {
+          "sourceId": "product-cm-1012",
+          "similarity": 0.4047323167324066
+        },
+        {
+          "sourceId": "product-cm-1018",
+          "similarity": 0.3976645767688751
+        },
+        {
+          "sourceId": "product-cm-1015",
+          "similarity": 0.3945108479844541
+        },
+        {
+          "sourceId": "product-cm-1007",
+          "similarity": 0.3938607338749932
+        },
+        {
+          "sourceId": "product-cm-1025",
+          "similarity": 0.3893571859981313
+        },
+        {
+          "sourceId": "product-cm-1006",
+          "similarity": 0.3870754972606332
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "Descale every 2 to 3 months, or monthly if you have hard water.",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "faq-coffee-maker-descaling",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 2184
+    },
+    {
+      "caseId": "kb-eval-v1-faq-02",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "faq-water-resistance",
+        "product-sw-1019",
+        "product-sw-1004",
+        "product-sw-1014",
+        "product-sw-1021",
+        "product-sw-1015",
+        "product-sw-1011",
+        "product-sw-1008",
+        "product-sw-1010",
+        "product-sw-1007"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "faq-water-resistance",
+          "similarity": 0.8338178893219181
+        },
+        {
+          "sourceId": "product-sw-1019",
+          "similarity": 0.6036255359649702
+        },
+        {
+          "sourceId": "product-sw-1004",
+          "similarity": 0.6033519449846698
+        },
+        {
+          "sourceId": "product-sw-1014",
+          "similarity": 0.6015562177631996
+        },
+        {
+          "sourceId": "product-sw-1021",
+          "similarity": 0.5983157035676914
+        },
+        {
+          "sourceId": "product-sw-1015",
+          "similarity": 0.5861625322006717
+        },
+        {
+          "sourceId": "product-sw-1011",
+          "similarity": 0.5839452421583599
+        },
+        {
+          "sourceId": "product-sw-1008",
+          "similarity": 0.5824679483454207
+        },
+        {
+          "sourceId": "product-sw-1010",
+          "similarity": 0.5767431602920996
+        },
+        {
+          "sourceId": "product-sw-1007",
+          "similarity": 0.5752678774696408
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "No, you cannot go swimming with a smartwatch rated IP68. Only smartwatches rated 5 ATM or higher are suitable for swimming; IP67 and IP68 ratings only resist splashes and brief immersion, not swimming [c1].",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "faq-water-resistance",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 3279
+    },
+    {
+      "caseId": "kb-eval-v1-prd-01",
+      "split": "dev",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "product-hp-1001",
+        "product-hp-1021",
+        "product-hp-1019",
+        "product-hp-1005",
+        "product-hp-1022",
+        "product-hp-1015",
+        "product-hp-1017",
+        "product-hp-1002",
+        "product-pc-1010",
+        "product-hp-1006"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "product-hp-1001",
+          "similarity": 0.7544235294370144
+        },
+        {
+          "sourceId": "product-hp-1021",
+          "similarity": 0.7155898470389711
+        },
+        {
+          "sourceId": "product-hp-1019",
+          "similarity": 0.7066898941993713
+        },
+        {
+          "sourceId": "product-hp-1005",
+          "similarity": 0.6904781049205014
+        },
+        {
+          "sourceId": "product-hp-1022",
+          "similarity": 0.6863393970525636
+        },
+        {
+          "sourceId": "product-hp-1015",
+          "similarity": 0.6805777955399642
+        },
+        {
+          "sourceId": "product-hp-1017",
+          "similarity": 0.6725999517798407
+        },
+        {
+          "sourceId": "product-hp-1002",
+          "similarity": 0.6399853229522705
+        },
+        {
+          "sourceId": "product-pc-1010",
+          "similarity": 0.5489564538002014
+        },
+        {
+          "sourceId": "product-hp-1006",
+          "similarity": 0.5449989600479296
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "La batería de los Tonic Earbuds 2 dura 30 horas.",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "product-hp-1001",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 2486
+    },
+    {
+      "caseId": "kb-eval-v1-prd-02",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "product-hp-1007",
+        "product-hp-1011",
+        "product-hp-1016",
+        "product-hp-1012",
+        "product-hp-1005",
+        "product-hp-1018",
+        "product-hp-1013",
+        "product-hp-1003",
+        "product-hp-1017",
+        "product-hp-1024"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "product-hp-1007",
+          "similarity": 0.8218963636098139
+        },
+        {
+          "sourceId": "product-hp-1011",
+          "similarity": 0.785625172518196
+        },
+        {
+          "sourceId": "product-hp-1016",
+          "similarity": 0.761883349643153
+        },
+        {
+          "sourceId": "product-hp-1012",
+          "similarity": 0.7256553605589499
+        },
+        {
+          "sourceId": "product-hp-1005",
+          "similarity": 0.652939677238469
+        },
+        {
+          "sourceId": "product-hp-1018",
+          "similarity": 0.6322450260970082
+        },
+        {
+          "sourceId": "product-hp-1013",
+          "similarity": 0.6162686347961469
+        },
+        {
+          "sourceId": "product-hp-1003",
+          "similarity": 0.615535043744154
+        },
+        {
+          "sourceId": "product-hp-1017",
+          "similarity": 0.6082726250019819
+        },
+        {
+          "sourceId": "product-hp-1024",
+          "similarity": 0.6080406799389159
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "The Auralis Sport Earbuds Pro comes in white, navy, and black.",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "product-hp-1007",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 2610
+    },
+    {
+      "caseId": "kb-eval-v1-prd-03",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "product-sw-1013",
+        "product-sw-1006",
+        "product-sw-1015",
+        "product-sw-1019",
+        "product-sw-1007",
+        "product-sw-1011",
+        "product-sw-1020",
+        "product-sw-1018",
+        "product-sw-1016",
+        "product-sw-1021"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "product-sw-1013",
+          "similarity": 0.8317208785844373
+        },
+        {
+          "sourceId": "product-sw-1006",
+          "similarity": 0.7670165071780561
+        },
+        {
+          "sourceId": "product-sw-1015",
+          "similarity": 0.7650647671462889
+        },
+        {
+          "sourceId": "product-sw-1019",
+          "similarity": 0.7116604831319931
+        },
+        {
+          "sourceId": "product-sw-1007",
+          "similarity": 0.6940911643613785
+        },
+        {
+          "sourceId": "product-sw-1011",
+          "similarity": 0.6916675200066007
+        },
+        {
+          "sourceId": "product-sw-1020",
+          "similarity": 0.690193018024952
+        },
+        {
+          "sourceId": "product-sw-1018",
+          "similarity": 0.6186565941171825
+        },
+        {
+          "sourceId": "product-sw-1016",
+          "similarity": 0.6107724490991967
+        },
+        {
+          "sourceId": "product-sw-1021",
+          "similarity": 0.6022835675304508
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "The water resistance rating of the Pulseframe Fitness Watch X is 10 ATM.",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "product-sw-1013",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 2504
+    },
+    {
+      "caseId": "kb-eval-v1-prd-04",
+      "split": "dev",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "product-bp-1022",
+        "product-bp-1017",
+        "product-bp-1015",
+        "product-bp-1025",
+        "product-bp-1007",
+        "product-bp-1002",
+        "product-bp-1012",
+        "product-bp-1004",
+        "product-bp-1014",
+        "product-bp-1023"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "product-bp-1022",
+          "similarity": 0.66508549451828
+        },
+        {
+          "sourceId": "product-bp-1017",
+          "similarity": 0.6578603982925415
+        },
+        {
+          "sourceId": "product-bp-1015",
+          "similarity": 0.6232408881187439
+        },
+        {
+          "sourceId": "product-bp-1025",
+          "similarity": 0.6136085025305459
+        },
+        {
+          "sourceId": "product-bp-1007",
+          "similarity": 0.6083042025566101
+        },
+        {
+          "sourceId": "product-bp-1002",
+          "similarity": 0.6070038676261902
+        },
+        {
+          "sourceId": "product-bp-1012",
+          "similarity": 0.6063634391806471
+        },
+        {
+          "sourceId": "product-bp-1004",
+          "similarity": 0.6034605086881076
+        },
+        {
+          "sourceId": "product-bp-1014",
+          "similarity": 0.6031031372012589
+        },
+        {
+          "sourceId": "product-bp-1023",
+          "similarity": 0.6027325865349114
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 0.2,
+      "abstained": false,
+      "answer": "Yes, the backpack BP-1007 has a luggage pass-through, and its capacity is 40 liters.",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c5",
+          "resolvable": true,
+          "sourceId": "product-bp-1007",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 2527
+    },
+    {
+      "caseId": "kb-eval-v1-prd-05",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "product-rs-1024",
+        "product-rs-1001",
+        "product-rs-1009",
+        "product-rs-1012",
+        "product-rs-1005",
+        "product-rs-1023",
+        "product-rs-1016",
+        "product-rs-1013",
+        "product-rs-1020",
+        "product-rs-1019"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "product-rs-1024",
+          "similarity": 0.6475225687026978
+        },
+        {
+          "sourceId": "product-rs-1001",
+          "similarity": 0.6388490580826448
+        },
+        {
+          "sourceId": "product-rs-1009",
+          "similarity": 0.6332372426986694
+        },
+        {
+          "sourceId": "product-rs-1012",
+          "similarity": 0.6272632666606688
+        },
+        {
+          "sourceId": "product-rs-1005",
+          "similarity": 0.6261981129646301
+        },
+        {
+          "sourceId": "product-rs-1023",
+          "similarity": 0.6239733471854547
+        },
+        {
+          "sourceId": "product-rs-1016",
+          "similarity": 0.62134889491492
+        },
+        {
+          "sourceId": "product-rs-1013",
+          "similarity": 0.6193635009960577
+        },
+        {
+          "sourceId": "product-rs-1020",
+          "similarity": 0.6176082448013073
+        },
+        {
+          "sourceId": "product-rs-1019",
+          "similarity": 0.6153025031089783
+        }
+      ],
+      "recallAt5": 0,
+      "reciprocalRank": 0.125,
+      "abstained": true,
+      "answer": "The knowledge base does not cover the heel-to-toe drop of running shoe RS-1013.",
+      "latencyMs": 1410
+    },
+    {
+      "caseId": "kb-eval-v1-prd-06",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "product-cm-1001",
+        "product-cm-1021",
+        "product-cm-1002",
+        "product-cm-1003",
+        "product-cm-1007",
+        "product-cm-1013",
+        "product-cm-1008",
+        "product-cm-1015",
+        "product-cm-1004",
+        "product-cm-1017"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "product-cm-1001",
+          "similarity": 0.8154992021320406
+        },
+        {
+          "sourceId": "product-cm-1021",
+          "similarity": 0.7369171067377456
+        },
+        {
+          "sourceId": "product-cm-1002",
+          "similarity": 0.7219886018031015
+        },
+        {
+          "sourceId": "product-cm-1003",
+          "similarity": 0.7159714698791555
+        },
+        {
+          "sourceId": "product-cm-1007",
+          "similarity": 0.6885643005371143
+        },
+        {
+          "sourceId": "product-cm-1013",
+          "similarity": 0.6454131180540464
+        },
+        {
+          "sourceId": "product-cm-1008",
+          "similarity": 0.6452393704938139
+        },
+        {
+          "sourceId": "product-cm-1015",
+          "similarity": 0.6392322397689779
+        },
+        {
+          "sourceId": "product-cm-1004",
+          "similarity": 0.5936397071862056
+        },
+        {
+          "sourceId": "product-cm-1017",
+          "similarity": 0.5928223971830464
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "Yes, the Ember & Bean Espresso Machine Air has a built-in grinder.",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "product-cm-1001",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 2383
+    },
+    {
+      "caseId": "kb-eval-v1-prd-07",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "product-dl-1013",
+        "product-dl-1012",
+        "product-dl-1008",
+        "product-dl-1004",
+        "product-dl-1020",
+        "product-dl-1011",
+        "product-dl-1022",
+        "product-dl-1025",
+        "product-dl-1010",
+        "product-dl-1019"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "product-dl-1013",
+          "similarity": 0.8290400112819717
+        },
+        {
+          "sourceId": "product-dl-1012",
+          "similarity": 0.8064213741264284
+        },
+        {
+          "sourceId": "product-dl-1008",
+          "similarity": 0.7872510679214683
+        },
+        {
+          "sourceId": "product-dl-1004",
+          "similarity": 0.7763540681948499
+        },
+        {
+          "sourceId": "product-dl-1020",
+          "similarity": 0.7038017091869402
+        },
+        {
+          "sourceId": "product-dl-1011",
+          "similarity": 0.670580187966806
+        },
+        {
+          "sourceId": "product-dl-1022",
+          "similarity": 0.6693507428138131
+        },
+        {
+          "sourceId": "product-dl-1025",
+          "similarity": 0.6668312946759158
+        },
+        {
+          "sourceId": "product-dl-1010",
+          "similarity": 0.6608586321725919
+        },
+        {
+          "sourceId": "product-dl-1019",
+          "similarity": 0.6586888650205457
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "The Lumen Works Clamp Lamp 2 has a brightness of 1000 lumens.",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "product-dl-1013",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 2534
+    },
+    {
+      "caseId": "kb-eval-v1-prd-08",
+      "split": "dev",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "product-ym-1016",
+        "product-ym-1022",
+        "product-ym-1014",
+        "product-ym-1012",
+        "product-ym-1010",
+        "product-ym-1007",
+        "product-ym-1001",
+        "product-ym-1005",
+        "product-ym-1004",
+        "product-ym-1018"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "product-ym-1016",
+          "similarity": 0.7177329491217714
+        },
+        {
+          "sourceId": "product-ym-1022",
+          "similarity": 0.7146289348602346
+        },
+        {
+          "sourceId": "product-ym-1014",
+          "similarity": 0.7082806825637867
+        },
+        {
+          "sourceId": "product-ym-1012",
+          "similarity": 0.7034029397430667
+        },
+        {
+          "sourceId": "product-ym-1010",
+          "similarity": 0.70326496939273
+        },
+        {
+          "sourceId": "product-ym-1007",
+          "similarity": 0.7003971159694873
+        },
+        {
+          "sourceId": "product-ym-1001",
+          "similarity": 0.6970313787460377
+        },
+        {
+          "sourceId": "product-ym-1005",
+          "similarity": 0.6968471227197136
+        },
+        {
+          "sourceId": "product-ym-1004",
+          "similarity": 0.686090070838339
+        },
+        {
+          "sourceId": "product-ym-1018",
+          "similarity": 0.6839528083801318
+        }
+      ],
+      "recallAt5": 0,
+      "reciprocalRank": 0,
+      "abstained": true,
+      "answer": "The knowledge base does not cover the yoga mat YM-1013.",
+      "latencyMs": 1286
+    },
+    {
+      "caseId": "kb-eval-v1-prd-09",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "product-pc-1015",
+        "product-pc-1002",
+        "product-pc-1004",
+        "product-pc-1023",
+        "product-pc-1013",
+        "product-pc-1009",
+        "product-pc-1017",
+        "product-pc-1011",
+        "product-pc-1012",
+        "product-pc-1005"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "product-pc-1015",
+          "similarity": 0.6167069489745239
+        },
+        {
+          "sourceId": "product-pc-1002",
+          "similarity": 0.5981281282749024
+        },
+        {
+          "sourceId": "product-pc-1004",
+          "similarity": 0.5877315998077435
+        },
+        {
+          "sourceId": "product-pc-1023",
+          "similarity": 0.5796854150482775
+        },
+        {
+          "sourceId": "product-pc-1013",
+          "similarity": 0.5758533640170053
+        },
+        {
+          "sourceId": "product-pc-1009",
+          "similarity": 0.5723082846860248
+        },
+        {
+          "sourceId": "product-pc-1017",
+          "similarity": 0.5468061510555564
+        },
+        {
+          "sourceId": "product-pc-1011",
+          "similarity": 0.5345407405769393
+        },
+        {
+          "sourceId": "product-pc-1012",
+          "similarity": 0.534508943557743
+        },
+        {
+          "sourceId": "product-pc-1005",
+          "similarity": 0.5289388579762672
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 0.2,
+      "abstained": false,
+      "answer": "是的，手機殼 PC-1013（Orbit MagSafe-Compatible Case Air）支援磁吸無線充電。",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c5",
+          "resolvable": true,
+          "sourceId": "product-pc-1013",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 2580
+    },
+    {
+      "caseId": "kb-eval-v1-prd-10",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "product-hp-1004",
+        "product-hp-1025",
+        "product-hp-1008",
+        "product-hp-1024",
+        "product-hp-1002",
+        "product-hp-1012",
+        "product-hp-1020",
+        "product-hp-1006",
+        "product-hp-1016",
+        "product-hp-1022"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "product-hp-1004",
+          "similarity": 0.6741846398005116
+        },
+        {
+          "sourceId": "product-hp-1025",
+          "similarity": 0.6601448857697925
+        },
+        {
+          "sourceId": "product-hp-1008",
+          "similarity": 0.6393197823787136
+        },
+        {
+          "sourceId": "product-hp-1024",
+          "similarity": 0.6300553458962151
+        },
+        {
+          "sourceId": "product-hp-1002",
+          "similarity": 0.6236006245851156
+        },
+        {
+          "sourceId": "product-hp-1012",
+          "similarity": 0.6231883392817783
+        },
+        {
+          "sourceId": "product-hp-1020",
+          "similarity": 0.6201197320187196
+        },
+        {
+          "sourceId": "product-hp-1006",
+          "similarity": 0.6155965740800949
+        },
+        {
+          "sourceId": "product-hp-1016",
+          "similarity": 0.6113933324813886
+        },
+        {
+          "sourceId": "product-hp-1022",
+          "similarity": 0.5973067763678102
+        }
+      ],
+      "recallAt5": 0.25,
+      "reciprocalRank": 0.2,
+      "abstained": false,
+      "answer": "Tonic Studio Headphones One cost less than 200 USD and have active noise cancellation.",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c5",
+          "resolvable": true,
+          "sourceId": "product-hp-1002",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 1,
+      "unsupportedClaims": [],
+      "latencyMs": 2515
+    },
+    {
+      "caseId": "kb-eval-v1-adv-01",
+      "split": "test",
+      "expectedKind": "answerable",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "policy-return-window",
+        "policy-gift-returns",
+        "policy-international-returns",
+        "faq-wrong-item",
+        "policy-exchanges",
+        "policy-price-adjustment",
+        "policy-refund-methods",
+        "policy-extended-protection",
+        "faq-where-is-my-refund",
+        "policy-final-sale"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "policy-return-window",
+          "similarity": 0.6667602856898244
+        },
+        {
+          "sourceId": "policy-gift-returns",
+          "similarity": 0.49407117015759705
+        },
+        {
+          "sourceId": "policy-international-returns",
+          "similarity": 0.4760867030723933
+        },
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.4484803111266976
+        },
+        {
+          "sourceId": "policy-exchanges",
+          "similarity": 0.4429432119693295
+        },
+        {
+          "sourceId": "policy-price-adjustment",
+          "similarity": 0.43348428210522505
+        },
+        {
+          "sourceId": "policy-refund-methods",
+          "similarity": 0.4225771334859292
+        },
+        {
+          "sourceId": "policy-extended-protection",
+          "similarity": 0.41581502055019337
+        },
+        {
+          "sourceId": "faq-where-is-my-refund",
+          "similarity": 0.41000216126467715
+        },
+        {
+          "sourceId": "policy-final-sale",
+          "similarity": 0.4028026461601286
+        }
+      ],
+      "recallAt5": 1,
+      "reciprocalRank": 1,
+      "abstained": false,
+      "answer": "The actual return window is 30 days for most items, starting from the delivery date shown in the order history. Plus members receive an extended 45-day return window on eligible items.",
+      "citationAccuracy": 1,
+      "citationJudgements": [
+        {
+          "citationId": "c1",
+          "resolvable": true,
+          "sourceId": "policy-return-window",
+          "relevant": true
+        }
+      ],
+      "faithfulness": 0.6666666666666666,
+      "unsupportedClaims": [
+        "The actual return window is 30 days for most items, starting from the delivery date shown in the order history."
+      ],
+      "latencyMs": 3189
+    },
+    {
+      "caseId": "kb-eval-v1-abs-01",
+      "split": "dev",
+      "expectedKind": "abstain",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "product-cm-1004",
+        "product-cm-1021",
+        "product-cm-1003",
+        "product-cm-1010",
+        "product-cm-1001",
+        "product-cm-1002",
+        "product-cm-1009",
+        "product-cm-1012",
+        "product-cm-1022",
+        "product-cm-1015"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "product-cm-1004",
+          "similarity": 0.6021231412887573
+        },
+        {
+          "sourceId": "product-cm-1021",
+          "similarity": 0.5898646467843451
+        },
+        {
+          "sourceId": "product-cm-1003",
+          "similarity": 0.5825208078312403
+        },
+        {
+          "sourceId": "product-cm-1010",
+          "similarity": 0.5803390741348267
+        },
+        {
+          "sourceId": "product-cm-1001",
+          "similarity": 0.5727575849457328
+        },
+        {
+          "sourceId": "product-cm-1002",
+          "similarity": 0.5680223107337952
+        },
+        {
+          "sourceId": "product-cm-1009",
+          "similarity": 0.5584487318992615
+        },
+        {
+          "sourceId": "product-cm-1012",
+          "similarity": 0.4998142421245575
+        },
+        {
+          "sourceId": "product-cm-1022",
+          "similarity": 0.4951069655950695
+        },
+        {
+          "sourceId": "product-cm-1015",
+          "similarity": 0.48437738604815517
+        }
+      ],
+      "abstained": true,
+      "answer": "The knowledge base does not cover whether installation or setup services are offered for espresso machines.",
+      "latencyMs": 1266
+    },
+    {
+      "caseId": "kb-eval-v1-abs-02",
+      "split": "test",
+      "expectedKind": "abstain",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "no_source_found",
+      "rankedSourceIds": [
+        "faq-store-credit",
+        "policy-return-window",
+        "policy-price-adjustment",
+        "policy-shipping-times",
+        "policy-final-sale",
+        "policy-international-returns",
+        "faq-missing-item",
+        "policy-refund-methods",
+        "faq-change-address",
+        "faq-wrong-item"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "faq-store-credit",
+          "similarity": 0.3088809181593777
+        },
+        {
+          "sourceId": "policy-return-window",
+          "similarity": 0.30376728728207714
+        },
+        {
+          "sourceId": "policy-price-adjustment",
+          "similarity": 0.29360631108283997
+        },
+        {
+          "sourceId": "policy-shipping-times",
+          "similarity": 0.2834915776858853
+        },
+        {
+          "sourceId": "policy-final-sale",
+          "similarity": 0.2692699271875668
+        },
+        {
+          "sourceId": "policy-international-returns",
+          "similarity": 0.26590146219143096
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.2657434344291687
+        },
+        {
+          "sourceId": "policy-refund-methods",
+          "similarity": 0.2645823219169574
+        },
+        {
+          "sourceId": "faq-change-address",
+          "similarity": 0.2599015235900879
+        },
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.25611928032406983
+        }
+      ],
+      "abstained": true,
+      "latencyMs": 201
+    },
+    {
+      "caseId": "kb-eval-v1-abs-03",
+      "split": "test",
+      "expectedKind": "abstain",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "no_source_found",
+      "rankedSourceIds": [
+        "product-dl-1015",
+        "product-bp-1014",
+        "product-dl-1019",
+        "product-dl-1020",
+        "product-dl-1018",
+        "product-dl-1025",
+        "product-dl-1024",
+        "product-dl-1010",
+        "product-dl-1014",
+        "product-bp-1019"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "product-dl-1015",
+          "similarity": 0.42128588024633784
+        },
+        {
+          "sourceId": "product-bp-1014",
+          "similarity": 0.4124833714202083
+        },
+        {
+          "sourceId": "product-dl-1019",
+          "similarity": 0.4035059448922371
+        },
+        {
+          "sourceId": "product-dl-1020",
+          "similarity": 0.40327481060696946
+        },
+        {
+          "sourceId": "product-dl-1018",
+          "similarity": 0.3981043340470536
+        },
+        {
+          "sourceId": "product-dl-1025",
+          "similarity": 0.3976816057467941
+        },
+        {
+          "sourceId": "product-dl-1024",
+          "similarity": 0.39381872433964404
+        },
+        {
+          "sourceId": "product-dl-1010",
+          "similarity": 0.3934944750817293
+        },
+        {
+          "sourceId": "product-dl-1014",
+          "similarity": 0.39185602640676587
+        },
+        {
+          "sourceId": "product-bp-1019",
+          "similarity": 0.38968778817915295
+        }
+      ],
+      "abstained": true,
+      "latencyMs": 248
+    },
+    {
+      "caseId": "kb-eval-v1-abs-04",
+      "split": "dev",
+      "expectedKind": "abstain",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "no_source_found",
+      "rankedSourceIds": [
+        "policy-price-adjustment",
+        "policy-plus-membership",
+        "faq-store-credit",
+        "policy-shipping-fees",
+        "policy-return-shipping-cost",
+        "policy-payment-methods",
+        "policy-final-sale",
+        "product-ym-1004",
+        "product-bp-1024",
+        "product-ym-1022"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "policy-price-adjustment",
+          "similarity": 0.427430067811605
+        },
+        {
+          "sourceId": "policy-plus-membership",
+          "similarity": 0.42514313605848575
+        },
+        {
+          "sourceId": "faq-store-credit",
+          "similarity": 0.4109217385789631
+        },
+        {
+          "sourceId": "policy-shipping-fees",
+          "similarity": 0.39384411050747503
+        },
+        {
+          "sourceId": "policy-return-shipping-cost",
+          "similarity": 0.37487215920902184
+        },
+        {
+          "sourceId": "policy-payment-methods",
+          "similarity": 0.36825560898978615
+        },
+        {
+          "sourceId": "policy-final-sale",
+          "similarity": 0.3674111822353384
+        },
+        {
+          "sourceId": "product-ym-1004",
+          "similarity": 0.35110240856962105
+        },
+        {
+          "sourceId": "product-bp-1024",
+          "similarity": 0.3476501496046698
+        },
+        {
+          "sourceId": "product-ym-1022",
+          "similarity": 0.34471805754684715
+        }
+      ],
+      "abstained": true,
+      "latencyMs": 239
+    },
+    {
+      "caseId": "kb-eval-v1-abs-05",
+      "split": "test",
+      "expectedKind": "abstain",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "product-sw-1001",
+        "product-sw-1014",
+        "product-sw-1021",
+        "product-sw-1023",
+        "product-sw-1018",
+        "product-sw-1005",
+        "product-sw-1002",
+        "product-sw-1022",
+        "product-sw-1020",
+        "product-sw-1008"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "product-sw-1001",
+          "similarity": 0.7060887813568115
+        },
+        {
+          "sourceId": "product-sw-1014",
+          "similarity": 0.6152218580245972
+        },
+        {
+          "sourceId": "product-sw-1021",
+          "similarity": 0.593134593145207
+        },
+        {
+          "sourceId": "product-sw-1023",
+          "similarity": 0.5777639998338233
+        },
+        {
+          "sourceId": "product-sw-1018",
+          "similarity": 0.5573761463165283
+        },
+        {
+          "sourceId": "product-sw-1005",
+          "similarity": 0.5421135971410793
+        },
+        {
+          "sourceId": "product-sw-1002",
+          "similarity": 0.5046632585130189
+        },
+        {
+          "sourceId": "product-sw-1022",
+          "similarity": 0.5020001231431896
+        },
+        {
+          "sourceId": "product-sw-1020",
+          "similarity": 0.49834999442100525
+        },
+        {
+          "sourceId": "product-sw-1008",
+          "similarity": 0.48243504762649536
+        }
+      ],
+      "abstained": true,
+      "answer": "The knowledge base does not cover how to reset the firmware on the Orbit Hybrid Watch Air.",
+      "latencyMs": 1636
+    },
+    {
+      "caseId": "kb-eval-v1-abs-06",
+      "split": "test",
+      "expectedKind": "abstain",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "policy-payment-methods",
+        "policy-gift-returns",
+        "policy-shipping-regions",
+        "policy-final-sale",
+        "faq-store-credit",
+        "policy-shipping-fees",
+        "faq-change-address",
+        "faq-missing-item",
+        "faq-wrong-item",
+        "policy-exchanges"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "policy-payment-methods",
+          "similarity": 0.49457448785609504
+        },
+        {
+          "sourceId": "policy-gift-returns",
+          "similarity": 0.4725705526045132
+        },
+        {
+          "sourceId": "policy-shipping-regions",
+          "similarity": 0.4299007058143616
+        },
+        {
+          "sourceId": "policy-final-sale",
+          "similarity": 0.4168107857220904
+        },
+        {
+          "sourceId": "faq-store-credit",
+          "similarity": 0.39096687543787334
+        },
+        {
+          "sourceId": "policy-shipping-fees",
+          "similarity": 0.36836827585886334
+        },
+        {
+          "sourceId": "faq-change-address",
+          "similarity": 0.35987186431884766
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.35627490282058716
+        },
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.3474433603950333
+        },
+        {
+          "sourceId": "policy-exchanges",
+          "similarity": 0.3444000482559204
+        }
+      ],
+      "abstained": true,
+      "answer": "The knowledge base does not cover whether gift wrapping is offered.",
+      "latencyMs": 1407
+    },
+    {
+      "caseId": "kb-eval-v1-abs-07",
+      "split": "test",
+      "expectedKind": "abstain",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "product-sw-1011",
+        "product-sw-1021",
+        "product-sw-1019",
+        "product-sw-1007",
+        "product-sw-1006",
+        "product-sw-1003",
+        "product-sw-1010",
+        "product-sw-1004",
+        "product-sw-1023",
+        "product-sw-1015"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "product-sw-1011",
+          "similarity": 0.5676615745718717
+        },
+        {
+          "sourceId": "product-sw-1021",
+          "similarity": 0.5654464442070101
+        },
+        {
+          "sourceId": "product-sw-1019",
+          "similarity": 0.5623094700390426
+        },
+        {
+          "sourceId": "product-sw-1007",
+          "similarity": 0.5605526471632128
+        },
+        {
+          "sourceId": "product-sw-1006",
+          "similarity": 0.5574739839152117
+        },
+        {
+          "sourceId": "product-sw-1003",
+          "similarity": 0.5542628104373482
+        },
+        {
+          "sourceId": "product-sw-1010",
+          "similarity": 0.552937388420105
+        },
+        {
+          "sourceId": "product-sw-1004",
+          "similarity": 0.5497141048226987
+        },
+        {
+          "sourceId": "product-sw-1023",
+          "similarity": 0.5434280310018054
+        },
+        {
+          "sourceId": "product-sw-1015",
+          "similarity": 0.539059336297595
+        }
+      ],
+      "abstained": true,
+      "answer": "The knowledge base does not cover trade-in values for old smartwatches.",
+      "latencyMs": 1286
+    },
+    {
+      "caseId": "kb-eval-v1-abs-08",
+      "split": "test",
+      "expectedKind": "abstain",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "faq-change-address",
+        "policy-shipping-times",
+        "policy-order-cancellation",
+        "faq-wrong-item",
+        "faq-missing-item",
+        "faq-order-tracking",
+        "policy-return-window",
+        "policy-price-adjustment",
+        "policy-partial-cancellation",
+        "policy-payment-methods"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "faq-change-address",
+          "similarity": 0.5420521386312392
+        },
+        {
+          "sourceId": "policy-shipping-times",
+          "similarity": 0.4957089276400636
+        },
+        {
+          "sourceId": "policy-order-cancellation",
+          "similarity": 0.48637877282906716
+        },
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.44582943779739403
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.4400141930592847
+        },
+        {
+          "sourceId": "faq-order-tracking",
+          "similarity": 0.4316035894993193
+        },
+        {
+          "sourceId": "policy-return-window",
+          "similarity": 0.42477061078636935
+        },
+        {
+          "sourceId": "policy-price-adjustment",
+          "similarity": 0.42209816772623543
+        },
+        {
+          "sourceId": "policy-partial-cancellation",
+          "similarity": 0.41546762723931485
+        },
+        {
+          "sourceId": "policy-payment-methods",
+          "similarity": 0.41410918789777496
+        }
+      ],
+      "abstained": true,
+      "answer": "The knowledge base does not cover scheduling delivery for a specific hour of the day.",
+      "latencyMs": 1346
+    },
+    {
+      "caseId": "kb-eval-v1-abs-09",
+      "split": "test",
+      "expectedKind": "abstain",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "no_source_found",
+      "rankedSourceIds": [
+        "product-hp-1025",
+        "product-hp-1024",
+        "product-hp-1013",
+        "product-hp-1003",
+        "faq-store-credit",
+        "product-hp-1016",
+        "product-hp-1004",
+        "product-hp-1018",
+        "product-hp-1020",
+        "product-hp-1007"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "product-hp-1025",
+          "similarity": 0.38465688320059344
+        },
+        {
+          "sourceId": "product-hp-1024",
+          "similarity": 0.3807473111598142
+        },
+        {
+          "sourceId": "product-hp-1013",
+          "similarity": 0.38009251593440574
+        },
+        {
+          "sourceId": "product-hp-1003",
+          "similarity": 0.3791013576207124
+        },
+        {
+          "sourceId": "faq-store-credit",
+          "similarity": 0.37526064361441613
+        },
+        {
+          "sourceId": "product-hp-1016",
+          "similarity": 0.3747964501380947
+        },
+        {
+          "sourceId": "product-hp-1004",
+          "similarity": 0.36910633032880313
+        },
+        {
+          "sourceId": "product-hp-1018",
+          "similarity": 0.36666541695617205
+        },
+        {
+          "sourceId": "product-hp-1020",
+          "similarity": 0.3630819808518311
+        },
+        {
+          "sourceId": "product-hp-1007",
+          "similarity": 0.3595270002170212
+        }
+      ],
+      "abstained": true,
+      "latencyMs": 682
+    },
+    {
+      "caseId": "kb-eval-v1-abs-10",
+      "split": "test",
+      "expectedKind": "abstain",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "no_source_found",
+      "rankedSourceIds": [
+        "faq-wrong-item",
+        "faq-missing-item",
+        "faq-where-is-my-refund",
+        "policy-shipping-fees",
+        "faq-order-tracking",
+        "faq-store-credit",
+        "product-pc-1002",
+        "product-cm-1012",
+        "product-hp-1025",
+        "policy-refund-request-steps"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.31234643050911504
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.31003201931810453
+        },
+        {
+          "sourceId": "faq-where-is-my-refund",
+          "similarity": 0.2841223434319209
+        },
+        {
+          "sourceId": "policy-shipping-fees",
+          "similarity": 0.28161438460307275
+        },
+        {
+          "sourceId": "faq-order-tracking",
+          "similarity": 0.26551056699486286
+        },
+        {
+          "sourceId": "faq-store-credit",
+          "similarity": 0.2609911327668041
+        },
+        {
+          "sourceId": "product-pc-1002",
+          "similarity": 0.2564312739243735
+        },
+        {
+          "sourceId": "product-cm-1012",
+          "similarity": 0.2541030721099101
+        },
+        {
+          "sourceId": "product-hp-1025",
+          "similarity": 0.2507653907169519
+        },
+        {
+          "sourceId": "policy-refund-request-steps",
+          "similarity": 0.24975136666749032
+        }
+      ],
+      "abstained": true,
+      "latencyMs": 236
+    },
+    {
+      "caseId": "kb-eval-v1-adv-02",
+      "split": "dev",
+      "expectedKind": "abstain",
+      "status": "completed",
+      "retrievalMode": "vector_only_configured",
+      "kbOutcome": "evidence_found",
+      "rankedSourceIds": [
+        "faq-wrong-item",
+        "policy-return-window",
+        "policy-final-sale",
+        "faq-missing-item",
+        "policy-international-returns",
+        "policy-exchanges",
+        "policy-gift-returns",
+        "policy-damaged-defective",
+        "policy-return-shipping-cost",
+        "policy-plus-membership"
+      ],
+      "candidateScores": [
+        {
+          "sourceId": "faq-wrong-item",
+          "similarity": 0.4810553513699385
+        },
+        {
+          "sourceId": "policy-return-window",
+          "similarity": 0.46928158768635275
+        },
+        {
+          "sourceId": "policy-final-sale",
+          "similarity": 0.44866100259655783
+        },
+        {
+          "sourceId": "faq-missing-item",
+          "similarity": 0.4299742579460144
+        },
+        {
+          "sourceId": "policy-international-returns",
+          "similarity": 0.42445191290688067
+        },
+        {
+          "sourceId": "policy-exchanges",
+          "similarity": 0.40813887119293213
+        },
+        {
+          "sourceId": "policy-gift-returns",
+          "similarity": 0.3839894647595128
+        },
+        {
+          "sourceId": "policy-damaged-defective",
+          "similarity": 0.37673822780023714
+        },
+        {
+          "sourceId": "policy-return-shipping-cost",
+          "similarity": 0.3753305711147714
+        },
+        {
+          "sourceId": "policy-plus-membership",
+          "similarity": 0.3746986240507839
+        }
+      ],
+      "abstained": true,
+      "answer": "The knowledge base does not cover the policy on returning opened drones.",
+      "latencyMs": 1270
+    }
+  ],
+  "summary": {
+    "dev": {
+      "cases": 12,
+      "answerableCases": 9,
+      "abstainCases": 3,
+      "recallAt5": 0.8888888888888888,
+      "mrr": 0.7444444444444445,
+      "citationAccuracy": 0.9375,
+      "faithfulness": 0.9583333333333333,
+      "abstentionAccuracy": 1,
+      "falseAbstentionRate": 0.1111111111111111,
+      "latencyP50Ms": 2486,
+      "latencyP95Ms": 3654
+    },
+    "test": {
+      "cases": 28,
+      "answerableCases": 20,
+      "abstainCases": 8,
+      "recallAt5": 0.8625,
+      "mrr": 0.7960416666666665,
+      "citationAccuracy": 0.9722222222222222,
+      "faithfulness": 0.9305555555555556,
+      "abstentionAccuracy": 1,
+      "falseAbstentionRate": 0.1,
+      "latencyP50Ms": 2504,
+      "latencyP95Ms": 3868
+    },
+    "all": {
+      "cases": 40,
+      "answerableCases": 29,
+      "abstainCases": 11,
+      "recallAt5": 0.8706896551724138,
+      "mrr": 0.7800287356321838,
+      "citationAccuracy": 0.9615384615384616,
+      "faithfulness": 0.9391025641025641,
+      "abstentionAccuracy": 1,
+      "falseAbstentionRate": 0.10344827586206896,
+      "latencyP50Ms": 2493,
+      "latencyP95Ms": 3654
+    }
+  }
+}

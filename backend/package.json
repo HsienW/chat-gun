@@ -14,6 +14,10 @@
     "start": "langgraphjs dev",
     "test": "vitest run",
     "eval:opik": "vitest run src/evaluation/opik/experiment.live-smoke.test.ts",
+    "knowledge:corpus": "tsx scripts/knowledge/generate-synthetic-corpus.ts",
+    "knowledge:ingest": "tsx src/knowledge/ingest.cli.ts",
+    "knowledge:eval-dataset": "tsx scripts/knowledge/build-eval-dataset.ts",
+    "knowledge:evaluate": "tsx src/knowledge/evaluation/evaluate.cli.ts",
     "operations:release-gate": "tsx src/operations/release-gate.cli.ts",
     "operations:feedback-loop": "tsx src/operations/feedback-loop.cli.ts",
     "operations:rolling-deploy": "tsx src/operations/rolling-deploy.cli.ts"

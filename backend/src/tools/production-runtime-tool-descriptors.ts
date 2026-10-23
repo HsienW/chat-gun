@@ -17,7 +17,9 @@ import {
   type RuntimeToolDescriptor,
 } from "../runtime/tool-dispatch/runtime-tool-descriptor.js";
 import { DEFAULT_RETRY_POLICY } from "../runtime/retry/retry-policy.js";
+import { knowledgeEgressDestinations, readKnowledgeConfig } from "../knowledge/config.js";
 import { calculatorTool } from "./calculator.js";
+import { KB_SEARCH_SECRET_REFERENCE, KB_SEARCH_TOOL_NAME, kbSearchTool } from "./kb-search.js";
 import {
   createLocalToolRiskPolicies,
   LOCAL_PRODUCTION_TOOL_NAMES,
@@ -33,8 +35,25 @@ import { webSearchTool } from "./web-search.js";
 export const LOCAL_RUNTIME_TOOL_VERSION = "1.0";
 
 const LOCAL_PROFILE_ID_PREFIX = "local-read-only";
-const LOCAL_EGRESS_REQUIREMENTS: Readonly<Record<string, EgressRequirements>> =
-  PRODUCTION_EGRESS_REQUIREMENTS;
+
+/** kb_search egress derives from the configured model endpoints instead of a fixed host list. */
+function localEgressRequirements(toolName: string): EgressRequirements | undefined {
+  if (toolName === KB_SEARCH_TOOL_NAME) {
+    const config = readKnowledgeConfig();
+    const urls = [config.embeddingBaseUrl, ...(config.rerankUrl ? [config.rerankUrl] : [])];
+    return {
+      destinations: knowledgeEgressDestinations(config),
+      protocols: [...new Set(urls.map((url) => new URL(url).protocol.replace(":", "") as "http" | "https"))],
+    };
+  }
+  return (PRODUCTION_EGRESS_REQUIREMENTS as Readonly<Record<string, EgressRequirements>>)[toolName];
+}
+
+function localSecretRequirements(toolName: string): readonly SecretReference[] | undefined {
+  if (toolName === "web_search") return [TAVILY_SECRET_REFERENCE];
+  if (toolName === KB_SEARCH_TOOL_NAME) return [KB_SEARCH_SECRET_REFERENCE];
+  return undefined;
+}
 
 export const TAVILY_SECRET_REFERENCE: SecretReference = {
   secretRef: "env:TAVILY_API_KEY",
@@ -48,6 +67,7 @@ export const LOCAL_PRODUCTION_TOOLS = [
   webFetchTool,
   weatherTool,
   weatherForecastTool,
+  kbSearchTool,
 ] as const satisfies readonly StructuredToolInterface[];
 
 function localProfileId(toolName: string): string {
@@ -55,7 +75,7 @@ function localProfileId(toolName: string): string {
 }
 
 function createTrustedLocalProfile(toolName: string): ExecutionProfile {
-  const egressRequirements = LOCAL_EGRESS_REQUIREMENTS[toolName];
+  const egressRequirements = localEgressRequirements(toolName);
   return {
     profileVersion: "1.0",
     mode: "trusted_in_process",
@@ -73,8 +93,7 @@ function createTrustedLocalProfile(toolName: string): ExecutionProfile {
       dns: "resolve_and_connect",
     },
     env: {
-      allowedVariables:
-        toolName === "web_search" ? ["TAVILY_API_KEY"] : [],
+      allowedVariables: (localSecretRequirements(toolName) ?? []).map(({ secretName }) => secretName),
     },
     binaries: { allowed: [], runtimeImages: [] },
     output: { maxBytes: 24_000, artifactHandling: "inline" },
@@ -142,6 +161,8 @@ export function createLocalRuntimeToolDescriptors(): RuntimeToolDescriptor<
       throw new Error(`Missing local ToolRiskPolicy: ${tool.name}`);
     }
     const governancePolicy = defaultToolPolicy(tool.name);
+    const egressRequirements = localEgressRequirements(tool.name);
+    const secretRequirements = localSecretRequirements(tool.name);
 
     return {
       toolName: tool.name,
@@ -161,12 +182,8 @@ export function createLocalRuntimeToolDescriptors(): RuntimeToolDescriptor<
         profileId: localProfileId(tool.name),
         profileVersion: "1.0" as const,
       },
-      ...(LOCAL_EGRESS_REQUIREMENTS[tool.name]
-        ? { egressRequirements: LOCAL_EGRESS_REQUIREMENTS[tool.name] }
-        : {}),
-      ...(tool.name === "web_search"
-        ? { secretRequirements: [TAVILY_SECRET_REFERENCE] }
-        : {}),
+      ...(egressRequirements ? { egressRequirements } : {}),
+      ...(secretRequirements ? { secretRequirements: [...secretRequirements] } : {}),
     };
   });
 }

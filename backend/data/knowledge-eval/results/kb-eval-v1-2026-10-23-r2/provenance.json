@@ -1,0 +1,17 @@
+{
+  "datasetVersion": "kb-eval-v1",
+  "corpusVersion": "kb-v1",
+  "split": "all",
+  "embeddingModel": "text-embedding-v4",
+  "embeddingSpaceId": "text-embedding-v4:1024",
+  "rerankModel": "qwen3-rerank",
+  "generationModel": "qwen-plus",
+  "judgeModel": "qwen-max",
+  "answerPromptVersion": "kb-answer-v1",
+  "judgePromptVersion": "kb-faithfulness-v1",
+  "thresholdVersion": "kb-threshold-v0",
+  "configVersion": "kb-config-v1",
+  "runCount": 1,
+  "date": "2026-10-23",
+  "synthetic": true
+}

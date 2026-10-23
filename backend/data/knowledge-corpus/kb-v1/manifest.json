@@ -1,0 +1,15 @@
+{
+  "synthetic": true,
+  "corpusVersion": "kb-v1",
+  "generatedAt": "2026-10-23",
+  "generator": "backend/scripts/knowledge/generate-synthetic-corpus.ts",
+  "seed": 42,
+  "counts": {
+    "uniqueProducts": 200,
+    "rawProductRecords": 212,
+    "exactDuplicates": 8,
+    "noisyDuplicates": 4,
+    "policyDocuments": 20,
+    "faqDocuments": 10
+  }
+}

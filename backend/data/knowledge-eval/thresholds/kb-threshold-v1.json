@@ -1,0 +1,31 @@
+{
+  "thresholdVersion": "kb-threshold-v1",
+  "calibratedAt": "2026-10-23",
+  "method": "Dev split only. Threshold on the top candidate score maximizing balanced accuracy (answerable passes, abstain blocks); ties broken by the largest margin from any observed score.",
+  "source": {
+    "results": "kb-eval-v1-2026-10-23-r2",
+    "datasetVersion": "kb-eval-v1",
+    "corpusVersion": "kb-v1",
+    "embeddingSpaceId": "text-embedding-v4:1024",
+    "rerankModel": "qwen3-rerank",
+    "split": "dev"
+  },
+  "vectorOnly": {
+    "score": "cosine similarity",
+    "threshold": 0.616,
+    "truePassRate": 1,
+    "trueBlockRate": 1,
+    "balancedAccuracy": 1,
+    "margin": 0.014,
+    "points": 12
+  },
+  "vectorRerank": {
+    "score": "qwen3-rerank relevance_score",
+    "threshold": 0.62,
+    "truePassRate": 1,
+    "trueBlockRate": 1,
+    "balancedAccuracy": 1,
+    "margin": 0.147,
+    "points": 12
+  }
+}
