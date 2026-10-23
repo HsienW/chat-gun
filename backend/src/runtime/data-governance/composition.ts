@@ -1,3 +1,7 @@
+import {
+  createKnowledgeCorpusGovernedDriver,
+  KNOWLEDGE_CORPUS_DATA_CLASS_ID,
+} from "../../knowledge/governance.js";
 import type { Queryable } from "../persistence/rows.js";
 import { ConsentService, PgConsentRecordStore } from "./consent.js";
 import {
@@ -56,7 +60,10 @@ export function createDataGovernanceRuntime(options: DataGovernanceRuntimeOption
       continue;
     }
     const driver =
-      options.externalDrivers.get(entry.dataClassId) ?? unavailableExternalDriver;
+      options.externalDrivers.get(entry.dataClassId) ??
+      (entry.dataClassId === KNOWLEDGE_CORPUS_DATA_CLASS_ID
+        ? createKnowledgeCorpusGovernedDriver()
+        : unavailableExternalDriver);
     registry.register(entry, new GovernedStoreAdapter(entry, driver));
   }
 
