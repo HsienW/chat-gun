@@ -145,14 +145,14 @@ npm run build
 
 > 前置：T0、T3。對應 `commerce-assistant`「意圖路由」「商品查詢」「不可信內容」。
 
-- [ ] graph 註冊於 `langgraph.json`；execution manifest 使用自己的 graphId；以既有 execution context、interaction governance 與 Opik instrumentation 包裝。
-- [ ] State 欄位依 design §4.2（owner、write timing、default、checkpoint 行為）實作；無不可序列化物件。
-- [ ] 輸入 schema（第 9 版，design §6.13）：graph 宣告獨立輸入 schema，只含 `messages`、`kind`、`targetRunId`；測試 run 輸入夾帶 `pendingAuthorization`、`activeToolCall`、`toolQueue`、`operations`、`runtimeEventCursor` 時不寫入 state，一般訊息與取消輸入照常處理。
-- [ ] 新增 backend `card.emit` producer（design §8.1）：node 以 state update 回傳 `runtimeEvents`（每次 update 取代、不累積）；envelope 的 `context` 取自 server 端 execution context；`runtimeEventCursor` 使每個 run 的 `sequence` 從 1 開始連續、runId 改變時重設，`eventId` 由 runId 與 sequence 推導；沿用既有 envelope 與前端解析，不改 `runtime-event-contract`。以測試證明事件形狀與序號通過前端既有的解析與緩衝（同一 run 連續、新 run 從 1 開始、replay 時 eventId 相同）。
-- [ ] `shopping_intent@1` 結構化輸出、strict schema、有界重試、schema invalid 進入澄清並記錄 typed failure；不以模型名稱分支。
-- [ ] 商品分支：只綁 `kb_search`，經 gate／dispatch，`product_present` 驗證 `kb_search_result@1` 後，每個 sourceId 發出一張 `product_result@1` card（取排序最前的 chunk）。
-- [ ] prompt 先建立 golden case 再撰寫；記錄模型與生成參數。
-- [ ] 測試（deterministic）：三種意圖與不支援請求的路由；schema invalid；路由逾時與取消不呼叫 tool；商品卡片欄位只來自結構化結果；同一商品多個 chunk 只有一張卡片；no source found 不發卡片；檢索失敗明確無法查詢。
+- [x] graph 註冊於 `langgraph.json`；execution manifest 使用自己的 graphId；以既有 execution context、interaction governance 與 Opik instrumentation 包裝。
+- [x] State 欄位依 design §4.2（owner、write timing、default、checkpoint 行為）實作；無不可序列化物件。
+- [x] 輸入 schema（第 9 版，design §6.13）：graph 宣告獨立輸入 schema，只含 `messages`、`kind`、`targetRunId`；測試 run 輸入夾帶 `pendingAuthorization`、`activeToolCall`、`toolQueue`、`operations`、`runtimeEventCursor` 時不寫入 state，一般訊息與取消輸入照常處理。
+- [x] 新增 backend `card.emit` producer（design §8.1）：node 以 state update 回傳 `runtimeEvents`（每次 update 取代、不累積）；envelope 的 `context` 取自 server 端 execution context；`runtimeEventCursor` 使每個 run 的 `sequence` 從 1 開始連續、runId 改變時重設，`eventId` 由 runId 與 sequence 推導；沿用既有 envelope 與前端解析，不改 `runtime-event-contract`。以測試證明事件形狀與序號通過前端既有的解析與緩衝（同一 run 連續、新 run 從 1 開始、replay 時 eventId 相同）。
+- [x] `shopping_intent@1` 結構化輸出、strict schema、有界重試、schema invalid 進入澄清並記錄 typed failure；不以模型名稱分支。
+- [x] 商品分支：只綁 `kb_search`，經 gate／dispatch，`product_present` 驗證 `kb_search_result@1` 後，每個 sourceId 發出一張 `product_result@1` card（取排序最前的 chunk）。
+- [x] prompt 先建立 golden case 再撰寫；記錄模型與生成參數。
+- [x] 測試（deterministic）：三種意圖與不支援請求的路由；schema invalid；路由逾時與取消不呼叫 tool；商品卡片欄位只來自結構化結果；同一商品多個 chunk 只有一張卡片；no source found 不發卡片；檢索失敗明確無法查詢。
 
 驗證命令：
 
