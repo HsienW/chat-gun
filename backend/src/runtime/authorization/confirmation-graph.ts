@@ -22,13 +22,27 @@ import {
   parseConfirmationResume,
   toConfirmationInterruptPayload,
   type AuthorizationConfirmationStore,
+  type AuthorizationConfirmationWithdrawalStore,
+  type ConfirmationConsumeResult,
   type ConfirmationRequiredDescriptor,
 } from "./confirmation.js";
+
+export type ConfirmationOutcome = "denied" | "expired" | "withdrawn";
+
+export interface ConfirmationOutcomeRecord {
+  toolCallId: string;
+  outcome: ConfirmationOutcome;
+}
 
 export interface AuthorizationGraphToolCall {
   toolName: string;
   toolCallId: string;
   input: unknown;
+  /**
+   * Set only by the gate or confirmation node from a server-side authorization
+   * decision; never derived from model output.
+   */
+  authorizationDecisionId?: string;
 }
 
 export interface AuthorizationGraphState {
@@ -36,6 +50,8 @@ export interface AuthorizationGraphState {
   toolQueue: AuthorizationGraphToolCall[];
   activeToolCall?: AuthorizationGraphToolCall | null;
   pendingAuthorization?: ConfirmationRequiredDescriptor | null;
+  /** Written only when `confirmationOutcome` is enabled; graphs without the option never see it. */
+  confirmationOutcome?: ConfirmationOutcomeRecord | null;
 }
 
 export interface CreateToolAuthorizationGraphNodesInput {
@@ -43,6 +59,44 @@ export interface CreateToolAuthorizationGraphNodesInput {
   confirmationStore: AuthorizationConfirmationStore;
   interruptManifestRepository: InterruptManifestRepository;
   executionManifest: ExecutionManifestRef;
+  /**
+   * Opt-in machine-readable confirmation outcome. Disabled by default so existing
+   * graphs keep their tool message content byte-for-byte.
+   */
+  confirmationOutcome?: {
+    statusReader: Pick<AuthorizationConfirmationWithdrawalStore, "findStatus">;
+  };
+}
+
+/** Maps a non-approved consume result to an outcome without parsing error strings. */
+export async function resolveConfirmationOutcome(
+  consumed: ConfirmationConsumeResult,
+  descriptor: ConfirmationRequiredDescriptor,
+  statusReader: Pick<AuthorizationConfirmationWithdrawalStore, "findStatus">
+): Promise<ConfirmationOutcome | undefined> {
+  if (consumed.ok) return consumed.status === "denied" ? "denied" : undefined;
+  if (consumed.reasonCode === "CONFIRMATION_TIMEOUT") return "expired";
+  if (consumed.reasonCode !== "CONFIRMATION_REPLAYED_OR_EXPIRED") return undefined;
+  const current = await statusReader
+    .findStatus({
+      approvalId: descriptor.approvalId,
+      decisionId: descriptor.decisionId,
+    })
+    .catch(() => null);
+  if (!current) return undefined;
+  if (current.withdrawn) return "withdrawn";
+  if (current.status === "expired") return "expired";
+  return current.status === "denied" ? "denied" : undefined;
+}
+
+function withAuthorizationDecision(
+  call: AuthorizationGraphToolCall,
+  decisionId: string | undefined
+): AuthorizationGraphToolCall {
+  const { authorizationDecisionId: _ignored, ...base } = call;
+  return decisionId === undefined
+    ? base
+    : { ...base, authorizationDecisionId: decisionId };
 }
 
 function extractToolCalls(messages: readonly unknown[]): AuthorizationGraphToolCall[] {
@@ -63,6 +117,7 @@ function errorCode(outcome: GovernedToolOutcome<unknown>): string {
   if (outcome.type === "succeeded") return "";
   if (outcome.type === "cancelled") return "TOOL_EXECUTION_CANCELLED";
   if (outcome.type === "confirmation_required") return "REQUIRES_CONFIRMATION";
+  if (outcome.type === "deduplicated") return "SIDE_EFFECT_CLAIM_NOT_ACQUIRED";
   return outcome.errorCode;
 }
 
@@ -163,7 +218,7 @@ export function createToolAuthorizationGraphNodes(
     }
     return {
       toolQueue: remaining,
-      activeToolCall: call,
+      activeToolCall: withAuthorizationDecision(call, outcome.decisionId),
       pendingAuthorization: null,
     };
   }
@@ -226,16 +281,26 @@ export function createToolAuthorizationGraphNodes(
           nextStatus: "expired",
         });
       }
+      const errorCode = consumed.ok ? "CONFIRMATION_CANCELLED" : consumed.reasonCode;
+      const outcome = input.confirmationOutcome
+        ? await resolveConfirmationOutcome(
+            consumed,
+            descriptor,
+            input.confirmationOutcome.statusReader
+          )
+        : undefined;
+      if (outcome === undefined) {
+        return {
+          messages: [toolMessage(call, { errorCode })],
+          activeToolCall: null,
+          pendingAuthorization: null,
+        };
+      }
       return {
-        messages: [
-          toolMessage(call, {
-            errorCode: consumed.ok
-              ? "CONFIRMATION_CANCELLED"
-              : consumed.reasonCode,
-          }),
-        ],
+        messages: [toolMessage(call, { errorCode, confirmationOutcome: outcome })],
         activeToolCall: null,
         pendingAuthorization: null,
+        confirmationOutcome: { toolCallId: call.toolCallId, outcome },
       };
     }
     await input.interruptManifestRepository.transitionStatus({
@@ -243,7 +308,10 @@ export function createToolAuthorizationGraphNodes(
       expectedStatus: "waiting",
       nextStatus: "resumed",
     });
-    return { activeToolCall: call, pendingAuthorization: null };
+    return {
+      activeToolCall: withAuthorizationDecision(call, descriptor.decisionId),
+      pendingAuthorization: null,
+    };
   }
 
   async function physicalDispatch(
@@ -262,7 +330,10 @@ export function createToolAuthorizationGraphNodes(
     }
     const outcome = await executor.executeAuthorizedTyped(
       call.input,
-      executionConfig(config, call)
+      executionConfig(config, call),
+      call.authorizationDecisionId === undefined
+        ? undefined
+        : { decisionId: call.authorizationDecisionId }
     );
     return {
       messages: [

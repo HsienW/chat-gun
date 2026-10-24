@@ -117,6 +117,25 @@ export class PgInterruptManifestRepository
     return mapManifestRow(result.rows[0]);
   }
 
+  /** Additive lookup used to route a cancel input to a graph that is waiting on a tool confirmation. */
+  async findWaitingConfirmationByThread(input: {
+    threadId: string;
+    scopeId: string;
+  }): Promise<DurableInterruptManifest | null> {
+    const result = await this.db.query<InterruptManifestRow>(
+      `SELECT manifest
+       FROM interrupt_manifests
+       WHERE thread_id = $1
+         AND scope_id = $2
+         AND kind = 'confirmation'
+         AND status = 'waiting'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [input.threadId, input.scopeId]
+    );
+    return mapManifestRow(result.rows[0]);
+  }
+
   async consume(
     input: ConsumeInterruptManifestInput
   ): Promise<DurableInterruptManifest | null> {
