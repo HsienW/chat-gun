@@ -849,3 +849,105 @@ describe("interaction runtime production wrapper", () => {
     );
   });
 });
+
+describe("cancel routing for a thread waiting on a tool confirmation", () => {
+  function idleThreadDependencies() {
+    const dependencies = configuredDependencies("supersede");
+    delete dependencies.config.classify;
+    dependencies.ownershipRepository.findActive.mockImplementation(
+      async () => null as unknown as ActiveRunOwnership
+    );
+    dependencies.ownershipRepository.claim.mockImplementation(async () =>
+      ownership({ taskId: "task-run-2", runId: "run-2", generation: 4 })
+    );
+    return dependencies;
+  }
+
+  function cancelGraph() {
+    return {
+      invoke: vi.fn(async (_input: unknown, _config?: unknown) => ({
+        withdrawn: true,
+      })),
+    };
+  }
+
+  it("keeps NOTHING_TO_CANCEL when the orchestrator does not opt in", async () => {
+    const dependencies = idleThreadDependencies();
+    const graph = cancelGraph();
+
+    const result = await applyInteractionGovernance(
+      graph,
+      createInteractionOrchestrator(dependencies.config),
+    ).invoke({ kind: "cancel", targetRunId: "run-1" }, runConfig());
+
+    expect(result).toEqual({ status: "no_op", reason: "nothing_to_cancel" });
+    expect(graph.invoke).not.toHaveBeenCalled();
+  });
+
+  it("keeps NOTHING_TO_CANCEL when the thread is not waiting on a tool confirmation", async () => {
+    const dependencies = idleThreadDependencies();
+    const isWaitingToolConfirmation = vi.fn(async () => false);
+    dependencies.config.isWaitingToolConfirmation = isWaitingToolConfirmation;
+    const graph = cancelGraph();
+
+    const result = await applyInteractionGovernance(
+      graph,
+      createInteractionOrchestrator(dependencies.config),
+    ).invoke({ kind: "cancel", targetRunId: "run-1" }, runConfig());
+
+    expect(result).toEqual({ status: "no_op", reason: "nothing_to_cancel" });
+    expect(isWaitingToolConfirmation).toHaveBeenCalledWith({
+      threadId: "thread-1",
+      scopeId: "scope-1",
+    });
+    expect(graph.invoke).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["with a target run", { kind: "cancel", targetRunId: "run-1" }],
+    ["without a target run", { kind: "cancel" }],
+  ])("dispatches the cancel to the graph %s when a tool confirmation is waiting", async (
+    _label,
+    input
+  ) => {
+    const dependencies = idleThreadDependencies();
+    dependencies.config.isWaitingToolConfirmation = vi.fn(async () => true);
+    const graph = cancelGraph();
+
+    const result = await applyInteractionGovernance(
+      graph,
+      createInteractionOrchestrator(dependencies.config),
+    ).invoke(input, runConfig());
+
+    expect(result).toEqual({ withdrawn: true });
+    expect(graph.invoke).toHaveBeenCalledOnce();
+    expect(dependencies.decideCancellation).not.toHaveBeenCalled();
+    expect(dependencies.eventRecorder.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          decision: expect.objectContaining({
+            disposition: "initial_claim",
+            classification: "cancel_request",
+            reasonCode: "CANCEL_WAITING_TOOL_CONFIRMATION",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("does not consult the waiting lookup while a run is active", async () => {
+    const dependencies = configuredDependencies("supersede");
+    delete dependencies.config.classify;
+    const isWaitingToolConfirmation = vi.fn(async () => true);
+    dependencies.config.isWaitingToolConfirmation = isWaitingToolConfirmation;
+    const graph = cancelGraph();
+
+    await applyInteractionGovernance(
+      graph,
+      createInteractionOrchestrator(dependencies.config),
+    ).invoke({ kind: "cancel", targetRunId: "run-1" }, runConfig());
+
+    expect(isWaitingToolConfirmation).not.toHaveBeenCalled();
+    expect(dependencies.decideCancellation).toHaveBeenCalledOnce();
+  });
+});

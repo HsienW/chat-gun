@@ -112,6 +112,15 @@ export interface InteractionOrchestratorConfig {
   ensureTask?: (context: InteractionRunContext) => Promise<void>;
   authorizeClarificationResume?: AuthorizeClarificationResume;
   recordMetric?: (name: string, payload: MetricPayload, context?: ExecutionContext) => void | Promise<void>;
+  /**
+   * Opt-in: when no run is active and the thread waits on a tool confirmation,
+   * dispatch a cancel input to the graph instead of returning NOTHING_TO_CANCEL.
+   * Graphs that do not set this keep the existing no-op behaviour.
+   */
+  isWaitingToolConfirmation?: (input: {
+    threadId: string;
+    scopeId: string;
+  }) => Promise<boolean>;
 }
 
 export type InteractionRunStart = {
@@ -620,9 +629,19 @@ export function createInteractionOrchestrator(
         );
       }
 
+      const routesCancelToWaitingConfirmation =
+        normalizedResult.input.kind === "cancel" &&
+        reservation.reserved &&
+        config.isWaitingToolConfirmation !== undefined &&
+        (await config.isWaitingToolConfirmation({
+          threadId: context.threadId,
+          scopeId: context.scopeId,
+        }));
+
       if (
         normalizedResult.input.kind === "cancel" &&
-        normalizedResult.input.targetRunId === undefined
+        normalizedResult.input.targetRunId === undefined &&
+        !routesCancelToWaitingConfirmation
       ) {
         const event = await rejectBeforeDispatch({
           context,
@@ -653,7 +672,10 @@ export function createInteractionOrchestrator(
             "CLARIFICATION_TASK_NOT_FOUND"
           );
         }
-        if (normalizedResult.input.kind === "cancel") {
+        if (
+          normalizedResult.input.kind === "cancel" &&
+          !routesCancelToWaitingConfirmation
+        ) {
           const event = await rejectBeforeDispatch({
             context,
             ownership: activeOwnership,
@@ -676,7 +698,12 @@ export function createInteractionOrchestrator(
           eventType: "interaction_decision",
           strategy: loadedPolicy.policy.strategy,
           disposition: "initial_claim",
-          reasonCode: "NO_ACTIVE_RUN",
+          ...(routesCancelToWaitingConfirmation
+            ? { classification: "cancel_request" as const }
+            : {}),
+          reasonCode: routesCancelToWaitingConfirmation
+            ? "CANCEL_WAITING_TOOL_CONFIRMATION"
+            : "NO_ACTIVE_RUN",
         });
         await recordDecision(config, event, context);
         await queryGuard.dispatch(context, activeOwnership.generation);
