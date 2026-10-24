@@ -91,10 +91,31 @@ export const SHOPPING_INTENTS = [
 ] as const;
 export type ShoppingIntent = (typeof SHOPPING_INTENTS)[number];
 
+/** Closed rationale codes; only for evaluation and trace, never a branch condition. */
+export const SHOPPING_INTENT_RATIONALE_CODES = [
+  "asks_product_info",
+  "asks_policy",
+  "requests_order_change",
+  "asks_order_status",
+  "ambiguous",
+  "multiple_requests",
+  "out_of_scope",
+] as const;
+export type ShoppingIntentRationaleCode = (typeof SHOPPING_INTENT_RATIONALE_CODES)[number];
+
+export const SHOPPING_ROUTE_FAILURE_CODES = [
+  "INTENT_ROUTING_SCHEMA_INVALID",
+  "INTENT_ROUTING_PROVIDER_ERROR",
+  "INTENT_ROUTING_CANCELLED",
+] as const;
+export type ShoppingRouteFailureCode = (typeof SHOPPING_ROUTE_FAILURE_CODES)[number];
+
 export interface ShoppingTurn {
   turnId: string;
   routedIntent: ShoppingIntent | null;
-  routeStatus: "pending" | "routed" | "schema_invalid";
+  routeStatus: "pending" | "routed" | "schema_invalid" | "provider_error" | "cancelled";
+  rationaleCode?: ShoppingIntentRationaleCode;
+  failureCode?: ShoppingRouteFailureCode;
 }
 
 export interface ShoppingTurnEvidence {
