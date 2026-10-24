@@ -40,6 +40,12 @@ import {
 import { InMemoryRateLimiter } from "./rate-limit.js";
 import { validateUploadPayload } from "./upload-security.js";
 import { containsUntrustedExecutionContext } from "./execution-context-boundary.js";
+import {
+  CLIENT_STATE_WRITE_FORBIDDEN,
+  findClientStateWrite,
+  toLangGraphPath,
+  type ClientStateWriteViolation,
+} from "./client-state-write-guard.js";
 import { pipeWebResponseBody } from "./stream-passthrough.js";
 import {
   parseAnonymousMigrationRequest,
@@ -675,6 +681,24 @@ function logAudit(
   );
 }
 
+function logClientStateWriteRejected(
+  ctx: RequestContext,
+  violation: ClientStateWriteViolation
+): void {
+  // Route pattern and reason only: no concrete path, ids or request body.
+  console.info(
+    JSON.stringify({
+      event: "bff_client_state_write_rejected",
+      requestId: ctx.requestId,
+      errorCode: CLIENT_STATE_WRITE_FORBIDDEN,
+      reason: violation.reason,
+      route: violation.route,
+      userId: ctx.userId,
+      tenantId: ctx.tenantId,
+    })
+  );
+}
+
 function abortWithReason(
   abortController: AbortController,
   reason: BffAbortReason
@@ -1099,6 +1123,19 @@ async function proxyLangGraph(
       sendJson(res, 400, { error: {
         code: "UNTRUSTED_EXECUTION_CONTEXT",
         message: "Execution context is owned by the server",
+      } }, ctx.requestId);
+      return;
+    }
+    const stateWrite = findClientStateWrite(
+      req.method,
+      toLangGraphPath(reqUrl.pathname),
+      body
+    );
+    if (stateWrite) {
+      logClientStateWriteRejected(ctx, stateWrite);
+      sendJson(res, 400, { error: {
+        code: CLIENT_STATE_WRITE_FORBIDDEN,
+        message: "Clients cannot write graph state directly",
       } }, ctx.requestId);
       return;
     }
