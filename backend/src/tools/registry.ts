@@ -1,8 +1,12 @@
 import type { StructuredToolInterface } from "@langchain/core/tools";
 
+import { validateManifest } from "@gun-ai/harness-sdk";
+
+import { auditLogger } from "../platform/observability.js";
 import {
   applyToolGovernance,
   auditToolLoad,
+  type ToolAuthorizationGovernanceConfig,
   type ToolGovernanceOptions,
 } from "../platform/tool-governance.js";
 import { createRuntimeToolAuthorizationComposition } from "./authorization/tool-authorization.js";
@@ -12,8 +16,28 @@ import type { InterruptManifestRepository } from "../runtime/recovery/interrupt-
 import { createRuntimeToolDispatchPipeline } from "../runtime/tool-dispatch/pipeline.js";
 import type { RuntimeToolDispatchPipelineDependencies } from "../runtime/tool-dispatch/pipeline.js";
 import { ExecutionProfileEnforcer } from "../runtime/tool-dispatch/execution-profile.js";
-import type { SandboxRunnerPort } from "../runtime/tool-dispatch/execution-profile.js";
+import type {
+  ExecutionProfileEnforcerPort,
+  ExecutionProfileRegistry,
+  SandboxRunnerPort,
+} from "../runtime/tool-dispatch/execution-profile.js";
+import type {
+  RuntimeToolDescriptor,
+  RuntimeToolDescriptorRegistry,
+} from "../runtime/tool-dispatch/runtime-tool-descriptor.js";
 import { EnvironmentSecretBroker } from "../runtime/tool-dispatch/secret-broker.js";
+import { SHOPPING_ASSISTANT_AGENT_MANIFEST } from "../agents/shopping-assistant/agent-manifest.js";
+import type { OrderProvider } from "./orders/mock-order-provider.js";
+import {
+  createOrderToolRiskPolicies,
+  createOrderToolSet,
+  registerOrderExecutionProfiles,
+  type OrderOperationStatusReader,
+} from "./orders/order-tools.js";
+import {
+  stageOrderToolSdkDescriptor,
+  type OrderToolManifestEvidence,
+} from "./sdk/order-tool-manifest-adapter.js";
 import {
   createLocalExecutionProfileRegistry,
   createLocalRuntimeToolDescriptors,
@@ -68,20 +92,13 @@ async function loadOptionalMcpTools(
   });
 }
 
-export async function loadAgentToolRuntime(
-  source: string,
-  options: LoadAgentToolsOptions = {}
-): Promise<AgentToolRuntime> {
-  const {
-    authorization,
-    confirmationStore,
-    interruptManifestRepository,
-    mcpRiskDescriptors,
-  } =
-    createRuntimeToolAuthorizationComposition();
-  const profileRegistry = createLocalExecutionProfileRegistry();
+async function stageLocalRuntimeDescriptors(
+  authorization: ToolAuthorizationGovernanceConfig,
+  profileRegistry: ExecutionProfileRegistry,
+  options: Pick<LoadAgentToolsOptions, "currentWeatherRegistration">
+): Promise<RuntimeToolDescriptor<unknown, string>[]> {
   const localDescriptors = createLocalRuntimeToolDescriptors();
-  const stagedDescriptors = await Promise.all(localDescriptors.map(async (descriptor) => {
+  return Promise.all(localDescriptors.map(async (descriptor) => {
     if (descriptor.toolName === "kb_search") {
       const tool = LOCAL_PRODUCTION_TOOLS.find((candidate) => candidate.name === descriptor.toolName);
       if (tool === undefined) throw new Error("kb_search implementation is unavailable");
@@ -104,8 +121,14 @@ export async function loadAgentToolRuntime(
       profileRegistry,
     });
   }));
-  const descriptorRegistry = createLocalRuntimeToolDescriptorRegistry(stagedDescriptors);
-  const executionProfileEnforcer =
+}
+
+function createExecutionProfileEnforcer(
+  descriptorRegistry: RuntimeToolDescriptorRegistry,
+  profileRegistry: ExecutionProfileRegistry,
+  options: Pick<LoadAgentToolsOptions, "sandboxRunner" | "dispatchPipelineDependencies">
+): ExecutionProfileEnforcerPort {
+  return (
     options.dispatchPipelineDependencies?.executionProfileEnforcer ??
     new ExecutionProfileEnforcer({
       descriptorRegistry,
@@ -120,7 +143,33 @@ export async function loadAgentToolRuntime(
       }),
       isEnabled: () =>
         process.env.TOOL_EXECUTION_PROFILE_ENFORCEMENT_ENABLED === "true",
-    });
+    })
+  );
+}
+
+export async function loadAgentToolRuntime(
+  source: string,
+  options: LoadAgentToolsOptions = {}
+): Promise<AgentToolRuntime> {
+  const {
+    authorization,
+    confirmationStore,
+    interruptManifestRepository,
+    mcpRiskDescriptors,
+  } =
+    createRuntimeToolAuthorizationComposition();
+  const profileRegistry = createLocalExecutionProfileRegistry();
+  const stagedDescriptors = await stageLocalRuntimeDescriptors(
+    authorization,
+    profileRegistry,
+    options
+  );
+  const descriptorRegistry = createLocalRuntimeToolDescriptorRegistry(stagedDescriptors);
+  const executionProfileEnforcer = createExecutionProfileEnforcer(
+    descriptorRegistry,
+    profileRegistry,
+    options
+  );
   const dispatchPipeline = isToolDispatchPipelineEnabled(source)
     ? createRuntimeToolDispatchPipeline({
         ...options.dispatchPipelineDependencies,
@@ -166,6 +215,119 @@ export async function loadAgentTools(
 ): Promise<StructuredToolInterface[]> {
   return (await loadAgentToolRuntime(source, options)).tools;
 }
+
+export type ShoppingToolRuntimeErrorCode =
+  | "AGENT_MANIFEST_INVALID"
+  | "AGENT_MANIFEST_TOOL_UNREGISTERED";
+
+export class ShoppingToolRuntimeError extends Error {
+  readonly name = "ShoppingToolRuntimeError";
+
+  constructor(
+    readonly code: ShoppingToolRuntimeErrorCode,
+    readonly toolId?: string
+  ) {
+    super(toolId ? `${code}: ${toolId}` : code);
+  }
+}
+
+export interface LoadShoppingAssistantToolsOptions {
+  orderProvider: OrderProvider;
+  statusReader: OrderOperationStatusReader;
+  /** Defaults to the shopping assistant's own manifest; tests pass a broken one. */
+  agentManifest?: unknown;
+  sandboxRunner?: SandboxRunnerPort;
+  dispatchPipelineDependencies?: Omit<
+    RuntimeToolDispatchPipelineDependencies,
+    "registry" | "emitDeduplicatedOutcome"
+  >;
+}
+
+export interface ShoppingAssistantToolRuntime extends AgentToolRuntime {
+  manifests: readonly OrderToolManifestEvidence[];
+}
+
+/**
+ * The shopping assistant gets only the tools its agent manifest grants, and
+ * always through the dispatch pipeline: there is no feature-flag fallback to
+ * the default executor (design §5.4). Order tools exist only in this runtime.
+ */
+export async function loadShoppingAssistantToolRuntime(
+  options: LoadShoppingAssistantToolsOptions
+): Promise<ShoppingAssistantToolRuntime> {
+  const manifest = validateManifest(options.agentManifest ?? SHOPPING_ASSISTANT_AGENT_MANIFEST);
+  if (!manifest.ok || manifest.value.kind !== "agent") {
+    throw new ShoppingToolRuntimeError("AGENT_MANIFEST_INVALID");
+  }
+  const { authorization, confirmationStore, interruptManifestRepository } =
+    createRuntimeToolAuthorizationComposition({
+      additionalPolicies: createOrderToolRiskPolicies(),
+    });
+  const profileRegistry = createLocalExecutionProfileRegistry();
+  registerOrderExecutionProfiles(profileRegistry);
+  const descriptorRegistry = createLocalRuntimeToolDescriptorRegistry(
+    await stageLocalRuntimeDescriptors(authorization, profileRegistry, {})
+  );
+  const orderTools = createOrderToolSet({
+    provider: options.orderProvider,
+    statusReader: options.statusReader,
+  });
+  const manifests: OrderToolManifestEvidence[] = [];
+  for (const [index, tool] of orderTools.tools.entries()) {
+    const descriptor = orderTools.descriptors[index];
+    if (descriptor === undefined) throw new Error(`Order tool descriptor is unavailable: ${tool.name}`);
+    const staged = await stageOrderToolSdkDescriptor({
+      tool,
+      descriptor,
+      riskPolicy: authorization.riskRegistry.get(tool.name),
+      profileRegistry,
+    });
+    descriptorRegistry.register(
+      { toolName: staged.descriptor.toolName, toolVersion: staged.descriptor.toolVersion },
+      staged.descriptor
+    );
+    manifests.push(staged.evidence);
+  }
+
+  const implementations = new Map<string, StructuredToolInterface>(
+    [...LOCAL_PRODUCTION_TOOLS, ...orderTools.tools].map((tool) => [tool.name, tool])
+  );
+  const grantedTools = manifest.value.tools.map(({ toolId, toolVersion }) => {
+    const descriptor = descriptorRegistry.resolve(toolId);
+    const implementation = implementations.get(toolId);
+    if (descriptor === null || descriptor.toolVersion !== toolVersion || implementation === undefined) {
+      throw new ShoppingToolRuntimeError("AGENT_MANIFEST_TOOL_UNREGISTERED", toolId);
+    }
+    return implementation;
+  });
+
+  const executionProfileEnforcer = createExecutionProfileEnforcer(
+    descriptorRegistry,
+    profileRegistry,
+    options
+  );
+  const dispatchPipeline = createRuntimeToolDispatchPipeline({
+    ...options.dispatchPipelineDependencies,
+    registry: descriptorRegistry,
+    executionProfileEnforcer,
+    emitDeduplicatedOutcome: true,
+  });
+  const tools = applyToolGovernance(grantedTools, authorization, {
+    executionProfileEnforcer,
+    createExecutor: (tool, defaultExecutor) =>
+      dispatchPipeline.createExecutor(tool.name, defaultExecutor),
+  });
+  await auditToolLoad(SHOPPING_ASSISTANT_SOURCE, tools);
+  for (const evidence of manifests) {
+    await auditLogger.record("tool.manifest.registered", {
+      source: SHOPPING_ASSISTANT_SOURCE,
+      ...evidence,
+    });
+  }
+  return { tools, confirmationStore, interruptManifestRepository, manifests };
+}
+
+const SHOPPING_ASSISTANT_SOURCE = "shopping_assistant";
 
 export async function loadMathCalculatorTool(): Promise<StructuredToolInterface> {
   const calculator = LOCAL_PRODUCTION_TOOLS.find(

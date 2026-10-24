@@ -113,6 +113,8 @@ export interface CreateRuntimeToolAuthorizationCompositionInput {
   policyVersion?: string;
   enableDevelopmentReadDefault?: boolean;
   mcpRiskDescriptors?: readonly unknown[];
+  /** Policies for tools only one graph loads, such as the shopping assistant's order tools. */
+  additionalPolicies?: readonly ToolRiskPolicy[];
 }
 
 export interface ToolAuthorizationComposition {
@@ -264,6 +266,7 @@ export function createRuntimeToolAuthorizationComposition(
   const policies = [
     ...createLocalToolRiskPolicies(),
     ...mcpRiskDescriptors.map(toMcpToolRiskPolicy),
+    ...(input.additionalPolicies ?? []),
   ];
   const configuredDatabase =
     input.db === undefined ? getPool() : input.db;
