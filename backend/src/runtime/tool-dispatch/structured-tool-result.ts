@@ -69,16 +69,22 @@ function outcomeErrorCode<TResult>(
   outcome: Exclude<StructuredToolResultEnvelope<TResult>["outcome"], { type: "succeeded" }>
 ): string {
   if (outcome.type === "cancelled") return `TOOL_EXECUTION_CANCELLED_${outcome.dispatchState.toUpperCase()}`;
+  // Without a reused result a duplicate keeps the legacy claim-not-acquired text.
+  if (outcome.type === "deduplicated") return "SIDE_EFFECT_CLAIM_NOT_ACQUIRED";
   return outcome.type === "confirmation_required" ? "REQUIRES_CONFIRMATION" : outcome.errorCode;
 }
 
+function legacyResultText(result: unknown): string {
+  return typeof result === "string" ? result : JSON.stringify(result);
+}
+
 export function toLegacyToolResult<TResult>(envelope: StructuredToolResultEnvelope<TResult>): string {
-  if (envelope.outcome.type === "succeeded") {
-    return typeof envelope.outcome.result === "string"
-      ? envelope.outcome.result
-      : JSON.stringify(envelope.outcome.result);
+  const outcome = envelope.outcome;
+  if (outcome.type === "succeeded") return legacyResultText(outcome.result);
+  if (outcome.type === "deduplicated" && outcome.reason === "committed_result_reused") {
+    return legacyResultText(outcome.result);
   }
-  return `Error: ${envelope.tool.name} failed - ${outcomeErrorCode(envelope.outcome)}`;
+  return `Error: ${envelope.tool.name} failed - ${outcomeErrorCode(outcome)}`;
 }
 
 export function tryToLegacyToolResult(value: unknown): string | undefined {

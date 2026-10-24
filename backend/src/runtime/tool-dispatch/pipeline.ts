@@ -25,7 +25,12 @@ import {
 } from "../lock/step-lock.js";
 import { DefaultStepTransitionGuard } from "../lock/step-transition-guard.js";
 import type { RetryPolicy } from "../retry/retry-policy.js";
+import {
+  PgConsumedAuthorizationVerifier,
+  type ConsumedAuthorizationVerifier,
+} from "../authorization/consumed-authorization-verifier.js";
 import type {
+  ConsumedAuthorization,
   GovernedAuthorizationOutcome,
   GovernedToolExecutor,
   GovernedToolOutcome,
@@ -117,6 +122,13 @@ export interface RuntimeToolDispatchPipelineDependencies {
   waitForDelay?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
   stepLock?: StepLock;
   stepLockTtlMs?: number;
+  consumedAuthorizationVerifier?: ConsumedAuthorizationVerifier;
+  /**
+   * Opt-in for graphs that consume the deduplicated outcome. When off, a reused
+   * result stays `succeeded` and a held-off duplicate stays the legacy
+   * `rejected_before_dispatch` / SIDE_EFFECT_CLAIM_NOT_ACQUIRED.
+   */
+  emitDeduplicatedOutcome?: boolean;
 }
 
 export interface RuntimeToolDispatchPipeline {
@@ -234,6 +246,10 @@ function toCircuitRecordOutcome(
   if (outcome.type === "succeeded") {
     return "success";
   }
+  // A duplicate says nothing about the tool's health and never opens a circuit.
+  if (outcome.type === "deduplicated") {
+    return undefined;
+  }
   if (outcome.type !== "failed_not_committed") {
     return undefined;
   }
@@ -264,10 +280,19 @@ function hasAuthorization(
 
 function mapRunnerResult(
   result: ToolExecutionRunResult<unknown>,
-  descriptor: RuntimeToolDescriptor
+  descriptor: RuntimeToolDescriptor,
+  emitDeduplicatedOutcome: boolean
 ): GovernedToolOutcome<unknown> {
   if (result.type === "succeeded") {
     const parsedOutput = descriptor.outputSchema.safeParse(result.result);
+    if (parsedOutput.success && emitDeduplicatedOutcome && result.reusedFrom) {
+      return {
+        type: "deduplicated",
+        reason: "committed_result_reused",
+        original: result.reusedFrom,
+        result: parsedOutput.data,
+      };
+    }
     return parsedOutput.success
       ? { type: "succeeded", result: parsedOutput.data }
       : {
@@ -295,6 +320,13 @@ function mapRunnerResult(
     return {
       type: "failed_not_committed",
       errorCode: result.errorCode,
+    };
+  }
+  if (emitDeduplicatedOutcome && result.duplicateOf) {
+    return {
+      type: "deduplicated",
+      reason: result.duplicateOf.reason,
+      original: result.duplicateOf.original,
     };
   }
   return AMBIGUOUS_DEFERRED_CODES.has(result.errorCode)
@@ -337,7 +369,10 @@ function createAuditToolResult(
     outcome:
       outcome.type === "succeeded"
         ? { type: "succeeded", result: "[redacted]" }
-        : outcome.type === "confirmation_required"
+        : outcome.type === "deduplicated" &&
+            outcome.reason === "committed_result_reused"
+          ? { ...outcome, result: "[redacted]" }
+          : outcome.type === "confirmation_required"
           ? { ...outcome, descriptor: "[redacted]" }
           : outcome,
   };
@@ -475,6 +510,9 @@ function withProductionDefaults(
       new FixedWindowToolRateLimiter(runtimeConfig.toolRetryAfterMaxMs),
     circuitBreaker: input.circuitBreaker ?? new InMemoryToolCircuitBreaker(),
     waitForDelay: input.waitForDelay ?? waitForAbortableDelay,
+    consumedAuthorizationVerifier:
+      input.consumedAuthorizationVerifier ??
+      (pool ? new PgConsumedAuthorizationVerifier(pool) : undefined),
     stepLock: input.stepLock ?? createStepLock(),
     stepLockTtlMs:
       input.stepLockTtlMs ?? runtimeConfig.toolDispatchStepLockTtlMs,
@@ -491,7 +529,8 @@ export function createRuntimeToolDispatchPipeline(
     input: unknown,
     config: unknown,
     sourceExecutor: GovernedToolExecutor<unknown, unknown>,
-    authorizationAlreadyEvaluated: boolean
+    authorizationAlreadyEvaluated: boolean,
+    consumedAuthorization?: ConsumedAuthorization
   ): Promise<GovernedToolOutcome<StructuredToolResultEnvelope>> {
     const descriptor = dependencies.registry.resolve(toolName);
     if (descriptor === null) {
@@ -546,8 +585,44 @@ export function createRuntimeToolDispatchPipeline(
     }
     let authorizationOutcome: GovernedAuthorizationOutcome;
     try {
+      // A pre-evaluated side effect carries the decision the caller consumed.
+      // Graph state is client-writable, so the decision is checked against the
+      // server-side record before it may reach the ledger; without a verified
+      // decision the runner rejects the side effect before claiming.
+      if (
+        authorizationAlreadyEvaluated &&
+        consumedAuthorization !== undefined &&
+        !descriptor.isReadOnly
+      ) {
+        const verified = await (dependencies.consumedAuthorizationVerifier?.verify({
+          decisionId: consumedAuthorization.decisionId,
+          toolName: descriptor.toolName,
+          executionContext,
+        }) ?? Promise.resolve(false)).then(
+          (result) => result === true,
+          () => false
+        );
+        if (!verified) {
+          await ignoreObservabilityFailure(() =>
+            dependencies.observability.audit(
+              "tool.authorization.decision_unverified",
+              {
+                toolName: descriptor.toolName,
+                errorCode: "AUTHORIZATION_UNAVAILABLE",
+              },
+              executionContext
+            )
+          );
+          return {
+            type: "rejected_before_dispatch",
+            errorCode: "AUTHORIZATION_UNAVAILABLE",
+          };
+        }
+      }
       authorizationOutcome = authorizationAlreadyEvaluated
-        ? { type: "authorized" }
+        ? consumedAuthorization !== undefined && !descriptor.isReadOnly
+          ? { type: "authorized", decisionId: consumedAuthorization.decisionId }
+          : { type: "authorized" }
         : await sourceExecutor.authorizeTyped(parsedInput.data, config);
     } catch {
       return {
@@ -763,7 +838,11 @@ export function createRuntimeToolDispatchPipeline(
             },
             { runId: executionContext.runId, signal: stepLockLease.signal }
           );
-          governedOutcome = mapRunnerResult(runnerResult, descriptor);
+          governedOutcome = mapRunnerResult(
+            runnerResult,
+            descriptor,
+            dependencies.emitDeduplicatedOutcome === true
+          );
         } catch (error) {
           await recordQueueWait();
           if (error instanceof ToolSchedulingError) {
@@ -800,7 +879,11 @@ export function createRuntimeToolDispatchPipeline(
         });
 
         try {
-          if (governedOutcome.type === "succeeded") {
+          // A deduplicated submission did not fail: its step completes.
+          if (
+            governedOutcome.type === "succeeded" ||
+            governedOutcome.type === "deduplicated"
+          ) {
             await dependencies.taskStepAdapter.complete(
               executionContext,
               envelope
@@ -857,8 +940,8 @@ export function createRuntimeToolDispatchPipeline(
           authorizationUnavailable(),
         executeTyped: (input, config) =>
           dispatch(toolName, input, config, sourceExecutor, false),
-        executeAuthorizedTyped: (input, config) =>
-          dispatch(toolName, input, config, sourceExecutor, true),
+        executeAuthorizedTyped: (input, config, authorization) =>
+          dispatch(toolName, input, config, sourceExecutor, true, authorization),
       };
     },
     hasCompensation(toolName) {

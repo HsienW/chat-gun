@@ -341,7 +341,7 @@ function mapExecutionError<TResult>(
   error: unknown,
   wasDispatched: boolean,
   externalSignal?: AbortSignal
-): Exclude<GovernedToolOutcome<TResult>, { type: "succeeded" }> {
+): Exclude<GovernedToolOutcome<TResult>, { type: "succeeded" | "deduplicated" }> {
   if (error instanceof GovernanceCancellationError || externalSignal?.aborted) {
     return {
       type: "cancelled",
@@ -382,6 +382,15 @@ function legacyErrorForOutcome(
   outcome: Exclude<GovernedToolOutcome<unknown>, { type: "succeeded" }>,
   timeoutMs: number
 ): string {
+  if (outcome.type === "deduplicated") {
+    // Callers that never opted into deduplication saw this as a claim that
+    // could not be acquired; keep that legacy text unchanged.
+    return legacyErrorForOutcome(
+      toolName,
+      { type: "rejected_before_dispatch", errorCode: "SIDE_EFFECT_CLAIM_NOT_ACQUIRED" },
+      timeoutMs
+    );
+  }
   if (outcome.type === "cancelled") {
     return `Error: ${toolName} failed by tool governance - ${GOVERNANCE_CANCELLED_PREFIX} cancelled ${outcome.dispatchState} dispatch`;
   }
@@ -793,9 +802,11 @@ function wrapToolWithGovernance(
     options?.createExecutor?.(sourceTool, defaultExecutor) ?? defaultExecutor;
   const governedInvoke = async (input: unknown, config?: unknown): Promise<unknown> => {
     const outcome = await executor.executeTyped(input, config);
-    return outcome.type === "succeeded"
-      ? outcome.result
-      : legacyErrorForOutcome(sourceTool.name, outcome, policy.timeoutMs);
+    if (outcome.type === "succeeded") return outcome.result;
+    if (outcome.type === "deduplicated" && outcome.reason === "committed_result_reused") {
+      return outcome.result;
+    }
+    return legacyErrorForOutcome(sourceTool.name, outcome, policy.timeoutMs);
   };
 
   wrappedTool.invoke = governedInvoke as StructuredToolInterface["invoke"];

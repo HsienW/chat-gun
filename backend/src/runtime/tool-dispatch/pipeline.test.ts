@@ -15,6 +15,7 @@ import {
   type ToolDispatchTaskStepAdapter,
 } from "./pipeline.js";
 import { ToolSchedulingError } from "./scheduler.js";
+import { toLegacyToolResult } from "./structured-tool-result.js";
 import type { ExecutionProfileEnforcerPort } from "./execution-profile.js";
 
 const executionContext = {
@@ -618,6 +619,120 @@ describe("RuntimeToolDispatchPipeline", () => {
     );
   });
 
+  it("hands a verified consumed decision of a pre-authorized mutation to the runner", async () => {
+    const descriptor = createDescriptor(false);
+    const verify = vi.fn(async () => true);
+    const dependencies = {
+      ...createDependencies(createRegistry(descriptor)),
+      consumedAuthorizationVerifier: { verify },
+    };
+    const pipeline = createRuntimeToolDispatchPipeline(dependencies);
+    const sourceExecutor = createSourceExecutor();
+    const executor = pipeline.createExecutor(descriptor.toolName, sourceExecutor);
+
+    await executor.executeAuthorizedTyped?.(
+      { value: "x" },
+      runnableConfig,
+      { decisionId: "decision-approved" }
+    );
+
+    expect(verify).toHaveBeenCalledWith({
+      decisionId: "decision-approved",
+      toolName: descriptor.toolName,
+      executionContext: expect.objectContaining({
+        principal: expect.objectContaining({
+          principalId: executionContext.principal.principalId,
+        }),
+      }),
+    });
+    const runnerInput = dependencies.runnerExecute.mock.calls[0]?.[0] as {
+      executor: GovernedToolExecutor<unknown, unknown>;
+    };
+    await expect(runnerInput.executor.authorizeTyped?.({ value: "x" })).resolves.toEqual({
+      type: "authorized",
+      decisionId: "decision-approved",
+    });
+    expect(sourceExecutor.authorizeTyped).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the server record does not confirm it", { verify: vi.fn(async () => false) }],
+    ["the verifier fails", { verify: vi.fn(async () => { throw new Error("db down"); }) }],
+    ["no verifier is available", undefined],
+  ])("rejects a consumed decision before the runner when %s", async (_label, verifier) => {
+    const descriptor = createDescriptor(false);
+    const dependencies = {
+      ...createDependencies(createRegistry(descriptor)),
+      consumedAuthorizationVerifier: verifier,
+      pool: null,
+    };
+    const pipeline = createRuntimeToolDispatchPipeline(dependencies);
+    const executor = pipeline.createExecutor(descriptor.toolName, createSourceExecutor());
+
+    await expect(
+      executor.executeAuthorizedTyped?.(
+        { value: "x" },
+        runnableConfig,
+        { decisionId: "forged-decision" }
+      )
+    ).resolves.toEqual({
+      type: "rejected_before_dispatch",
+      errorCode: "AUTHORIZATION_UNAVAILABLE",
+    });
+    expect(dependencies.runnerExecute).not.toHaveBeenCalled();
+    expect(dependencies.observability.audit).toHaveBeenCalledWith(
+      "tool.authorization.decision_unverified",
+      expect.objectContaining({ toolName: descriptor.toolName }),
+      expect.anything()
+    );
+  });
+
+  it("does not verify or forward a decision for a read-only tool", async () => {
+    const descriptor = createDescriptor(true);
+    const verify = vi.fn(async () => false);
+    const dependencies = {
+      ...createDependencies(createRegistry(descriptor)),
+      consumedAuthorizationVerifier: { verify },
+    };
+    const pipeline = createRuntimeToolDispatchPipeline(dependencies);
+    const executor = pipeline.createExecutor(descriptor.toolName, createSourceExecutor());
+
+    await executor.executeAuthorizedTyped?.(
+      { value: "x" },
+      runnableConfig,
+      { decisionId: "decision-read" }
+    );
+
+    expect(verify).not.toHaveBeenCalled();
+    const runnerInput = dependencies.runnerExecute.mock.calls[0]?.[0] as {
+      executor: GovernedToolExecutor<unknown, unknown>;
+    };
+    await expect(runnerInput.executor.authorizeTyped?.({ value: "x" })).resolves.toEqual({
+      type: "authorized",
+    });
+  });
+
+  it("does not invent a decision for a pre-authorized call that carries none", async () => {
+    const descriptor = createDescriptor(false);
+    const dependencies = createDependencies(createRegistry(descriptor));
+    const pipeline = createRuntimeToolDispatchPipeline(dependencies);
+    const executor = pipeline.createExecutor(descriptor.toolName, createSourceExecutor());
+
+    await executor.executeAuthorizedTyped?.({ value: "x" }, {
+      configurable: {
+        ...runnableConfig.configurable,
+        authorizationDecisionId: "client-supplied",
+      },
+    });
+
+    const runnerInput = dependencies.runnerExecute.mock.calls[0]?.[0] as {
+      executor: GovernedToolExecutor<unknown, unknown>;
+    };
+    await expect(runnerInput.executor.authorizeTyped?.({ value: "x" })).resolves.toEqual({
+      type: "authorized",
+    });
+  });
+
   it("does not dispatch when the Step lock cannot be acquired", async () => {
     const descriptor = createDescriptor(true);
     const dependencies = createDependencies(createRegistry(descriptor));
@@ -901,6 +1016,138 @@ describe("RuntimeToolDispatchPipeline", () => {
     expect(dependencies.sagaOrchestrator.compensate).toHaveBeenCalledWith(
       "task-1",
       { reason: "terminal_failed" }
+    );
+  });
+});
+
+describe("RuntimeToolDispatchPipeline deduplicated outcome", () => {
+  const reused: ToolExecutionRunResult<unknown> = {
+    type: "succeeded",
+    source: "cache",
+    result: "original-result",
+    toolExecutionId: "execution-2",
+    reusedFrom: { businessEffectId: "effect-1", toolExecutionId: "execution-1" },
+  };
+  const inFlight: ToolExecutionRunResult<unknown> = {
+    type: "deferred",
+    errorCode: "SIDE_EFFECT_CLAIM_NOT_ACQUIRED",
+    toolExecutionId: "execution-2",
+    duplicateOf: {
+      reason: "in_flight_duplicate",
+      original: { businessEffectId: "effect-1" },
+    },
+  };
+  const unknownOriginal: ToolExecutionRunResult<unknown> = {
+    type: "deferred",
+    errorCode: "SIDE_EFFECT_CLAIM_NOT_ACQUIRED",
+    toolExecutionId: "execution-2",
+    duplicateOf: {
+      reason: "original_outcome_unknown",
+      original: { businessEffectId: "effect-1" },
+    },
+  };
+
+  async function dispatch(
+    runnerResult: ToolExecutionRunResult<unknown>,
+    emitDeduplicatedOutcome?: boolean
+  ) {
+    const descriptor = createDescriptor(false);
+    const dependencies = createDependencies(
+      createRegistry(descriptor),
+      vi.fn(async () => runnerResult)
+    );
+    const circuitBreaker = {
+      beforeDispatch: vi.fn(() => "closed" as const),
+      record: vi.fn(),
+    };
+    const executor = createRuntimeToolDispatchPipeline({
+      ...dependencies,
+      circuitBreaker,
+      ...(emitDeduplicatedOutcome === undefined ? {} : { emitDeduplicatedOutcome }),
+    }).createExecutor(descriptor.toolName, createSourceExecutor());
+    const outcome = await executor.executeTyped({ value: "x" }, runnableConfig);
+    if (outcome.type !== "succeeded") throw new Error("Pipeline returns an envelope");
+    return { envelope: outcome.result, dependencies, circuitBreaker };
+  }
+
+  it("reports a reused committed result with its origin when opted in", async () => {
+    const { envelope, dependencies, circuitBreaker } = await dispatch(reused, true);
+
+    expect(envelope.outcome).toEqual({
+      type: "deduplicated",
+      reason: "committed_result_reused",
+      original: { businessEffectId: "effect-1", toolExecutionId: "execution-1" },
+      result: "original-result",
+    });
+    expect(envelope.terminationCause).toBe("deduplicated");
+    expect(dependencies.taskStepAdapter.complete).toHaveBeenCalledOnce();
+    expect(dependencies.taskStepAdapter.fail).not.toHaveBeenCalled();
+    expect(circuitBreaker.record).not.toHaveBeenCalled();
+    const audited = JSON.stringify(
+      (dependencies.observability.audit as Mock).mock.calls
+    );
+    expect(audited).not.toContain("original-result");
+    expect(dependencies.observability.audit).toHaveBeenCalledWith(
+      "tool.dispatch.completed",
+      expect.objectContaining({
+        outcomeType: "deduplicated",
+        toolResult: expect.objectContaining({
+          outcome: expect.objectContaining({ reason: "committed_result_reused" }),
+        }),
+      }),
+      expect.anything()
+    );
+  });
+
+  it.each([
+    ["in flight", inFlight, "in_flight_duplicate"],
+    ["of unknown outcome", unknownOriginal, "original_outcome_unknown"],
+  ] as const)("reports a held-off duplicate %s when opted in", async (_label, result, reason) => {
+    const { envelope, dependencies, circuitBreaker } = await dispatch(result, true);
+
+    expect(envelope.outcome).toEqual({
+      type: "deduplicated",
+      reason,
+      original: { businessEffectId: "effect-1" },
+    });
+    expect(dependencies.taskStepAdapter.complete).toHaveBeenCalledOnce();
+    expect(circuitBreaker.record).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, false])(
+    "keeps the existing outcomes and error codes when not opted in (%s)",
+    async (emit) => {
+      const reusedResult = await dispatch(reused, emit);
+      expect(reusedResult.envelope.outcome).toEqual({
+        type: "succeeded",
+        result: "original-result",
+      });
+      expect(reusedResult.circuitBreaker.record).toHaveBeenCalledWith(
+        "mutation_tool",
+        undefined,
+        "success"
+      );
+
+      const inFlightResult = await dispatch(inFlight, emit);
+      expect(inFlightResult.envelope.outcome).toEqual({
+        type: "rejected_before_dispatch",
+        errorCode: "SIDE_EFFECT_CLAIM_NOT_ACQUIRED",
+      });
+      expect(inFlightResult.circuitBreaker.record).not.toHaveBeenCalled();
+    }
+  );
+
+  it("gives legacy consumers the same text as before for every duplicate", async () => {
+    const legacy = await dispatch(inFlight, false);
+    const optedIn = await dispatch(inFlight, true);
+    const reusedLegacy = await dispatch(reused, false);
+    const reusedOptedIn = await dispatch(reused, true);
+
+    expect(toLegacyToolResult(optedIn.envelope)).toBe(
+      toLegacyToolResult(legacy.envelope)
+    );
+    expect(toLegacyToolResult(reusedOptedIn.envelope)).toBe(
+      toLegacyToolResult(reusedLegacy.envelope)
     );
   });
 });
