@@ -125,12 +125,12 @@ npm run test
 
 > 前置：T0、T2a。對應 `approved-order-operations` 的 manifest、失敗分類、ledger、無 undo Requirement；`commerce-assistant`「只經統一 dispatch 且只取得 agent manifest 授予的 tool」。
 
-- [ ] 合成訂單 fixture（provenance header 標註 synthetic；含可退款、不符資格、他人訂單、多明細訂單）。
-- [ ] 模擬訂單 provider（in-memory）：業務規則、依 business effect key 或操作識別查詢、可設定的故障注入（dispatch 前不可用、提交後回應遺失、查詢無法判定、逾時）。故障注入只在測試與評測設定中啟用。
-- [ ] `order_refund_request`、`order_cancel`（SideEffectToolDescriptor：business effect key 推導依 design §6.3，含 server 端申請者 principal；宣告 reconciler；output 為只含效果事實的 `order_effect_result@1`，不含操作識別與狀態，design §5.5）、`order_operation_status`（唯讀）。
-- [ ] 三個 tool 經 X27 SDK manifest 註冊（design §5.1–5.3），manifest 缺欄位 fail-closed；input strict，夾帶身分或審批欄位 schema error。
-- [ ] `shopping_assistant` X27 agent manifest；tool runtime 依 agent manifest 篩選；`shopping_assistant` 強制建立 dispatch pipeline，不依 feature flag。
-- [ ] 測試：business effect key 不含 attempt／toolCallId／runId／理由文字；business effect key 含申請者 principal，不同申請者對同一訂單為不同 key；不同明細為不同 key；他人訂單與查無訂單結果相同；provider error 不轉為 not found；`mcp_agent` 的 tool 清單不含訂單 tool；ledger 不可用時訂單 tool typed deny 且 provider 無呼叫。
+- [x] 合成訂單 fixture（provenance header 標註 synthetic；含可退款、不符資格、他人訂單、多明細訂單）。
+- [x] 模擬訂單 provider（in-memory）：業務規則、依 business effect key 或操作識別查詢、可設定的故障注入（dispatch 前不可用、提交後回應遺失、查詢無法判定、逾時）。故障注入只在測試與評測設定中啟用。
+- [x] `order_refund_request`、`order_cancel`（SideEffectToolDescriptor：business effect key 推導依 design §6.3，含 server 端申請者 principal；宣告 reconciler；output 為只含效果事實的 `order_effect_result@1`，不含操作識別與狀態，design §5.5）、`order_operation_status`（唯讀）。
+- [x] 三個 tool 經 X27 SDK manifest 註冊（design §5.1–5.3），manifest 缺欄位 fail-closed；input strict，夾帶身分或審批欄位 schema error。
+- [x] `shopping_assistant` X27 agent manifest；tool runtime 依 agent manifest 篩選；`shopping_assistant` 強制建立 dispatch pipeline，不依 feature flag。
+- [x] 測試：business effect key 不含 attempt／toolCallId／runId／理由文字；business effect key 含申請者 principal，不同申請者對同一訂單為不同 key；不同明細為不同 key；他人訂單與查無訂單結果相同；provider error 不轉為 not found；`mcp_agent` 的 tool 清單不含訂單 tool；ledger 不可用時訂單 tool typed deny 且 provider 無呼叫。
 
 驗證命令：
 
