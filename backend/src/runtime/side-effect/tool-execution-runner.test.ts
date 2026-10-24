@@ -129,6 +129,15 @@ function createLedger() {
     commitExecutionAndBusinessEffect: vi.fn<
       BusinessEffectLedger["commitExecutionAndBusinessEffect"]
     >(async () => undefined),
+    transitionBusinessEffectAndExecution: vi.fn<
+      BusinessEffectLedger["transitionBusinessEffectAndExecution"]
+    >(async () => undefined),
+    releaseClaim: vi.fn<BusinessEffectLedger["releaseClaim"]>(
+      async () => undefined
+    ),
+    findBusinessEffectSnapshot: vi.fn<
+      BusinessEffectLedger["findBusinessEffectSnapshot"]
+    >(async () => null),
     findCommittedExecutionByStepId: vi.fn<
       BusinessEffectLedger["findCommittedExecutionByStepId"]
     >(async () => null),
@@ -642,10 +651,16 @@ describe("ToolExecutionRunner", () => {
           runId: "run-1",
           taskId: "task-1",
           stepId: "step-1",
-          toolExecutionId: "execution-1",
         }),
       })
     );
+    // Authorization runs before the claim, so no execution exists yet.
+    expect(
+      executor.authorizeTyped.mock.invocationCallOrder[0]
+    ).toBeLessThan(ledger.prepare.mock.invocationCallOrder[0] ?? 0);
+    expect(
+      executor.authorizeTyped.mock.calls[0]?.[1]?.configurable
+    ).not.toHaveProperty("toolExecutionId");
   });
 
   it("does not create or retry a physical attempt after authorization deny", async () => {
@@ -675,9 +690,9 @@ describe("ToolExecutionRunner", () => {
     ).resolves.toEqual({
       type: "failed",
       errorCode: "MISSING_ROLE_SCOPE_GRANT",
-      toolExecutionId: "execution-1",
       decisionId: "decision-deny",
     });
+    expect(ledger.prepare).not.toHaveBeenCalled();
     expect(ledger.recordAttempt).not.toHaveBeenCalled();
     expect(executor.executeAuthorizedTyped).not.toHaveBeenCalled();
     expect(recordMetric).toHaveBeenCalledWith(
@@ -716,14 +731,14 @@ describe("ToolExecutionRunner", () => {
     ).resolves.toEqual({
       type: "failed",
       errorCode: "REQUIRES_CONFIRMATION",
-      toolExecutionId: "execution-1",
       decisionId: "decision-confirm",
     });
+    expect(ledger.prepare).not.toHaveBeenCalled();
     expect(ledger.recordAttempt).not.toHaveBeenCalled();
     expect(executor.executeAuthorizedTyped).not.toHaveBeenCalled();
   });
 
-  it("fails closed before dispatch when authorization omits decisionId", async () => {
+  it("fails closed before claiming when authorization omits decisionId", async () => {
     const ledger = createLedger();
     const executor = createPreflightExecutor(
       [{ type: "authorized" }],
@@ -736,8 +751,9 @@ describe("ToolExecutionRunner", () => {
     ).resolves.toEqual({
       type: "failed",
       errorCode: "AUTHORIZATION_UNAVAILABLE",
-      toolExecutionId: "execution-1",
     });
+    expect(ledger.prepare).not.toHaveBeenCalled();
+    expect(ledger.releaseClaim).not.toHaveBeenCalled();
     expect(ledger.linkAuthorizationDecision).not.toHaveBeenCalled();
     expect(ledger.recordAttempt).not.toHaveBeenCalled();
     expect(executor.executeAuthorizedTyped).not.toHaveBeenCalled();
@@ -871,10 +887,11 @@ describe("ToolExecutionRunner", () => {
     expect(ledger.recordAttempt).toHaveBeenCalledOnce();
     expect(executor.executeAuthorizedTyped).toHaveBeenCalledOnce();
     expect(executor.authorizeTyped).toHaveBeenCalledOnce();
-    expect(ledger.transitionExecution).toHaveBeenLastCalledWith({
+    expect(ledger.releaseClaim).toHaveBeenCalledWith({
+      businessEffectId: "effect-1",
+      expectedEffectState: "prepared",
       toolExecutionId: "execution-1",
-      expectedStatus: "executing",
-      nextStatus: "failed",
+      expectedExecutionStatus: "executing",
       terminationCause: "failed_not_committed",
     });
   });
@@ -1069,5 +1086,461 @@ describe("ToolExecutionRunner", () => {
       }),
       expect.any(Function)
     );
+  });
+});
+
+describe("ToolExecutionRunner claim release and pre-claim checks", () => {
+  const released = {
+    businessEffectId: "effect-1",
+    expectedEffectState: "prepared",
+    toolExecutionId: "execution-1",
+    expectedExecutionStatus: "executing",
+  } as const;
+
+  it("ends as cancelled before dispatch without a claim when already aborted", async () => {
+    const ledger = createLedger();
+    const controller = new AbortController();
+    controller.abort();
+    const executor = createPreflightExecutor(
+      [{ type: "authorized", decisionId: "decision-allow" }],
+      [{ type: "succeeded", result: { operationId: "unexpected" } }]
+    );
+    const runner = createRunner(ledger, createResultStore());
+
+    await expect(
+      runner.execute({
+        ...runInput(executor, createDescriptor()),
+        signal: controller.signal,
+      })
+    ).resolves.toEqual({ type: "cancelled", dispatchState: "before" });
+    expect(ledger.prepare).not.toHaveBeenCalled();
+    expect(executor.executeAuthorizedTyped).not.toHaveBeenCalled();
+  });
+
+  it("links the consumed decision after the claim and before the attempt", async () => {
+    const ledger = createLedger();
+    const executor = createPreflightExecutor(
+      [{ type: "authorized", decisionId: "decision-approved" }],
+      [{ type: "succeeded", result: { operationId: "operation-1" } }]
+    );
+    const runner = createRunner(ledger, createResultStore());
+
+    await expect(
+      runner.execute(runInput(executor, createDescriptor()))
+    ).resolves.toMatchObject({ type: "succeeded", source: "live" });
+    expect(ledger.linkAuthorizationDecision).toHaveBeenCalledWith({
+      toolExecutionId: "execution-1",
+      decisionId: "decision-approved",
+    });
+    expect(ledger.prepare.mock.invocationCallOrder[0]).toBeLessThan(
+      ledger.linkAuthorizationDecision.mock.invocationCallOrder[0] ?? 0
+    );
+    expect(executor.authorizeTyped).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [
+      "rejected before dispatch",
+      { type: "rejected_before_dispatch" as const, errorCode: "TOOL_INPUT_INVALID" },
+      "rejected_before_dispatch",
+    ],
+    [
+      "failed not committed",
+      { type: "failed_not_committed" as const, errorCode: "ORDER_NOT_FOUND" },
+      "failed_not_committed",
+    ],
+    [
+      "cancelled before dispatch",
+      { type: "cancelled" as const, dispatchState: "before" as const },
+      "cancelled_before_dispatch",
+    ],
+  ])("releases the claim when the outcome is %s", async (_label, outcome, cause) => {
+    const ledger = createLedger();
+    const runner = createRunner(ledger, createResultStore());
+
+    await runner.execute(runInput(createExecutor([outcome]), createDescriptor()));
+
+    expect(ledger.releaseClaim).toHaveBeenCalledOnce();
+    expect(ledger.releaseClaim).toHaveBeenCalledWith({
+      ...released,
+      terminationCause: cause,
+    });
+    expect(ledger.transitionBusinessEffectAndExecution).not.toHaveBeenCalled();
+  });
+
+  it("releases the claim when backoff before a retry is cancelled", async () => {
+    const ledger = createLedger();
+    const controller = new AbortController();
+    const executor = createExecutor([
+      { type: "failed_not_committed", errorCode: "TIMEOUT" },
+    ]);
+    const runner = createRunner(ledger, createResultStore(), {}, {
+      wait: vi.fn(async () => {
+        controller.abort();
+        throw new Error("USER_CANCELLED");
+      }),
+    });
+
+    await expect(
+      runner.execute({
+        ...runInput(executor, createDescriptor(), createBudget(3)),
+        retryPolicy: {
+          maxAttempts: 3,
+          maxElapsedMs: 60_000,
+          retryableCategories: ["timeout"],
+          backoffStrategy: "exponential",
+          jitter: false,
+        },
+        signal: controller.signal,
+      })
+    ).resolves.toMatchObject({ type: "failed", errorCode: "USER_CANCELLED" });
+    expect(ledger.releaseClaim).toHaveBeenCalledWith({
+      ...released,
+      terminationCause: "cancelled_before_dispatch",
+    });
+  });
+
+  it.each([
+    [
+      "ambiguous after dispatch",
+      { type: "ambiguous_after_dispatch" as const, errorCode: "RESPONSE_LOST" },
+    ],
+    [
+      "cancelled after dispatch",
+      { type: "cancelled" as const, dispatchState: "after" as const },
+    ],
+  ])("never releases when the outcome is %s", async (_label, outcome) => {
+    const ledger = createLedger();
+    const runner = createRunner(ledger, createResultStore());
+
+    await runner.execute(runInput(createExecutor([outcome]), createDescriptor()));
+
+    expect(ledger.releaseClaim).not.toHaveBeenCalled();
+    expect(ledger.transitionBusinessEffectAndExecution).toHaveBeenCalledWith({
+      businessEffectId: "effect-1",
+      expectedEffectState: "prepared",
+      nextEffectState: "unknown",
+      toolExecutionId: "execution-1",
+      expectedExecutionStatus: "executing",
+      nextExecutionStatus: "unknown",
+    });
+  });
+
+  it("never releases a committed effect", async () => {
+    const ledger = createLedger();
+    const runner = createRunner(ledger, createResultStore());
+
+    await runner.execute(
+      runInput(
+        createExecutor([{ type: "succeeded", result: { operationId: "operation-1" } }]),
+        createDescriptor()
+      )
+    );
+
+    expect(ledger.commitExecutionAndBusinessEffect).toHaveBeenCalledOnce();
+    expect(ledger.releaseClaim).not.toHaveBeenCalled();
+  });
+
+  it("releases from unknown and fails without retry when reconciliation confirms not committed", async () => {
+    const ledger = createLedger();
+    const executor = createExecutor([
+      { type: "ambiguous_after_dispatch", errorCode: "RESPONSE_LOST" },
+    ]);
+    const reconcile = vi.fn(async () => ({ state: "not_committed" as const }));
+    const runner = createRunner(ledger, createResultStore());
+
+    await expect(
+      runner.execute(runInput(executor, createDescriptor({ reconcile })))
+    ).resolves.toEqual({
+      type: "failed",
+      errorCode: "SIDE_EFFECT_NOT_COMMITTED",
+      toolExecutionId: "execution-1",
+    });
+    expect(executor.executeTyped).toHaveBeenCalledOnce();
+    expect(ledger.releaseClaim).toHaveBeenCalledWith({
+      businessEffectId: "effect-1",
+      expectedEffectState: "unknown",
+      toolExecutionId: "execution-1",
+      expectedExecutionStatus: "unknown",
+      terminationCause: "failed_not_committed",
+    });
+  });
+
+  it("reports persistence uncertainty when the not-committed release cannot be written", async () => {
+    const ledger = createLedger();
+    ledger.releaseClaim.mockRejectedValueOnce(new Error("ledger unavailable"));
+    const executor = createExecutor([
+      { type: "ambiguous_after_dispatch", errorCode: "RESPONSE_LOST" },
+    ]);
+    const reconcile = vi.fn(async () => ({ state: "not_committed" as const }));
+    const runner = createRunner(ledger, createResultStore());
+
+    await expect(
+      runner.execute(runInput(executor, createDescriptor({ reconcile })))
+    ).resolves.toEqual({
+      type: "deferred",
+      errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN",
+      toolExecutionId: "execution-1",
+    });
+  });
+
+  it("moves unknown back to prepared atomically before a reconciled retry", async () => {
+    const ledger = createLedger();
+    const executor = createExecutor([
+      { type: "ambiguous_after_dispatch", errorCode: "RESPONSE_LOST" },
+      { type: "succeeded", result: { operationId: "operation-2" } },
+    ]);
+    const reconcile = vi.fn(async () => ({ state: "not_committed" as const }));
+    const runner = createRunner(ledger, createResultStore());
+
+    await expect(
+      runner.execute(runInput(executor, createDescriptor({ reconcile }), createBudget()))
+    ).resolves.toMatchObject({ type: "succeeded" });
+    expect(ledger.transitionBusinessEffectAndExecution).toHaveBeenLastCalledWith({
+      businessEffectId: "effect-1",
+      expectedEffectState: "unknown",
+      nextEffectState: "prepared",
+      toolExecutionId: "execution-1",
+      expectedExecutionStatus: "unknown",
+      nextExecutionStatus: "executing",
+    });
+  });
+
+  describe("first submission against an existing effect", () => {
+    const effect = {
+      businessEffectId: "effect-1",
+      scopeId: "scope-1",
+      tenantId: "tenant-1",
+      businessEffectKey: hashBusinessEffectKey("resource-1"),
+    };
+
+    it("reports the original when a committed result is reused", async () => {
+      const ledger = createLedger();
+      ledger.prepare.mockResolvedValueOnce({
+        type: "existing_committed",
+        businessEffect: { ...effect, commitState: "committed" },
+        execution: { ...execution, status: "committed", resultRef: "result-ref-1" },
+        originalExecutionId: "execution-original",
+      });
+      const executor = createExecutor([]);
+      const runner = createRunner(ledger, createResultStore({
+        resolve: vi.fn(async () => ({ operationId: "operation-original" })) as ResultReferenceStore["resolve"],
+      }));
+
+      await expect(
+        runner.execute(runInput(executor, createDescriptor()))
+      ).resolves.toEqual({
+        type: "succeeded",
+        source: "cache",
+        result: { operationId: "operation-original" },
+        toolExecutionId: "execution-1",
+        reusedFrom: { businessEffectId: "effect-1", toolExecutionId: "execution-original" },
+      });
+      expect(executor.executeTyped).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [{ commitState: "prepared" as const }, "in_flight_duplicate"],
+      [{ commitState: "unknown" as const }, "original_outcome_unknown"],
+    ])("marks a held-off submission as a duplicate (%o)", async (state, reason) => {
+      const ledger = createLedger();
+      ledger.prepare.mockResolvedValueOnce({
+        type: "not_claimed",
+        businessEffect: { ...effect, ...state },
+        execution: { ...execution, status: "failed", claimDisposition: "not_claimed" },
+      });
+      const executor = createExecutor([]);
+      const runner = createRunner(ledger, createResultStore());
+
+      await expect(
+        runner.execute(runInput(executor, createDescriptor()))
+      ).resolves.toEqual({
+        type: "deferred",
+        errorCode: "SIDE_EFFECT_CLAIM_NOT_ACQUIRED",
+        toolExecutionId: "execution-1",
+        duplicateOf: { reason, original: { businessEffectId: "effect-1" } },
+      });
+      expect(executor.executeTyped).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [{ commitState: "compensated" as const }],
+      [{ commitState: "prepared" as const, releasedAt: "2026-10-24T00:00:00.000Z" }],
+    ])("does not mark a duplicate when the original is not holding the effect (%o)", async (state) => {
+      const ledger = createLedger();
+      ledger.prepare.mockResolvedValueOnce({
+        type: "not_claimed",
+        businessEffect: { ...effect, ...state },
+        execution: { ...execution, status: "failed", claimDisposition: "not_claimed" },
+      });
+      const runner = createRunner(ledger, createResultStore());
+
+      const result = await runner.execute(runInput(createExecutor([]), createDescriptor()));
+
+      expect(result).toEqual({
+        type: "deferred",
+        errorCode: "SIDE_EFFECT_CLAIM_NOT_ACQUIRED",
+        toolExecutionId: "execution-1",
+      });
+    });
+
+    it("never succeeds when a tool itself returns a deduplicated outcome", async () => {
+      const ledger = createLedger();
+      const runner = createRunner(ledger, createResultStore());
+
+      const result = await runner.execute(
+        runInput(
+          createExecutor([
+            {
+              type: "deduplicated",
+              reason: "in_flight_duplicate",
+              original: { businessEffectId: "forged" },
+            },
+          ]),
+          createDescriptor()
+        )
+      );
+
+      expect(result.type).not.toBe("succeeded");
+      expect(ledger.commitExecutionAndBusinessEffect).not.toHaveBeenCalled();
+      expect(ledger.releaseClaim).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("replay of a submission that never claimed", () => {
+    const notClaimed: ToolExecutionRecord = {
+      ...execution,
+      status: "failed",
+      claimDisposition: "not_claimed",
+    };
+    const effect = {
+      businessEffectId: "effect-1",
+      scopeId: "scope-1",
+      tenantId: "tenant-1",
+      businessEffectKey: hashBusinessEffectKey("resource-1"),
+    };
+
+    it("reuses the original committed result", async () => {
+      const ledger = createLedger();
+      ledger.findExecutionByReplayKey.mockResolvedValueOnce(notClaimed);
+      ledger.findBusinessEffectSnapshot.mockResolvedValueOnce({
+        businessEffect: { ...effect, commitState: "committed" },
+        committedExecution: {
+          ...execution,
+          toolExecutionId: "execution-original",
+          status: "committed",
+          resultRef: "result-ref-original",
+        },
+      });
+      const resultStore = createResultStore({
+        resolve: vi.fn(async () => ({ operationId: "operation-original" })) as ResultReferenceStore["resolve"],
+      });
+      const executor = createExecutor([]);
+      const runner = createRunner(ledger, resultStore);
+
+      await expect(
+        runner.execute(runInput(executor, createDescriptor()))
+      ).resolves.toEqual({
+        type: "succeeded",
+        source: "cache",
+        result: { operationId: "operation-original" },
+        toolExecutionId: "execution-original",
+        reusedFrom: {
+          businessEffectId: "effect-1",
+          toolExecutionId: "execution-original",
+        },
+      });
+      expect(executor.executeTyped).not.toHaveBeenCalled();
+      expect(ledger.prepare).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["prepared", "in_flight_duplicate"],
+      ["unknown", "original_outcome_unknown"],
+    ] as const)(
+      "stays a claim-not-acquired result while the original is %s",
+      async (commitState, reason) => {
+        const ledger = createLedger();
+        ledger.findExecutionByReplayKey.mockResolvedValueOnce(notClaimed);
+        ledger.findBusinessEffectSnapshot.mockResolvedValueOnce({
+          businessEffect: { ...effect, commitState },
+        });
+        const runner = createRunner(ledger, createResultStore());
+
+        await expect(
+          runner.execute(runInput(createExecutor([]), createDescriptor()))
+        ).resolves.toEqual({
+          type: "deferred",
+          errorCode: "SIDE_EFFECT_CLAIM_NOT_ACQUIRED",
+          toolExecutionId: "execution-1",
+          duplicateOf: { reason, original: { businessEffectId: "effect-1" } },
+        });
+      }
+    );
+
+    it("is not a duplicate once the original effect was released", async () => {
+      const ledger = createLedger();
+      ledger.findExecutionByReplayKey.mockResolvedValueOnce(notClaimed);
+      ledger.findBusinessEffectSnapshot.mockResolvedValueOnce({
+        businessEffect: {
+          ...effect,
+          commitState: "prepared",
+          releasedAt: "2026-10-24T00:00:00.000Z",
+        },
+      });
+      const runner = createRunner(ledger, createResultStore());
+
+      await expect(
+        runner.execute(runInput(createExecutor([]), createDescriptor()))
+      ).resolves.toEqual({
+        type: "failed",
+        errorCode: "SIDE_EFFECT_NOT_COMMITTED",
+        toolExecutionId: "execution-1",
+      });
+    });
+
+    it("reports the reused origin when a reusing submission is replayed", async () => {
+      const ledger = createLedger();
+      ledger.findExecutionByReplayKey.mockResolvedValueOnce({
+        ...execution,
+        status: "committed",
+        resultRef: "result-ref-original",
+        terminationCause: "deduplicated",
+      });
+      ledger.findBusinessEffectSnapshot.mockResolvedValueOnce({
+        businessEffect: { ...effect, commitState: "committed" },
+        committedExecution: {
+          ...execution,
+          toolExecutionId: "execution-original",
+          status: "committed",
+          resultRef: "result-ref-original",
+        },
+      });
+      const runner = createRunner(ledger, createResultStore({
+        resolve: vi.fn(async () => ({ operationId: "operation-original" })) as ResultReferenceStore["resolve"],
+      }));
+
+      await expect(
+        runner.execute(runInput(createExecutor([]), createDescriptor()))
+      ).resolves.toMatchObject({
+        type: "succeeded",
+        source: "cache",
+        reusedFrom: { businessEffectId: "effect-1", toolExecutionId: "execution-original" },
+      });
+    });
+
+    it("keeps the replay conflict when the request differs", async () => {
+      const ledger = createLedger();
+      ledger.findExecutionByReplayKey.mockResolvedValueOnce({
+        ...notClaimed,
+        requestHash: "other-request",
+      });
+      const runner = createRunner(ledger, createResultStore());
+
+      await expect(
+        runner.execute(runInput(createExecutor([]), createDescriptor()))
+      ).resolves.toEqual({ type: "conflict", errorCode: "SIDE_EFFECT_REPLAY_CONFLICT" });
+      expect(ledger.findBusinessEffectSnapshot).not.toHaveBeenCalled();
+    });
   });
 });

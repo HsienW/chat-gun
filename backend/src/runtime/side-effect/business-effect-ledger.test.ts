@@ -147,8 +147,9 @@ describe("PgBusinessEffectLedger.prepare", () => {
     expect(executedSql).toHaveLength(2);
     expect(executedSql[1]).toContain("execution_profile_version");
     expect(executedSql[1]).toContain("termination_cause");
-    expect(executedValues[1]).toHaveLength(19);
+    expect(executedValues[1]).toHaveLength(20);
     expect(executedValues[1]?.[18]).toBeNull();
+    expect(executedValues[1]?.[19]).toBeNull();
     expect(executedValues[1]).toContain("1.0");
     expect(JSON.stringify(executedValues[1])).toContain("env:BRAVE_API_KEY");
   });
@@ -193,8 +194,272 @@ describe("PgBusinessEffectLedger.prepare", () => {
         terminationCause: "completed",
       },
     });
-    expect(insertedValues).toHaveLength(19);
-    expect(insertedValues?.[18]).toBe("completed");
+    expect(insertedValues).toHaveLength(20);
+    // The reusing submission is recorded as deduplicated, not as its own completion.
+    expect(insertedValues?.[18]).toBe("deduplicated");
+    expect(insertedValues?.[19]).toBeNull();
+  });
+
+  it("names the original committing execution and skips earlier reuses", async () => {
+    const executedSql: string[] = [];
+    const db = new FakeSideEffectDatabase(async (text) => {
+      executedSql.push(text);
+      if (text.includes("INSERT INTO business_effects")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (text.includes("FROM business_effects")) {
+        return { rows: [businessEffectRow("committed")], rowCount: 1 };
+      }
+      if (text.includes("FROM tool_executions") && text.includes("status = 'committed'")) {
+        return {
+          rows: [{
+            ...toolExecutionRow("committed", "result-ref-1"),
+            tool_execution_id: "execution-original",
+            termination_cause: "completed",
+          }],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("INSERT INTO tool_executions")) {
+        return {
+          rows: [{
+            ...toolExecutionRow("committed", "result-ref-1"),
+            termination_cause: "deduplicated",
+          }],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const ledger = new PgBusinessEffectLedger(db);
+
+    await expect(ledger.prepare(prepareInput)).resolves.toMatchObject({
+      type: "existing_committed",
+      originalExecutionId: "execution-original",
+    });
+    expect(
+      executedSql.find((sql) => sql.includes("status = 'committed'"))
+    ).toContain("termination_cause IS DISTINCT FROM 'deduplicated'");
+  });
+
+  it.each([
+    ["prepared", "deduplicated"],
+    ["unknown", "deduplicated"],
+    ["compensated", null],
+  ])("records the not-claimed termination for an original that is %s", async (commitState, cause) => {
+    let insertedValues: readonly unknown[] | undefined;
+    const db = new FakeSideEffectDatabase(async (text, values) => {
+      if (text.includes("INSERT INTO business_effects")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (text.includes("FROM business_effects")) {
+        return { rows: [businessEffectRow(commitState)], rowCount: 1 };
+      }
+      if (text.includes("INSERT INTO tool_executions")) {
+        insertedValues = values;
+        return {
+          rows: [{ ...toolExecutionRow("failed"), claim_disposition: "not_claimed" }],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await new PgBusinessEffectLedger(db).prepare(prepareInput);
+
+    expect(insertedValues?.[18]).toBe(cause);
+  });
+
+  it("records a submission that cannot claim an in-flight effect as failed and not_claimed", async () => {
+    let insertedValues: readonly unknown[] | undefined;
+    const db = new FakeSideEffectDatabase(async (text, values) => {
+      if (text.includes("INSERT INTO business_effects")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (text.includes("FROM business_effects")) {
+        return { rows: [businessEffectRow("prepared")], rowCount: 1 };
+      }
+      if (text.includes("INSERT INTO tool_executions")) {
+        insertedValues = values;
+        return {
+          rows: [{ ...toolExecutionRow("failed"), claim_disposition: "not_claimed" }],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const ledger = new PgBusinessEffectLedger(db);
+
+    await expect(ledger.prepare(prepareInput)).resolves.toMatchObject({
+      type: "not_claimed",
+      execution: { status: "failed", claimDisposition: "not_claimed" },
+    });
+    expect(insertedValues?.[11]).toBe("failed");
+    expect(insertedValues?.[19]).toBe("not_claimed");
+  });
+
+  it("reclaims a released effect with compare-and-set", async () => {
+    const executedSql: string[] = [];
+    const db = new FakeSideEffectDatabase(async (text) => {
+      executedSql.push(text);
+      if (text.includes("INSERT INTO business_effects")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (text.includes("UPDATE business_effects")) {
+        return { rows: [businessEffectRow("prepared")], rowCount: 1 };
+      }
+      if (text.includes("FROM business_effects")) {
+        return {
+          rows: [{ ...businessEffectRow("prepared"), released_at: now }],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("INSERT INTO tool_executions")) {
+        return { rows: [toolExecutionRow()], rowCount: 1 };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const ledger = new PgBusinessEffectLedger(db);
+
+    const result = await ledger.prepare(prepareInput);
+
+    expect(result).toMatchObject({
+      type: "claimed",
+      execution: { status: "prepared" },
+    });
+    if (result.type !== "claimed") throw new Error("Expected a reclaimed effect");
+    expect(result.businessEffect.releasedAt).toBeUndefined();
+    const reclaim = executedSql.find((sql) => sql.includes("UPDATE business_effects"));
+    expect(reclaim).toContain("released_at = NULL");
+    expect(reclaim).toContain("released_at IS NOT NULL");
+  });
+
+  it("does not reclaim when another submission cleared released_at first", async () => {
+    const db = new FakeSideEffectDatabase(async (text) => {
+      if (text.includes("INSERT INTO business_effects")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (text.includes("UPDATE business_effects")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (text.includes("FROM business_effects")) {
+        return {
+          rows: [{ ...businessEffectRow("prepared"), released_at: now }],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("INSERT INTO tool_executions")) {
+        return {
+          rows: [{ ...toolExecutionRow("failed"), claim_disposition: "not_claimed" }],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const ledger = new PgBusinessEffectLedger(db);
+
+    await expect(ledger.prepare(prepareInput)).resolves.toMatchObject({
+      type: "not_claimed",
+    });
+  });
+
+  it("rolls the reclaim back when the replay key already has an execution", async () => {
+    const db = new FakeSideEffectDatabase(async (text) => {
+      if (text.includes("INSERT INTO business_effects")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (text.includes("UPDATE business_effects")) {
+        return { rows: [businessEffectRow("prepared")], rowCount: 1 };
+      }
+      if (text.includes("FROM business_effects")) {
+        return {
+          rows: [{ ...businessEffectRow("prepared"), released_at: now }],
+          rowCount: 1,
+        };
+      }
+      if (text.includes("INSERT INTO tool_executions")) {
+        return { rows: [], rowCount: 0 };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const ledger = new PgBusinessEffectLedger(db);
+
+    await expect(ledger.prepare(prepareInput)).resolves.toEqual({
+      type: "unavailable",
+      errorCode: "SIDE_EFFECT_LEDGER_UNAVAILABLE",
+    });
+  });
+});
+
+describe("PgBusinessEffectLedger lock order", () => {
+  function recordingLedger(effectRowCount = 1) {
+    const executedSql: string[] = [];
+    const executedValues: unknown[][] = [];
+    const db = new FakeSideEffectDatabase(async (text, values) => {
+      executedSql.push(text);
+      executedValues.push([...(values ?? [])]);
+      if (text.includes("UPDATE business_effects")) {
+        return { rows: [], rowCount: effectRowCount };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+    return { ledger: new PgBusinessEffectLedger(db), executedSql, executedValues };
+  }
+
+  it("releases the effect before failing the execution", async () => {
+    const { ledger, executedSql, executedValues } = recordingLedger();
+
+    await ledger.releaseClaim({
+      businessEffectId: "effect-1",
+      expectedEffectState: "prepared",
+      toolExecutionId: "execution-1",
+      expectedExecutionStatus: "executing",
+      terminationCause: "failed_not_committed",
+    });
+
+    expect(executedSql[0]).toContain("UPDATE business_effects");
+    expect(executedSql[0]).toContain("released_at = NOW()");
+    expect(executedSql[0]).toContain("released_at IS NULL");
+    expect(executedValues[0]).toEqual(["effect-1", "prepared"]);
+    expect(executedSql[1]).toContain("UPDATE tool_executions");
+    expect(executedSql[1]).toContain("status = 'failed'");
+    expect(executedValues[1]).toEqual([
+      "execution-1",
+      "executing",
+      "failed_not_committed",
+    ]);
+  });
+
+  it("does not touch the execution when the effect is no longer releasable", async () => {
+    const { ledger, executedSql } = recordingLedger(0);
+
+    await expect(
+      ledger.releaseClaim({
+        businessEffectId: "effect-1",
+        expectedEffectState: "prepared",
+        toolExecutionId: "execution-1",
+        expectedExecutionStatus: "executing",
+      })
+    ).rejects.toMatchObject({ name: "SideEffectStateConflictError" });
+    expect(executedSql).toHaveLength(1);
+  });
+
+  it("moves the effect before the execution when marking an outcome unknown", async () => {
+    const { ledger, executedSql, executedValues } = recordingLedger();
+
+    await ledger.transitionBusinessEffectAndExecution({
+      businessEffectId: "effect-1",
+      expectedEffectState: "prepared",
+      nextEffectState: "unknown",
+      toolExecutionId: "execution-1",
+      expectedExecutionStatus: "executing",
+      nextExecutionStatus: "unknown",
+    });
+
+    expect(executedSql[0]).toContain("UPDATE business_effects");
+    expect(executedValues[0]).toEqual(["effect-1", "prepared", "unknown"]);
+    expect(executedSql[1]).toContain("UPDATE tool_executions");
+    expect(executedValues[1]).toEqual(["execution-1", "executing", "unknown"]);
   });
 });
 
@@ -247,8 +512,9 @@ describe("PgBusinessEffectLedger.commitExecutionAndBusinessEffect", () => {
       expectedEffectState: "prepared",
     });
 
-    expect(executedSql[0]).toContain("termination_cause");
-    expect(executedValues[0]).toEqual([
+    expect(executedSql[0]).toContain("UPDATE business_effects");
+    expect(executedSql[1]).toContain("termination_cause");
+    expect(executedValues[1]).toEqual([
       "execution-1",
       "executing",
       "result-ref-1",
@@ -256,7 +522,7 @@ describe("PgBusinessEffectLedger.commitExecutionAndBusinessEffect", () => {
     ]);
   });
 
-  it("rejects the atomic commit when either CAS transition is not acquired", async () => {
+  it("locks the business effect before the execution and stops when its CAS fails", async () => {
     const executedSql: string[] = [];
     const db = new FakeSideEffectDatabase(async (text) => {
       executedSql.push(text);
@@ -279,6 +545,7 @@ describe("PgBusinessEffectLedger.commitExecutionAndBusinessEffect", () => {
         expectedEffectState: "prepared",
       })
     ).rejects.toMatchObject({ name: "SideEffectStateConflictError" });
-    expect(executedSql).toHaveLength(2);
+    expect(executedSql).toHaveLength(1);
+    expect(executedSql[0]).toContain("UPDATE business_effects");
   });
 });

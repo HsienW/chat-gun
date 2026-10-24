@@ -141,6 +141,13 @@ function createHarness(task: AgentTask, steps: AgentStep[]) {
     commitExecutionAndBusinessEffect: vi.fn<
       BusinessEffectLedger["commitExecutionAndBusinessEffect"]
     >(),
+    transitionBusinessEffectAndExecution: vi.fn<
+      BusinessEffectLedger["transitionBusinessEffectAndExecution"]
+    >(),
+    releaseClaim: vi.fn<BusinessEffectLedger["releaseClaim"]>(),
+    findBusinessEffectSnapshot: vi.fn<
+      BusinessEffectLedger["findBusinessEffectSnapshot"]
+    >(async () => null),
     findCommittedExecutionByStepId: vi.fn<
       BusinessEffectLedger["findCommittedExecutionByStepId"]
     >(async () => null),

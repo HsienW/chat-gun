@@ -46,7 +46,10 @@ export interface BusinessEffectRecord {
   externalOperationId?: string;
   commitState: BusinessEffectCommitState;
   expiresAt?: string;
+  releasedAt?: string;
 }
+
+export type ToolExecutionClaimDisposition = "not_claimed";
 
 export interface ToolExecutionRecord {
   toolExecutionId: string;
@@ -64,6 +67,12 @@ export interface ToolExecutionRecord {
   secretRefsUsed?: string[];
   egressDecision?: ExecutionProfileEvidence["egressDecision"];
   terminationCause?: ExecutionProfileTerminationCause;
+  claimDisposition?: ToolExecutionClaimDisposition;
+}
+
+export interface BusinessEffectSnapshot {
+  businessEffect: BusinessEffectRecord;
+  committedExecution?: ToolExecutionRecord;
 }
 
 export interface CommittedToolExecutionReference {
@@ -102,6 +111,8 @@ export type PrepareSideEffectResult =
       type: "existing_committed";
       businessEffect: BusinessEffectRecord;
       execution: ToolExecutionRecord;
+      /** The execution that originally committed the reused result. */
+      originalExecutionId?: string;
     }
   | {
       type: "not_claimed";
@@ -159,6 +170,29 @@ export interface BusinessEffectLedger {
     externalSystemNamespace?: string;
     externalOperationId?: string;
   }): Promise<void>;
+  transitionBusinessEffectAndExecution(input: {
+    businessEffectId: string;
+    expectedEffectState: BusinessEffectCommitState;
+    nextEffectState: BusinessEffectCommitState;
+    toolExecutionId: string;
+    expectedExecutionStatus: ToolExecutionStatus;
+    nextExecutionStatus: ToolExecutionStatus;
+  }): Promise<void>;
+  /**
+   * Releases a claim whose execution ended definitely not committed. The effect
+   * keeps commit_state = 'prepared' and gains released_at so that only a new,
+   * re-authorized submission can reclaim it.
+   */
+  releaseClaim(input: {
+    businessEffectId: string;
+    expectedEffectState: "prepared" | "unknown";
+    toolExecutionId: string;
+    expectedExecutionStatus: ToolExecutionStatus;
+    terminationCause?: ExecutionProfileTerminationCause;
+  }): Promise<void>;
+  findBusinessEffectSnapshot(
+    businessEffectId: string
+  ): Promise<BusinessEffectSnapshot | null>;
   findCommittedExecutionByStepId(
     stepId: string
   ): Promise<CommittedToolExecutionReference | null>;
@@ -185,6 +219,7 @@ interface BusinessEffectRow extends Record<string, unknown> {
   external_operation_id: string | null;
   commit_state: string;
   expires_at: string | Date | null;
+  released_at?: string | Date | null;
 }
 
 interface ToolExecutionRow extends Record<string, unknown> {
@@ -203,19 +238,20 @@ interface ToolExecutionRow extends Record<string, unknown> {
   secret_refs_used: string[] | null;
   egress_decision: ExecutionProfileEvidence["egressDecision"];
   termination_cause: ExecutionProfileTerminationCause | null;
+  claim_disposition?: string | null;
 }
 
 const BUSINESS_EFFECT_COLUMNS = `
   business_effect_id, scope_id, tenant_id, business_effect_key,
   external_system_namespace, external_operation_id, commit_state, expires_at,
-  created_at, committed_at, updated_at
+  released_at, created_at, committed_at, updated_at
 `;
 const TOOL_EXECUTION_COLUMNS = `
   tool_execution_id, business_effect_id, replay_key, request_id, thread_id,
   run_id, task_id, step_id, tool_name, tool_version, call_index, status,
   request_hash, result_ref, decision_id, execution_profile_version,
   effective_capabilities, secret_refs_used, egress_decision, termination_cause,
-  created_at, updated_at
+  claim_disposition, created_at, updated_at
 `;
 
 function toOptionalIsoString(value: string | Date | null): string | undefined {
@@ -252,7 +288,18 @@ function mapBusinessEffect(row: BusinessEffectRow): BusinessEffectRecord {
     ...(toOptionalIsoString(row.expires_at)
       ? { expiresAt: toOptionalIsoString(row.expires_at) }
       : {}),
+    ...(toOptionalIsoString(row.released_at ?? null)
+      ? { releasedAt: toOptionalIsoString(row.released_at ?? null) }
+      : {}),
   };
+}
+
+function mapClaimDisposition(
+  value: string | null | undefined
+): ToolExecutionClaimDisposition | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (value === "not_claimed") return value;
+  throw new Error(`Unknown tool execution claim disposition: ${value}`);
 }
 
 function mapToolExecution(row: ToolExecutionRow): ToolExecutionRecord {
@@ -281,6 +328,9 @@ function mapToolExecution(row: ToolExecutionRow): ToolExecutionRecord {
     ...(row.secret_refs_used ? { secretRefsUsed: row.secret_refs_used } : {}),
     ...(row.egress_decision ? { egressDecision: row.egress_decision } : {}),
     ...(row.termination_cause ? { terminationCause: row.termination_cause } : {}),
+    ...(mapClaimDisposition(row.claim_disposition)
+      ? { claimDisposition: mapClaimDisposition(row.claim_disposition) }
+      : {}),
   };
 }
 
@@ -352,8 +402,9 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
             input.expiresAt ?? null,
           ]
         );
-        const claimed = insertedEffect.rows.length > 0;
-        const effectRow =
+        let claimed = insertedEffect.rows.length > 0;
+        let reclaimedReleasedEffect = false;
+        let effectRow =
           insertedEffect.rows[0] ??
           (
             await transaction.query<BusinessEffectRow>(
@@ -366,6 +417,30 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
           ).rows[0];
         if (!effectRow) throw new Error("Business effect disappeared during prepare");
 
+        if (
+          !claimed &&
+          effectRow.commit_state === "prepared" &&
+          effectRow.released_at !== null &&
+          effectRow.released_at !== undefined
+        ) {
+          // Reclaim a released effect with CAS; the row lock above serializes
+          // concurrent reclaimers, so only one sees released_at still set.
+          const reclaimed = await transaction.query<BusinessEffectRow>(
+            `UPDATE business_effects
+             SET released_at = NULL, updated_at = NOW()
+             WHERE business_effect_id = $1
+               AND commit_state = 'prepared'
+               AND released_at IS NOT NULL
+             RETURNING ${BUSINESS_EFFECT_COLUMNS}`,
+            [effectRow.business_effect_id]
+          );
+          if (reclaimed.rows[0]) {
+            claimed = true;
+            reclaimedReleasedEffect = true;
+            effectRow = reclaimed.rows[0];
+          }
+        }
+
         const businessEffect = mapBusinessEffect(effectRow);
         const reusableExecution =
           !claimed && businessEffect.commitState === "committed"
@@ -374,17 +449,31 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
                   `SELECT ${TOOL_EXECUTION_COLUMNS}
                    FROM tool_executions
                    WHERE business_effect_id = $1 AND status = 'committed'
+                     AND termination_cause IS DISTINCT FROM 'deduplicated'
                    ORDER BY updated_at DESC
                    LIMIT 1`,
                   [businessEffect.businessEffectId]
                 )
               ).rows[0]
             : undefined;
+        // A submission that neither claims nor reuses a committed effect is a
+        // failed execution marked not_claimed, never an unknown outcome.
         const executionStatus: ToolExecutionStatus = claimed
           ? "prepared"
           : businessEffect.commitState === "committed"
             ? "committed"
-            : "unknown";
+            : "failed";
+        const claimDisposition =
+          executionStatus === "failed" ? "not_claimed" : null;
+        // Reuse of a committed result and a submission held off by an
+        // in-flight or unknown effect both end as deduplicated.
+        const terminationCause =
+          executionStatus === "committed" ||
+          (executionStatus === "failed" &&
+            (businessEffect.commitState === "prepared" ||
+              businessEffect.commitState === "unknown"))
+            ? "deduplicated"
+            : null;
         const resultRef = reusableExecution?.result_ref ?? null;
         const insertedExecution = await transaction.query<ToolExecutionRow>(
           `INSERT INTO tool_executions (
@@ -392,10 +481,11 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
              thread_id, run_id, task_id, step_id, tool_name, tool_version,
              call_index, status, request_hash, result_ref,
              execution_profile_version, effective_capabilities,
-             secret_refs_used, egress_decision, termination_cause
+             secret_refs_used, egress_decision, termination_cause,
+             claim_disposition
            ) VALUES (
              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-             $15, $16, $17, $18, $19
+             $15, $16, $17, $18, $19, $20
            )
            ON CONFLICT (replay_key) DO NOTHING
            RETURNING ${TOOL_EXECUTION_COLUMNS}`,
@@ -418,10 +508,14 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
             input.securityEvidence?.effectiveCapabilities ?? null,
             input.securityEvidence?.secretRefsUsed ?? null,
             input.securityEvidence?.egressDecision ?? null,
-            reusableExecution?.termination_cause ??
-              (executionStatus === "committed" ? "completed" : null),
+            terminationCause,
+            claimDisposition,
           ]
         );
+        if (reclaimedReleasedEffect && !insertedExecution.rows[0]) {
+          // The replay key already has an execution; roll the reclaim back.
+          throw new Error("Replay key already recorded while reclaiming");
+        }
         const executionRow =
           insertedExecution.rows[0] ??
           (
@@ -438,7 +532,14 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
         }
         if (claimed) return { type: "claimed", businessEffect, execution };
         return businessEffect.commitState === "committed"
-          ? { type: "existing_committed", businessEffect, execution }
+          ? {
+              type: "existing_committed",
+              businessEffect,
+              execution,
+              ...(reusableExecution
+                ? { originalExecutionId: reusableExecution.tool_execution_id }
+                : {}),
+            }
           : { type: "not_claimed", businessEffect, execution };
       });
     } catch {
@@ -585,7 +686,31 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
     externalSystemNamespace?: string;
     externalOperationId?: string;
   }): Promise<void> {
+    // Lock order for every path that writes both tables: business_effects
+    // first, then tool_executions (same as prepare).
     await this.db.withTransaction(async (transaction) => {
+      const effectResult = await transaction.query(
+        `UPDATE business_effects
+         SET commit_state = 'committed',
+             external_system_namespace = COALESCE($3, external_system_namespace),
+             external_operation_id = COALESCE($4, external_operation_id),
+             committed_at = NOW(), updated_at = NOW()
+         WHERE business_effect_id = $1 AND commit_state = $2
+           AND released_at IS NULL`,
+        [
+          input.businessEffectId,
+          input.expectedEffectState,
+          input.externalSystemNamespace ?? null,
+          input.externalOperationId ?? null,
+        ]
+      );
+      if ((effectResult.rowCount ?? 0) !== 1) {
+        throw new SideEffectStateConflictError(
+          "business_effect",
+          input.businessEffectId
+        );
+      }
+
       const executionResult = await transaction.query(
         `UPDATE tool_executions
          SET status = 'committed', result_ref = $3,
@@ -604,20 +729,24 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
           input.toolExecutionId
         );
       }
+    });
+  }
 
+  async transitionBusinessEffectAndExecution(input: {
+    businessEffectId: string;
+    expectedEffectState: BusinessEffectCommitState;
+    nextEffectState: BusinessEffectCommitState;
+    toolExecutionId: string;
+    expectedExecutionStatus: ToolExecutionStatus;
+    nextExecutionStatus: ToolExecutionStatus;
+  }): Promise<void> {
+    await this.db.withTransaction(async (transaction) => {
       const effectResult = await transaction.query(
         `UPDATE business_effects
-         SET commit_state = 'committed',
-             external_system_namespace = COALESCE($3, external_system_namespace),
-             external_operation_id = COALESCE($4, external_operation_id),
-             committed_at = NOW(), updated_at = NOW()
-         WHERE business_effect_id = $1 AND commit_state = $2`,
-        [
-          input.businessEffectId,
-          input.expectedEffectState,
-          input.externalSystemNamespace ?? null,
-          input.externalOperationId ?? null,
-        ]
+         SET commit_state = $3, updated_at = NOW()
+         WHERE business_effect_id = $1 AND commit_state = $2
+           AND released_at IS NULL`,
+        [input.businessEffectId, input.expectedEffectState, input.nextEffectState]
       );
       if ((effectResult.rowCount ?? 0) !== 1) {
         throw new SideEffectStateConflictError(
@@ -625,7 +754,95 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
           input.businessEffectId
         );
       }
+
+      const executionResult = await transaction.query(
+        `UPDATE tool_executions
+         SET status = $3, updated_at = NOW()
+         WHERE tool_execution_id = $1 AND status = $2`,
+        [
+          input.toolExecutionId,
+          input.expectedExecutionStatus,
+          input.nextExecutionStatus,
+        ]
+      );
+      if ((executionResult.rowCount ?? 0) !== 1) {
+        throw new SideEffectStateConflictError(
+          "tool_execution",
+          input.toolExecutionId
+        );
+      }
     });
+  }
+
+  async releaseClaim(input: {
+    businessEffectId: string;
+    expectedEffectState: "prepared" | "unknown";
+    toolExecutionId: string;
+    expectedExecutionStatus: ToolExecutionStatus;
+    terminationCause?: ExecutionProfileTerminationCause;
+  }): Promise<void> {
+    await this.db.withTransaction(async (transaction) => {
+      const effectResult = await transaction.query(
+        `UPDATE business_effects
+         SET commit_state = 'prepared', released_at = NOW(), updated_at = NOW()
+         WHERE business_effect_id = $1 AND commit_state = $2
+           AND released_at IS NULL`,
+        [input.businessEffectId, input.expectedEffectState]
+      );
+      if ((effectResult.rowCount ?? 0) !== 1) {
+        throw new SideEffectStateConflictError(
+          "business_effect",
+          input.businessEffectId
+        );
+      }
+
+      const executionResult = await transaction.query(
+        `UPDATE tool_executions
+         SET status = 'failed',
+             termination_cause = CASE
+               WHEN $3::text IS NULL THEN termination_cause
+               ELSE $3
+             END,
+             updated_at = NOW()
+         WHERE tool_execution_id = $1 AND status = $2`,
+        [
+          input.toolExecutionId,
+          input.expectedExecutionStatus,
+          input.terminationCause ?? null,
+        ]
+      );
+      if ((executionResult.rowCount ?? 0) !== 1) {
+        throw new SideEffectStateConflictError(
+          "tool_execution",
+          input.toolExecutionId
+        );
+      }
+    });
+  }
+
+  async findBusinessEffectSnapshot(
+    businessEffectId: string
+  ): Promise<BusinessEffectSnapshot | null> {
+    const effect = await this.db.query<BusinessEffectRow>(
+      `SELECT ${BUSINESS_EFFECT_COLUMNS}
+       FROM business_effects WHERE business_effect_id = $1`,
+      [businessEffectId]
+    );
+    if (!effect.rows[0]) return null;
+    const businessEffect = mapBusinessEffect(effect.rows[0]);
+    if (businessEffect.commitState !== "committed") return { businessEffect };
+    const committed = await this.db.query<ToolExecutionRow>(
+      `SELECT ${TOOL_EXECUTION_COLUMNS}
+       FROM tool_executions
+       WHERE business_effect_id = $1 AND status = 'committed'
+         AND termination_cause IS DISTINCT FROM 'deduplicated'
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+      [businessEffectId]
+    );
+    return committed.rows[0]
+      ? { businessEffect, committedExecution: mapToolExecution(committed.rows[0]) }
+      : { businessEffect };
   }
 
   async findCommittedExecutionByStepId(
