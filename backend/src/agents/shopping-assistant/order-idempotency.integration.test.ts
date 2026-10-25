@@ -34,6 +34,8 @@ import { ORDER_TOOL_NAMES, createOrderToolRiskPolicies, createOrderToolSet } fro
 import { loadSyntheticOrderFixture, parseSyntheticOrderFixture, type SyntheticOrderFixture } from "../../tools/orders/synthetic-orders.js";
 import { createDispatchReadinessCheck } from "./dispatch-readiness.js";
 import { createShoppingAssistantGraph } from "./graph.js";
+import { PgOrderOperationRequestStore } from "./operation-requests.js";
+import { PgOrderOperationStatusReader } from "./operation-status.js";
 import { PgOriginalOperationResolver } from "./original-operation.js";
 
 const databaseUrl = process.env.SIDE_EFFECT_INTEGRATION_DATABASE_URL;
@@ -116,6 +118,7 @@ describePostgres("order idempotency against the Postgres ledger", () => {
     const runs = `run-%-${suiteId}`;
     const tenants = `${TENANT_PREFIX}%`;
     await pool.query("DELETE FROM reconciliation_tasks WHERE tenant_id LIKE $1", [tenants]);
+    await pool.query("DELETE FROM order_operation_requests WHERE tenant_id LIKE $1", [tenants]);
     await pool.query(`DELETE FROM tool_execution_attempts WHERE tool_execution_id IN (${executions})`, [runs]);
     await pool.query(`DELETE FROM result_references WHERE tool_execution_id IN (${executions})`, [runs]);
     await pool.query("DELETE FROM tool_executions WHERE run_id LIKE $1", [runs]);
@@ -156,7 +159,8 @@ describePostgres("order idempotency against the Postgres ledger", () => {
       db,
       additionalPolicies: createOrderToolRiskPolicies(),
     });
-    const orderTools = createOrderToolSet({ provider, statusReader: { read: async () => null } });
+    const statusReader = new PgOrderOperationStatusReader(db, { originalOperationResolver: new PgOriginalOperationResolver(db) });
+    const orderTools = createOrderToolSet({ provider, statusReader });
     const registry = new RuntimeToolDescriptorRegistry();
     for (const descriptor of orderTools.descriptors) {
       registry.register({ toolName: descriptor.toolName, toolVersion: descriptor.toolVersion }, descriptor);
@@ -211,13 +215,14 @@ describePostgres("order idempotency against the Postgres ledger", () => {
         checkDispatchReadiness: createDispatchReadinessCheck(db),
         confirmationWithdrawal: composition.confirmationStore,
         originalOperationResolver: new PgOriginalOperationResolver(db),
+        operationRequests: new PgOrderOperationRequestStore(db),
         audit: vi.fn(async () => undefined),
       },
       { checkpointer: new MemorySaver() }
     );
 
-    /** Requests one order change in its own thread and run, stopping at the approval interrupt. */
-    async function request(label: string, call: ToolCallSpec, principalId = SHOPPER_A) {
+    /** A thread and run of its own, with the runtime task and step the ledger refers to. */
+    async function startRun(label: string, principalId: string) {
       const threadId = `thread-${label}-${suiteId}`;
       const runId = `run-${label}-${suiteId}`;
       const context = contextFor(tenantId, threadId, runId, principalId);
@@ -230,31 +235,47 @@ describePostgres("order idempotency against the Postgres ledger", () => {
         `INSERT INTO task_steps (step_id, task_id, step_name, status) VALUES ($1, $2, 'order_branch', 'running')`,
         [context.stepId, context.taskId]
       );
-      const config = { configurable: { thread_id: threadId, execution_context: context } };
+      return { context, config: { configurable: { thread_id: threadId, execution_context: context } } };
+    }
+
+    /** Requests one order change in its own thread and run, stopping at the approval interrupt. */
+    async function request(label: string, call: ToolCallSpec, principalId = SHOPPER_A) {
+      const { context, config } = await startRun(label, principalId);
       nextCalls = [call];
       const waiting = await graph.invoke({ messages: [new HumanMessage("order change")] }, config);
       const descriptor = waiting.pendingAuthorization as ConfirmationRequiredDescriptor | null | undefined;
       if (!descriptor) throw new Error(`No approval for ${label}: ${JSON.stringify(waiting.operations)}`);
+      const decide = (decision: "approve" | "deny") =>
+        graph.invoke(
+          new Command({
+            resume: {
+              type: "tool_authorization_confirmation",
+              schemaVersion: descriptor.schemaVersion,
+              approvalId: descriptor.approvalId,
+              decisionId: descriptor.decisionId,
+              decision,
+            },
+          }),
+          config
+        );
       return {
         descriptor,
+        context,
         toolCallId: call.id,
-        approve: () =>
-          graph.invoke(
-            new Command({
-              resume: {
-                type: "tool_authorization_confirmation",
-                schemaVersion: descriptor.schemaVersion,
-                approvalId: descriptor.approvalId,
-                decisionId: descriptor.decisionId,
-                decision: "approve",
-              },
-            }),
-            config
-          ),
+        approve: () => decide("approve"),
+        deny: () => decide("deny"),
       };
     }
 
-    return { request, runnerAudit };
+    /** Looks an operation up through the status tool in a fresh thread with no earlier conversation. */
+    async function lookup(label: string, args: { operationId?: string; orderId?: string }, principalId = SHOPPER_A) {
+      const { config } = await startRun(label, principalId);
+      nextCalls = [{ name: "order_operation_status", id: `lookup-${label}`, args }];
+      const state = await graph.invoke({ messages: [new HumanMessage("status")] }, config);
+      return String(state.messages.at(-1)?.content ?? "");
+    }
+
+    return { request, lookup, runnerAudit, composition, statusReader };
   }
 
   /** A tenant, its mock order system and a graph over the shared Postgres runtime. */
@@ -545,5 +566,205 @@ describePostgres("order idempotency against the Postgres ledger", () => {
       effects: [expect.objectContaining({ commit_state: "committed" })],
       tasks: [{ reason_code: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN", status: "open" }],
     });
+  });
+
+  /** What the status lookup reads straight from the runtime database for a shopper. */
+  function statusOf(
+    h: ReturnType<typeof harness>,
+    tenantId: string,
+    query: { operationId?: string; orderId?: string },
+    principalId = SHOPPER_A
+  ) {
+    return h.statusReader.read({ tenantId, scopeId: tenantId, principalId, ...query });
+  }
+
+  it("reports a waiting approval with the order it names, by operation id or order id", async () => {
+    const { tenantId, h } = await setup("status-waiting");
+    const waiting = await h.request(
+      "status-waiting",
+      refund("call-1", {
+        orderId: "ORD-1002",
+        lineItems: [
+          { lineItemId: "LI-1002-2", quantity: 1 },
+          { lineItemId: "LI-1002-1", quantity: 1 },
+        ],
+        note: "keep this out",
+      })
+    );
+
+    const expected = {
+      schemaVersion: "order_operation_status@1",
+      operationRef: { toolCallId: "call-1", operationId: waiting.descriptor.approvalId },
+      kind: "refund_request",
+      orderRef: { orderId: "ORD-1002" },
+      state: "awaiting_approval",
+      stateVersion: 2,
+      approvalExpiresAt: waiting.descriptor.expiresAt,
+    };
+    expect(await statusOf(h, tenantId, { operationId: waiting.descriptor.approvalId })).toEqual(expected);
+    expect(await statusOf(h, tenantId, { orderId: "ORD-1002" })).toEqual(expected);
+    expect(await statusOf(h, tenantId, { operationId: waiting.descriptor.approvalId, orderId: "ORD-1001" })).toBeNull();
+    const summary = await pool.query("SELECT * FROM order_operation_requests WHERE approval_id = $1", [waiting.descriptor.approvalId]);
+    expect(summary.rows[0]).toMatchObject({
+      tenant_id: tenantId,
+      scope_id: tenantId,
+      principal_id: SHOPPER_A,
+      tool_call_id: "call-1",
+      kind: "refund_request",
+      order_id: "ORD-1002",
+      line_item_ids: ["LI-1002-1", "LI-1002-2"],
+    });
+    expect(JSON.stringify(summary.rows[0])).not.toContain("keep this out");
+  });
+
+  it("reports an overdue approval as expired without writing it, and a late approval still expires", async () => {
+    vi.stubEnv("TOOL_AUTHORIZATION_CONFIRMATION_TIMEOUT_MS", "1000");
+    try {
+      const { tenantId, provider, h } = await setup("status-overdue");
+      const waiting = await h.request("status-overdue", refund("call-1"));
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      const approval = () =>
+        pool.query("SELECT status, consumed_at, withdrawn_at FROM authorization_confirmations WHERE approval_id = $1", [
+          waiting.descriptor.approvalId,
+        ]);
+      const before = (await approval()).rows[0];
+
+      expect(await statusOf(h, tenantId, { operationId: waiting.descriptor.approvalId })).toMatchObject({
+        state: "approval_expired",
+        stateVersion: 6,
+      });
+      expect(before).toEqual({ status: "pending", consumed_at: null, withdrawn_at: null });
+      expect((await approval()).rows[0]).toEqual(before);
+
+      const late = await waiting.approve();
+
+      expect(late.operations["call-1"]?.state).toBe("approval_expired");
+      expect(provider.submissions).toBe(0);
+      expect(await statusOf(h, tenantId, { operationId: waiting.descriptor.approvalId })).toMatchObject({ state: "approval_expired" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("tells a denied approval from a withdrawn one", async () => {
+    const { tenantId, h } = await setup("status-decided");
+    const denied = await h.request("status-denied", refund("call-1"));
+    await denied.deny();
+    const withdrawn = await h.request("status-withdrawn", refund("call-2", { orderId: "ORD-1002" }));
+    await expect(
+      h.composition.confirmationStore.withdraw({ descriptor: withdrawn.descriptor, executionContext: withdrawn.context })
+    ).resolves.toMatchObject({ ok: true, status: "withdrawn" });
+
+    expect(await statusOf(h, tenantId, { operationId: denied.descriptor.approvalId })).toMatchObject({ state: "approval_denied" });
+    expect(await statusOf(h, tenantId, { operationId: withdrawn.descriptor.approvalId })).toMatchObject({
+      state: "cancelled_before_effect",
+      reasonCode: "CONFIRMATION_CANCELLED",
+    });
+  });
+
+  it("links a confirmed change and its duplicate to the business effect and the external operation", async () => {
+    const { tenantId, h } = await setup("status-confirmed");
+    const first = await h.request("status-confirmed", refund("call-1"));
+    await first.approve();
+    const [effect] = await committedEffects(tenantId);
+
+    expect(await statusOf(h, tenantId, { operationId: first.descriptor.approvalId })).toEqual({
+      schemaVersion: "order_operation_status@1",
+      operationRef: { toolCallId: "call-1", operationId: first.descriptor.approvalId },
+      kind: "refund_request",
+      orderRef: { orderId: "ORD-1001" },
+      state: "confirmed",
+      stateVersion: 6,
+      businessEffectId: effect!.business_effect_id,
+      externalOperationId: `ext-${tenantId}-1`,
+    });
+
+    const again = await h.request("status-again", refund("call-2"));
+    await again.approve();
+
+    // The held-off submission carries its own decision, so its approval still finds it.
+    expect(await statusOf(h, tenantId, { operationId: again.descriptor.approvalId })).toMatchObject({
+      state: "deduplicated",
+      businessEffectId: effect!.business_effect_id,
+      externalOperationId: `ext-${tenantId}-1`,
+      dedup: { reason: "committed_result_reused", of: first.descriptor.approvalId },
+    });
+    expect(await statusOf(h, tenantId, { orderId: "ORD-1001" })).toMatchObject({
+      operationRef: { toolCallId: "call-2", operationId: again.descriptor.approvalId },
+    });
+  });
+
+  it("answers through the status tool in a new thread without any earlier conversation", async () => {
+    const { h } = await setup("status-tool");
+    const first = await h.request("status-tool", refund("call-1"));
+    await first.approve();
+
+    const reply = await h.lookup("status-tool-lookup", { operationId: first.descriptor.approvalId });
+
+    expect(reply).toContain("ORD-1001");
+    expect(reply).toContain("已完成");
+  });
+
+  it("reports an unknown outcome with its reconciliation task", async () => {
+    const { tenantId, h } = await setup("status-unknown", {
+      faults: { afterDispatch: { kind: "response_lost", committed: true }, lookupIndeterminate: true },
+    });
+    const waiting = await h.request("status-unknown", refund("call-1"));
+    await waiting.approve();
+    const task = await pool.query("SELECT reconciliation_task_id FROM reconciliation_tasks WHERE tenant_id = $1", [tenantId]);
+
+    expect(await statusOf(h, tenantId, { operationId: waiting.descriptor.approvalId })).toMatchObject({
+      state: "outcome_unknown",
+      stateVersion: 5,
+      reconciliationTaskId: task.rows[0]?.reconciliation_task_id,
+    });
+  });
+
+  it("reports the committed effect of the ledger even while a persistence task is still open", async () => {
+    const { tenantId, h } = await setup("status-persist-lost", {}, undefined, failingCommit("after_write_once"));
+    const waiting = await h.request("status-persist-lost", refund("call-1"));
+    const state = await waiting.approve();
+
+    expect(state.operations["call-1"]?.state).toBe("outcome_unknown");
+    expect(await statusOf(h, tenantId, { operationId: waiting.descriptor.approvalId })).toMatchObject({
+      state: "confirmed",
+      externalOperationId: `ext-${tenantId}-1`,
+    });
+  });
+
+  it("reports a released not-committed change as failed", async () => {
+    const { tenantId, used, h } = await setup("status-failed", {}, (inner) => new SwitchableProvider(inner));
+    (used as SwitchableProvider).unavailable = true;
+    const waiting = await h.request("status-failed", refund("call-1"));
+    await waiting.approve();
+
+    const status = await statusOf(h, tenantId, { operationId: waiting.descriptor.approvalId });
+
+    expect(status).toMatchObject({ state: "failed", stateVersion: 6 });
+    expect(status?.reasonCode).toBeUndefined();
+  });
+
+  it("answers another shopper, tenant or scope as not found, and a summary without an approval too", async () => {
+    const { tenantId, h } = await setup("status-foreign");
+    const waiting = await h.request("status-foreign", refund("call-1"));
+    const operationId = waiting.descriptor.approvalId;
+
+    expect(await statusOf(h, tenantId, { operationId }, SHOPPER_B)).toBeNull();
+    expect(await statusOf(h, tenantId, { orderId: "ORD-1001" }, SHOPPER_B)).toBeNull();
+    expect(await h.statusReader.read({ tenantId: `${tenantId}-other`, scopeId: tenantId, principalId: SHOPPER_A, operationId })).toBeNull();
+    expect(await h.statusReader.read({ tenantId, scopeId: `${tenantId}-other`, principalId: SHOPPER_A, operationId })).toBeNull();
+    expect(await h.lookup("status-foreign-lookup", { operationId }, SHOPPER_B)).toContain("查無此操作");
+
+    await new PgOrderOperationRequestStore(db).record({
+      approvalId: `orphan-${tenantId}`,
+      tenantId,
+      scopeId: tenantId,
+      principalId: SHOPPER_A,
+      toolCallId: "call-orphan",
+      kind: "cancel",
+      orderId: "ORD-1003",
+    });
+    expect(await statusOf(h, tenantId, { operationId: `orphan-${tenantId}` })).toBeNull();
+    expect(await statusOf(h, tenantId, { orderId: "ORD-1003" })).toBeNull();
   });
 });

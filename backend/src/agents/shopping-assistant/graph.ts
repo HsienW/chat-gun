@@ -35,6 +35,7 @@ import { KB_SEARCH_TOOL_NAME } from "../../tools/kb-search.js";
 import { emitCardEvents } from "./card-events.js";
 import type { ShoppingIntentRouter } from "./intent-router.js";
 import { createOrderBranchNodes, isOrderMutationCall } from "./order-branch.js";
+import { createOrderOperationRequestRecorder, type OrderOperationRequestStore } from "./operation-requests.js";
 import type { OriginalOperationResolver } from "./original-operation.js";
 import type { PolicyAnswerSynthesizer } from "./policy-answer.js";
 import { buildProductCards, readKbSearchOutcome, toCardEmissions } from "./product-results.js";
@@ -123,6 +124,8 @@ export interface ShoppingAssistantGraphDependencies {
   /** Withdraws approvals and reports their status for the confirmation outcome. */
   confirmationWithdrawal: AuthorizationConfirmationWithdrawalStore;
   originalOperationResolver: OriginalOperationResolver;
+  /** Stores each order change's identifiers before its approval is created (design §6.7). */
+  operationRequests: OrderOperationRequestStore;
   audit: (eventName: string, payload: AuditPayload, context?: ExecutionContext) => Promise<void>;
   now?: () => Date;
 }
@@ -164,6 +167,10 @@ export function createShoppingAssistantGraph(
     executionManifest,
     // Denied, expired and withdrawn approvals stay distinguishable (design §6.4).
     confirmationOutcome: { statusReader: dependencies.confirmationWithdrawal },
+    confirmationRequestRecorder: createOrderOperationRequestRecorder({
+      store: dependencies.operationRequests,
+      audit: dependencies.audit,
+    }),
   });
   const orderNodes = createOrderBranchNodes(dependencies);
   const kbSearchTool = dependencies.tools.find((tool) => tool.name === KB_SEARCH_TOOL_NAME);

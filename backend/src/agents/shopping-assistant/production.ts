@@ -21,6 +21,8 @@ import { loadShoppingAssistantToolRuntime } from "../../tools/registry.js";
 import { createDispatchReadinessCheck } from "./dispatch-readiness.js";
 import { createShoppingAssistantGraph, SHOPPING_ASSISTANT_GRAPH_ID } from "./graph.js";
 import { LlmShoppingIntentRouter } from "./intent-router.js";
+import { PgOrderOperationRequestStore, unavailableOrderOperationRequestStore } from "./operation-requests.js";
+import { PgOrderOperationStatusReader } from "./operation-status.js";
 import { PgOriginalOperationResolver, unresolvableOriginalOperation } from "./original-operation.js";
 import { LlmPolicyAnswerSynthesizer } from "./policy-answer.js";
 
@@ -45,17 +47,6 @@ function readTemperature(): number {
   return value;
 }
 
-/**
- * The status reader over ledger, approvals and reconciliation tasks arrives
- * with the status lookup task; until then a lookup fails closed as an
- * unavailable store, never as "not found".
- */
-const unavailableStatusReader: OrderOperationStatusReader = {
-  read: async () => {
-    throw new Error("Order operation status reader is unavailable");
-  },
-};
-
 const model = getEnv("SHOPPING_ASSISTANT_MODEL").trim() || undefined;
 const temperature = readTemperature();
 // Structured output is chosen by declared capability, never by model name.
@@ -63,9 +54,20 @@ const routingCapabilities = getConfiguredLlmCapabilities("chat");
 
 const pool = getPool();
 
+const originalOperationResolver = pool ? new PgOriginalOperationResolver(pool) : unresolvableOriginalOperation;
+
+/** Without a runtime database a lookup fails closed as an unavailable store, never as "not found". */
+const statusReader: OrderOperationStatusReader = pool
+  ? new PgOrderOperationStatusReader(pool, { originalOperationResolver })
+  : {
+      read: async () => {
+        throw new Error("Order operation status reader is unavailable");
+      },
+    };
+
 const runtime = await loadShoppingAssistantToolRuntime({
   orderProvider: new MockOrderProvider({ fixture: await loadSyntheticOrderFixture() }),
-  statusReader: unavailableStatusReader,
+  statusReader,
 });
 
 const graph = createShoppingAssistantGraph({
@@ -90,7 +92,8 @@ const graph = createShoppingAssistantGraph({
     llmGateway.createChatModel({ purpose: "tool", model, temperature }),
   checkDispatchReadiness: createDispatchReadinessCheck(pool),
   confirmationWithdrawal: runtime.confirmationWithdrawal,
-  originalOperationResolver: pool ? new PgOriginalOperationResolver(pool) : unresolvableOriginalOperation,
+  originalOperationResolver,
+  operationRequests: pool ? new PgOrderOperationRequestStore(pool) : unavailableOrderOperationRequestStore,
   policyAnswerSynthesizer: new LlmPolicyAnswerSynthesizer(() =>
     llmGateway.createChatModel({
       purpose: "chat",

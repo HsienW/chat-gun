@@ -161,9 +161,18 @@ const unusedOrderBranch = {
     findStatus: async () => null,
   },
   originalOperationResolver: { resolveApprovalId: async () => null },
+  operationRequests: {
+    record: async () => {
+      throw new Error("order branch is not expected in this test");
+    },
+  },
 } satisfies Pick<
   ShoppingAssistantGraphDependencies,
-  "createOrderRequestModel" | "checkDispatchReadiness" | "confirmationWithdrawal" | "originalOperationResolver"
+  | "createOrderRequestModel"
+  | "checkDispatchReadiness"
+  | "confirmationWithdrawal"
+  | "originalOperationResolver"
+  | "operationRequests"
 >;
 
 function setup(

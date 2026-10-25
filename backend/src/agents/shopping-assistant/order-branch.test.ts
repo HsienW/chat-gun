@@ -40,6 +40,7 @@ import { createOrderToolRiskPolicies, createOrderToolSet } from "../../tools/ord
 import { loadSyntheticOrderFixture } from "../../tools/orders/synthetic-orders.js";
 import { createDispatchReadinessCheck } from "./dispatch-readiness.js";
 import { createShoppingAssistantGraph, type ShoppingAssistantGraphDependencies } from "./graph.js";
+import type { OrderOperationRequest } from "./operation-requests.js";
 import { readOrderToolResult, settleOperation, requestOperation } from "./order-operations.js";
 import { SHOPPING_ORDER_REQUEST_PROMPT_VERSION } from "./order-branch.js";
 
@@ -194,6 +195,7 @@ async function harness(options: {
   timeoutMs?: number;
   resolveOriginal?: string | null;
   checkpointer?: BaseCheckpointSaver;
+  recordRequest?: (request: OrderOperationRequest) => Promise<void>;
 }) {
   vi.stubEnv("TOOL_AUDIT_ENABLED", "false");
   let clock = NOW;
@@ -291,6 +293,13 @@ async function harness(options: {
   const orderModel: ChatModelInvoker = { invoke: vi.fn(), bindTools };
   const audit = vi.fn(async () => undefined);
   const resolveApprovalId = vi.fn(async () => options.resolveOriginal ?? null);
+  const requests: { request: OrderOperationRequest; upsertsBefore: number }[] = [];
+  const operationRequests = {
+    record: vi.fn(async (request: OrderOperationRequest) => {
+      await options.recordRequest?.(request);
+      requests.push({ request, upsertsBefore: confirmations.upserts });
+    }),
+  };
   const dependencies: ShoppingAssistantGraphDependencies = {
     tools,
     confirmationStore: confirmations,
@@ -307,6 +316,7 @@ async function harness(options: {
     checkDispatchReadiness: options.ready ?? (async () => true),
     confirmationWithdrawal: confirmations,
     originalOperationResolver: { resolveApprovalId },
+    operationRequests,
     audit,
     now,
   };
@@ -326,6 +336,7 @@ async function harness(options: {
     bindTools,
     audit,
     resolveApprovalId,
+    requests,
     compensate,
     advance: (ms: number) => {
       clock = new Date(clock.getTime() + ms);
@@ -458,13 +469,77 @@ describe("order branch approval", () => {
     expect(h.audit).toHaveBeenCalledWith("shopping.order.dispatch_not_ready", expect.anything(), expect.anything());
   });
 
-  it("checks the ledger and the approval store, and fails closed without a database", async () => {
+  it("records the order change's identifiers before its approval exists", async () => {
+    const h = await harness({
+      toolCalls: [
+        {
+          name: "order_refund_request",
+          id: "call-1",
+          args: {
+            orderId: "ORD-1002",
+            lineItems: [
+              { lineItemId: "LI-1002-2", quantity: 1 },
+              { lineItemId: "LI-1002-1", quantity: 1 },
+            ],
+            reasonCode: "damaged",
+            note: "free text",
+          },
+        },
+      ],
+    });
+
+    await h.graph.invoke({ messages: [new HumanMessage("退款")] }, runConfig("thread-summary"));
+    const descriptor = (await waitingState(h.graph, "thread-summary")).pendingAuthorization!;
+
+    expect(h.requests).toEqual([
+      {
+        request: {
+          approvalId: descriptor.approvalId,
+          tenantId: TENANT,
+          scopeId: TENANT,
+          principalId: SHOPPER,
+          toolCallId: "call-1",
+          kind: "refund_request",
+          orderId: "ORD-1002",
+          lineItemIds: ["LI-1002-1", "LI-1002-2"],
+        },
+        upsertsBefore: 0,
+      },
+    ]);
+    expect(h.confirmations.upserts).toBe(1);
+  });
+
+  it("creates no approval when the order change cannot be recorded", async () => {
+    const h = await harness({
+      toolCalls: [refund("call-1")],
+      recordRequest: async () => {
+        throw new Error("summary store down");
+      },
+    });
+
+    const state = await h.graph.invoke({ messages: [new HumanMessage("退款")] }, runConfig("thread-unrecorded"));
+
+    expect(h.confirmations.upserts).toBe(0);
+    expect(h.manifests.manifests.size).toBe(0);
+    expect(state.pendingAuthorization ?? null).toBeNull();
+    expect(h.execute).not.toHaveBeenCalled();
+    expect(h.submitRefund).not.toHaveBeenCalled();
+    expect(state.operations["call-1"]).toMatchObject({ state: "failed", reasonCode: "ORDER_DISPATCH_NOT_READY" });
+    expect(h.audit).toHaveBeenCalledWith(
+      "shopping.order.request_not_recorded",
+      { graphId: "shopping_assistant", toolName: "order_refund_request" },
+      expect.anything()
+    );
+  });
+
+  it("checks the ledger, the approval store and the summary store, and fails closed without a database", async () => {
     const query = vi.fn(async () => ({ rows: [], rowCount: 0 }));
 
     await expect(createDispatchReadinessCheck({ query } as never)()).resolves.toBe(true);
     expect(query.mock.calls.map((call) => String((call as unknown[])[0]))).toEqual([
       "SELECT 1 FROM business_effects LIMIT 0",
       "SELECT 1 FROM authorization_confirmations LIMIT 0",
+      "SELECT 1 FROM order_operation_requests LIMIT 0",
     ]);
     await expect(createDispatchReadinessCheck({ query: async () => { throw new Error("down"); } } as never)()).resolves.toBe(false);
     await expect(createDispatchReadinessCheck(null)()).resolves.toBe(false);
