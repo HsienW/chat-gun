@@ -18,6 +18,7 @@ import { loadSyntheticOrderFixture } from "../../tools/orders/synthetic-orders.j
 import { loadShoppingAssistantToolRuntime } from "../../tools/registry.js";
 import { createShoppingAssistantGraph, SHOPPING_ASSISTANT_GRAPH_ID } from "./graph.js";
 import { LlmShoppingIntentRouter } from "./intent-router.js";
+import { LlmPolicyAnswerSynthesizer } from "./policy-answer.js";
 
 const DEFAULT_INTENT_TIMEOUT_MS = 20_000;
 
@@ -79,6 +80,16 @@ const graph = createShoppingAssistantGraph({
   }),
   createProductRequestModel: () =>
     llmGateway.createChatModel({ purpose: "tool", model, temperature }),
+  policyAnswerSynthesizer: new LlmPolicyAnswerSynthesizer(() =>
+    llmGateway.createChatModel({
+      purpose: "chat",
+      model,
+      temperature,
+      ...(routingCapabilities.supportsStructuredOutput
+        ? { responseFormat: { type: "json_object" as const } }
+        : {}),
+    })
+  ),
   audit: (eventName, payload, context) => auditLogger.record(eventName, payload, context),
 });
 
