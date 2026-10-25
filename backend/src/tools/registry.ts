@@ -11,7 +11,10 @@ import {
 } from "../platform/tool-governance.js";
 import { createRuntimeToolAuthorizationComposition } from "./authorization/tool-authorization.js";
 import { loadMcpTools } from "./mcp-loader.js";
-import type { AuthorizationConfirmationStore } from "../runtime/authorization/confirmation.js";
+import type {
+  AuthorizationConfirmationStore,
+  AuthorizationConfirmationWithdrawalStore,
+} from "../runtime/authorization/confirmation.js";
 import type { InterruptManifestRepository } from "../runtime/recovery/interrupt-manifest-repository.js";
 import { createRuntimeToolDispatchPipeline } from "../runtime/tool-dispatch/pipeline.js";
 import type { RuntimeToolDispatchPipelineDependencies } from "../runtime/tool-dispatch/pipeline.js";
@@ -244,6 +247,8 @@ export interface LoadShoppingAssistantToolsOptions {
 }
 
 export interface ShoppingAssistantToolRuntime extends AgentToolRuntime {
+  /** The same approval store; the shopping graph withdraws approvals on cancel (design §6.2). */
+  confirmationWithdrawal: AuthorizationConfirmationWithdrawalStore;
   manifests: readonly OrderToolManifestEvidence[];
 }
 
@@ -324,7 +329,13 @@ export async function loadShoppingAssistantToolRuntime(
       ...evidence,
     });
   }
-  return { tools, confirmationStore, interruptManifestRepository, manifests };
+  return {
+    tools,
+    confirmationStore,
+    confirmationWithdrawal: confirmationStore,
+    interruptManifestRepository,
+    manifests,
+  };
 }
 
 const SHOPPING_ASSISTANT_SOURCE = "shopping_assistant";

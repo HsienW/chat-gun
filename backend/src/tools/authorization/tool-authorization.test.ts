@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Queryable } from "../../runtime/persistence/rows.js";
 import {
@@ -129,5 +129,50 @@ describe("local production ToolRiskPolicy registry", () => {
         ({ schemaVersion }) => schemaVersion === "1.0"
       )
     ).toBe(true);
+  });
+});
+
+describe("runtime confirmation timeout", () => {
+  const decision = {
+    decisionId: "decision-timeout",
+    effect: "require_confirmation" as const,
+    reasonCode: "REQUIRES_CONFIRMATION" as const,
+    createdAt: "2026-10-25T12:00:00.000Z",
+  };
+  const request = {
+    action: "tool:write",
+    resource: { resourceType: "tool", resourceId: "order_refund_request", tenantId: "tenant-1" },
+    context: { toolName: "order_refund_request" },
+  };
+  const context = {
+    ...fixture.validContext,
+    principal: { ...(fixture.validContext.principal as Record<string, unknown>), tenantId: "tenant-1" },
+    scope: { scopeId: "tenant-1", scopeType: "tenant", tenantId: "tenant-1" },
+  };
+
+  async function expiresInMs(): Promise<number> {
+    const composition = createRuntimeToolAuthorizationComposition({ profile: "production", db: createDatabase() });
+    const descriptor = await composition.authorization.onRequireConfirmation!(
+      decision as never,
+      request as never,
+      context as never
+    );
+    return Date.parse(descriptor.expiresAt) - Date.parse("2026-10-25T12:00:00.000Z");
+  }
+
+  it("defaults to 15 minutes and follows a configured short timeout", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-25T12:00:00.000Z"));
+    try {
+      vi.stubEnv("TOOL_AUTHORIZATION_CONFIRMATION_TIMEOUT_MS", undefined);
+      await expect(expiresInMs()).resolves.toBe(900_000);
+      vi.stubEnv("TOOL_AUTHORIZATION_CONFIRMATION_TIMEOUT_MS", "1000");
+      await expect(expiresInMs()).resolves.toBe(1_000);
+      vi.stubEnv("TOOL_AUTHORIZATION_CONFIRMATION_TIMEOUT_MS", "0");
+      await expect(expiresInMs()).rejects.toThrow("Invalid TOOL_AUTHORIZATION_CONFIRMATION_TIMEOUT_MS");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
   });
 });

@@ -19,6 +19,7 @@ import {
   createConfirmationRequiredDescriptor,
   PgAuthorizationConfirmationStore,
   type AuthorizationConfirmationStore,
+  type AuthorizationConfirmationWithdrawalStore,
 } from "../../runtime/authorization/confirmation.js";
 import {
   PgInterruptManifestRepository,
@@ -119,7 +120,7 @@ export interface CreateRuntimeToolAuthorizationCompositionInput {
 
 export interface ToolAuthorizationComposition {
   authorization: ToolAuthorizationGovernanceConfig;
-  confirmationStore: AuthorizationConfirmationStore;
+  confirmationStore: AuthorizationConfirmationStore & AuthorizationConfirmationWithdrawalStore;
   interruptManifestRepository: InterruptManifestRepository;
   mcpRiskDescriptors: readonly McpToolRiskDescriptorV1[];
 }
