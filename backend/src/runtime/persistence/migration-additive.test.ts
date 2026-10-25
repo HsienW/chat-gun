@@ -9,8 +9,8 @@ describe("additive migration gate", () => {
     const directory = join(dirname(fileURLToPath(import.meta.url)), "migrations");
     const migrationNames = await checkMigrationDirectory(directory);
 
-    expect(migrationNames).toHaveLength(25);
-    expect(migrationNames.at(-1)).toBe("025_create_reconciliation_tasks.sql");
+    expect(migrationNames).toHaveLength(26);
+    expect(migrationNames.at(-1)).toBe("026_create_order_operation_requests.sql");
   });
 
   it.each([
