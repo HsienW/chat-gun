@@ -1,7 +1,7 @@
 import { getEnv } from "../../platform/env.js";
 import {
   applyInteractionGovernance,
-  productionInteractionOrchestrator,
+  createProductionInteractionOrchestrator,
 } from "../../platform/interaction-runtime.js";
 import { getConfiguredLlmCapabilities, llmGateway } from "../../platform/llm-gateway.js";
 import { auditLogger } from "../../platform/observability.js";
@@ -12,12 +12,16 @@ import {
   readDevelopmentExecutionContext,
   readExecutionContext,
 } from "../../runtime/execution-context/read-execution-context.js";
+import { getPool } from "../../runtime/persistence/connection.js";
+import { PgInterruptManifestRepository } from "../../runtime/recovery/interrupt-manifest-repository.js";
 import { MockOrderProvider } from "../../tools/orders/mock-order-provider.js";
 import type { OrderOperationStatusReader } from "../../tools/orders/order-tools.js";
 import { loadSyntheticOrderFixture } from "../../tools/orders/synthetic-orders.js";
 import { loadShoppingAssistantToolRuntime } from "../../tools/registry.js";
+import { createDispatchReadinessCheck } from "./dispatch-readiness.js";
 import { createShoppingAssistantGraph, SHOPPING_ASSISTANT_GRAPH_ID } from "./graph.js";
 import { LlmShoppingIntentRouter } from "./intent-router.js";
+import { PgOriginalOperationResolver, unresolvableOriginalOperation } from "./original-operation.js";
 import { LlmPolicyAnswerSynthesizer } from "./policy-answer.js";
 
 const DEFAULT_INTENT_TIMEOUT_MS = 20_000;
@@ -57,6 +61,8 @@ const temperature = readTemperature();
 // Structured output is chosen by declared capability, never by model name.
 const routingCapabilities = getConfiguredLlmCapabilities("chat");
 
+const pool = getPool();
+
 const runtime = await loadShoppingAssistantToolRuntime({
   orderProvider: new MockOrderProvider({ fixture: await loadSyntheticOrderFixture() }),
   statusReader: unavailableStatusReader,
@@ -80,6 +86,11 @@ const graph = createShoppingAssistantGraph({
   }),
   createProductRequestModel: () =>
     llmGateway.createChatModel({ purpose: "tool", model, temperature }),
+  createOrderRequestModel: () =>
+    llmGateway.createChatModel({ purpose: "tool", model, temperature }),
+  checkDispatchReadiness: createDispatchReadinessCheck(pool),
+  confirmationWithdrawal: runtime.confirmationWithdrawal,
+  originalOperationResolver: pool ? new PgOriginalOperationResolver(pool) : unresolvableOriginalOperation,
   policyAnswerSynthesizer: new LlmPolicyAnswerSynthesizer(() =>
     llmGateway.createChatModel({
       purpose: "chat",
@@ -99,10 +110,26 @@ function resolveShoppingExecutionContext(input: unknown, config: unknown) {
     : readExecutionContext(input, config, "production");
 }
 
+const confirmationManifests = pool ? new PgInterruptManifestRepository(pool) : undefined;
+
+/**
+ * Only this graph routes a cancel input with no active run to the graph when
+ * the thread waits on a tool confirmation, so the approval can be withdrawn
+ * (design §6.2 step 1); other graphs keep NOTHING_TO_CANCEL.
+ */
+const interactionOrchestrator = createProductionInteractionOrchestrator(
+  confirmationManifests
+    ? {
+        isWaitingToolConfirmation: async (input) =>
+          (await confirmationManifests.findWaitingConfirmationByThread(input)) !== null,
+      }
+    : {}
+);
+
 export const shoppingAssistantGraph = instrumentGraphWithExecutionContext(
   applyInteractionGovernance(
     instrumentGraphWithOpik(graph, SHOPPING_ASSISTANT_GRAPH_ID),
-    productionInteractionOrchestrator
+    interactionOrchestrator
   ),
   resolveShoppingExecutionContext,
   getRuntimeIdentityStatusInstrumentation(),
