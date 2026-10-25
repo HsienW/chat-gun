@@ -133,6 +133,7 @@ describe("PgBusinessEffectLedger.prepare", () => {
 
     await expect(ledger.prepare({
       ...prepareInput,
+      decisionId: "decision-1",
       securityEvidence: {
         executionProfileVersion: "1.0",
         effectiveCapabilities: { executionMode: "isolated_process" },
@@ -147,9 +148,11 @@ describe("PgBusinessEffectLedger.prepare", () => {
     expect(executedSql).toHaveLength(2);
     expect(executedSql[1]).toContain("execution_profile_version");
     expect(executedSql[1]).toContain("termination_cause");
-    expect(executedValues[1]).toHaveLength(20);
+    expect(executedValues[1]).toHaveLength(21);
     expect(executedValues[1]?.[18]).toBeNull();
     expect(executedValues[1]?.[19]).toBeNull();
+    // A claimed execution is linked to its decision only once it is executing.
+    expect(executedValues[1]?.[20]).toBeNull();
     expect(executedValues[1]).toContain("1.0");
     expect(JSON.stringify(executedValues[1])).toContain("env:BRAVE_API_KEY");
   });
@@ -186,7 +189,7 @@ describe("PgBusinessEffectLedger.prepare", () => {
     });
     const ledger = new PgBusinessEffectLedger(db);
 
-    await expect(ledger.prepare(prepareInput)).resolves.toMatchObject({
+    await expect(ledger.prepare({ ...prepareInput, decisionId: "decision-2" })).resolves.toMatchObject({
       type: "existing_committed",
       execution: {
         resultRef: "result-ref-1",
@@ -194,10 +197,12 @@ describe("PgBusinessEffectLedger.prepare", () => {
         terminationCause: "completed",
       },
     });
-    expect(insertedValues).toHaveLength(20);
+    expect(insertedValues).toHaveLength(21);
     // The reusing submission is recorded as deduplicated, not as its own completion.
     expect(insertedValues?.[18]).toBe("deduplicated");
     expect(insertedValues?.[19]).toBeNull();
+    // It keeps its own verified decision, so its approval still finds it (design §6.7).
+    expect(insertedValues?.[20]).toBe("decision-2");
   });
 
   it("names the original committing execution and skips earlier reuses", async () => {

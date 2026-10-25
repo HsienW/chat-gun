@@ -434,6 +434,9 @@ export class ToolExecutionRunner {
       callIndex: input.identity.callIndex,
       toolName: input.descriptor.toolName,
       toolVersion: input.descriptor.toolVersion,
+      ...(preauthorization.type === "authorized"
+        ? { decisionId: preauthorization.decisionId }
+        : {}),
     });
     if (prepareResult.type === "unavailable") {
       return { type: "deferred", errorCode: prepareResult.errorCode };

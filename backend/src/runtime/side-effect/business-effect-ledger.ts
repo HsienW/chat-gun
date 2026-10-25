@@ -99,6 +99,12 @@ export interface PrepareSideEffectInput {
   externalOperationId?: string;
   expiresAt?: string;
   securityEvidence?: ExecutionProfileEvidence;
+  /**
+   * Authorization decision verified before the claim. Stored on a submission
+   * that does not claim, so a deduplicated submission still links to its
+   * approval; a claimed execution is linked once it is executing.
+   */
+  decisionId?: string;
 }
 
 export type PrepareSideEffectResult =
@@ -482,10 +488,10 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
              call_index, status, request_hash, result_ref,
              execution_profile_version, effective_capabilities,
              secret_refs_used, egress_decision, termination_cause,
-             claim_disposition
+             claim_disposition, decision_id
            ) VALUES (
              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-             $15, $16, $17, $18, $19, $20
+             $15, $16, $17, $18, $19, $20, $21
            )
            ON CONFLICT (replay_key) DO NOTHING
            RETURNING ${TOOL_EXECUTION_COLUMNS}`,
@@ -510,6 +516,7 @@ export class PgBusinessEffectLedger implements BusinessEffectLedger {
             input.securityEvidence?.egressDecision ?? null,
             terminationCause,
             claimDisposition,
+            claimed ? null : input.decisionId ?? null,
           ]
         );
         if (reclaimedReleasedEffect && !insertedExecution.rows[0]) {
