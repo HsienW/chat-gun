@@ -242,7 +242,7 @@ export interface LoadShoppingAssistantToolsOptions {
   sandboxRunner?: SandboxRunnerPort;
   dispatchPipelineDependencies?: Omit<
     RuntimeToolDispatchPipelineDependencies,
-    "registry" | "emitDeduplicatedOutcome"
+    "registry" | "emitDeduplicatedOutcome" | "recordReconciliationTasks"
   >;
 }
 
@@ -316,6 +316,7 @@ export async function loadShoppingAssistantToolRuntime(
     registry: descriptorRegistry,
     executionProfileEnforcer,
     emitDeduplicatedOutcome: true,
+    recordReconciliationTasks: true,
   });
   const tools = applyToolGovernance(grantedTools, authorization, {
     executionProfileEnforcer,

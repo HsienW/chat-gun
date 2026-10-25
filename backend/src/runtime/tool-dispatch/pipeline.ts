@@ -43,6 +43,7 @@ import {
   PgBusinessEffectLedger,
   PgSideEffectDatabase,
 } from "../side-effect/business-effect-ledger.js";
+import { PgReconciliationTaskStore } from "../side-effect/reconciliation-task-store.js";
 import { PgResultReferenceStore } from "../side-effect/result-reference-store.js";
 import { PgTaskRepository } from "../persistence/task-repository.js";
 import { PgStepRepository } from "../persistence/step-repository.js";
@@ -129,6 +130,11 @@ export interface RuntimeToolDispatchPipelineDependencies {
    * `rejected_before_dispatch` / SIDE_EFFECT_CLAIM_NOT_ACQUIRED.
    */
   emitDeduplicatedOutcome?: boolean;
+  /**
+   * Opt-in: the default runner opens a durable reconciliation task when an
+   * outcome stays unknown. Ignored when a toolExecutionRunner is supplied.
+   */
+  recordReconciliationTasks?: boolean;
 }
 
 export interface RuntimeToolDispatchPipeline {
@@ -461,7 +467,15 @@ function withProductionDefaults(
     toolExecutionRunner:
       input.toolExecutionRunner ??
       (pool && ledger
-        ? new ToolExecutionRunner(ledger, new PgResultReferenceStore(pool))
+        ? new ToolExecutionRunner(
+            ledger,
+            new PgResultReferenceStore(pool),
+            undefined,
+            undefined,
+            input.recordReconciliationTasks === true
+              ? new PgReconciliationTaskStore(pool)
+              : undefined
+          )
         : undefined),
     retryBudgetFactory: input.retryBudgetFactory ?? createBudget,
     taskStepAdapter:
