@@ -30,8 +30,8 @@ describe("data-governance composition", () => {
       activeRecordTtlSeconds: 60,
       tombstoneTtlSeconds: 60,
     });
-    expect(runtime.registry.listEntries()).toHaveLength(36);
-    expect(runtime.registry.listStores()).toHaveLength(36);
+    expect(runtime.registry.listEntries()).toHaveLength(37);
+    expect(runtime.registry.listStores()).toHaveLength(37);
     const memoryStore = runtime.registry
       .listStores()
       .find((store) => store.id === "memory.long-term");
@@ -67,7 +67,7 @@ describe("data-governance composition", () => {
       activeRecordTtlSeconds: 60,
       tombstoneTtlSeconds: 120,
     });
-    expect(runtime.registry.listEntries()).toHaveLength(36);
-    expect(runtime.registry.listStores()).toHaveLength(36);
+    expect(runtime.registry.listEntries()).toHaveLength(37);
+    expect(runtime.registry.listStores()).toHaveLength(37);
   });
 });
