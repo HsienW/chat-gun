@@ -403,6 +403,149 @@ describe("authorization decision hand-off to dispatch", () => {
   });
 });
 
+describe("opt-in confirmation request recorder", () => {
+  const executionManifest = {
+    manifestVersion: "1.0.0" as const,
+    graphId: "shopping_assistant",
+    graphConfigHash: "b".repeat(64),
+    schemaVersions: {
+      runtimeEventEnvelope: "1.0.0",
+      toolDescriptor: "1.0",
+      authorizationPolicy: "1.0",
+      normalizedInput: "1.0",
+    },
+  };
+
+  function governedConfirmationTool() {
+    const source = tool(async () => "ok", {
+      name: "write_file",
+      description: "writes a file",
+      schema: z.object({ path: z.string() }),
+    });
+    const [governed] = applyToolGovernance([source], {
+      riskRegistry: new ToolRiskRegistry([{
+        toolName: "write_file",
+        riskTier: "sensitive",
+        actions: ["tool:write"],
+        requireConfirmation: true,
+        resourceRefResolver: (_input, scope) => ({
+          resourceType: "tool",
+          resourceId: "write_file",
+          tenantId: scope.tenantId,
+        }),
+      }], { unregisteredToolDefault: "deny" }),
+      authorizationEngine: {
+        authorize: vi.fn(async () => ({
+          decisionId: "decision-confirm",
+          effect: "require_confirmation" as const,
+          reasonCode: "REQUIRES_CONFIRMATION" as const,
+          createdAt: "2026-09-21T00:00:00.000Z",
+        })),
+      },
+      decisionStore: { record: vi.fn(async () => undefined) },
+      policyVersion: "runtime-authorization-v1",
+      resolveExecutionContext: () => executionContext,
+      onRequireConfirmation: (decision, request, context) =>
+        createConfirmationRequiredDescriptor({
+          decisionId: decision.decisionId,
+          executionContext: context!,
+          action: request.action,
+          toolName: "write_file",
+          resource: request.resource,
+          policyVersion: "runtime-authorization-v1",
+          timeoutMs: 60_000,
+        }),
+    });
+    return governed;
+  }
+
+  function nodesWith(
+    recorder?: Parameters<typeof createToolAuthorizationGraphNodes>[0]["confirmationRequestRecorder"]
+  ) {
+    const order: string[] = [];
+    const upsertPending = vi.fn(async () => {
+      order.push("approval");
+    });
+    const create = vi.fn(async () => {
+      order.push("manifest");
+      return {} as never;
+    });
+    const nodes = createToolAuthorizationGraphNodes({
+      tools: [governedConfirmationTool()],
+      confirmationStore: { upsertPending, consume: vi.fn() },
+      interruptManifestRepository: {
+        create,
+        findByInterruptId: vi.fn(),
+        consume: vi.fn(),
+        transitionStatus: vi.fn(),
+      } as unknown as InterruptManifestRepository,
+      executionManifest,
+      ...(recorder ? { confirmationRequestRecorder: recorder } : {}),
+    });
+    return { nodes, order, upsertPending, create };
+  }
+
+  const state = () => ({
+    messages: [],
+    toolQueue: [{ toolName: "write_file", toolCallId: "call-1", input: { path: "a.txt" } }],
+  });
+  const config = { configurable: { execution_context: executionContext } };
+
+  it("creates the approval exactly as before when the option is disabled", async () => {
+    const { nodes, order } = nodesWith();
+
+    const gated = await nodes.authorizationGate(state(), config);
+
+    expect(order).toEqual(["approval", "manifest"]);
+    expect(gated.pendingAuthorization?.decisionId).toBe("decision-confirm");
+  });
+
+  it("records the request before the approval and its interrupt", async () => {
+    const records: unknown[] = [];
+    const { nodes, order } = nodesWith({
+      unavailableErrorCode: "ORDER_DISPATCH_NOT_READY",
+      record: async (input) => {
+        order.push("request");
+        records.push({
+          approvalId: input.descriptor.approvalId,
+          toolCallId: input.call.toolCallId,
+          principalId: input.executionContext.principal.principalId,
+        });
+      },
+    });
+
+    const gated = await nodes.authorizationGate(state(), config);
+
+    expect(order).toEqual(["request", "approval", "manifest"]);
+    expect(records).toEqual([
+      { approvalId: gated.pendingAuthorization?.approvalId, toolCallId: "call-1", principalId: "principal-1" },
+    ]);
+  });
+
+  it("creates no approval or interrupt and ends the call when the request cannot be recorded", async () => {
+    const { nodes, upsertPending, create } = nodesWith({
+      unavailableErrorCode: "ORDER_DISPATCH_NOT_READY",
+      record: async () => {
+        throw new Error("store down");
+      },
+    });
+
+    const gated = await nodes.authorizationGate(state(), config);
+
+    expect(upsertPending).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(gated.pendingAuthorization).toBeNull();
+    expect(gated.activeToolCall).toBeNull();
+    expect(
+      (gated.messages as { tool_call_id: string; content: unknown }[]).map((message) => [
+        message.tool_call_id,
+        JSON.parse(String(message.content)),
+      ])
+    ).toEqual([["call-1", { errorCode: "ORDER_DISPATCH_NOT_READY" }]]);
+    expect(routeAfterAuthorizationGate({ ...state(), ...gated, toolQueue: [] })).toBe("model");
+  });
+});
+
 describe("opt-in confirmation outcome", () => {
   function buildConfirmationGraph(input: {
     consumeResult: Awaited<ReturnType<AuthorizationConfirmationStore["consume"]>>;

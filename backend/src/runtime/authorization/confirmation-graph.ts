@@ -4,6 +4,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { interrupt } from "@langchain/langgraph";
 
 import { getGovernedToolExecutor } from "../../platform/tool-governance.js";
+import type { ExecutionContext } from "../execution-context/execution-context.js";
 import {
   readExecutionContext,
   withExecutionContext,
@@ -66,6 +67,20 @@ export interface CreateToolAuthorizationGraphNodesInput {
   confirmationOutcome?: {
     statusReader: Pick<AuthorizationConfirmationWithdrawalStore, "findStatus">;
   };
+  /**
+   * Opt-in record written before the approval exists. When it fails, no
+   * approval or interrupt is created and the call ends with `unavailableErrorCode`.
+   */
+  confirmationRequestRecorder?: ConfirmationRequestRecorder;
+}
+
+export interface ConfirmationRequestRecorder {
+  record(input: {
+    descriptor: ConfirmationRequiredDescriptor;
+    call: AuthorizationGraphToolCall;
+    executionContext: ExecutionContext;
+  }): Promise<void>;
+  unavailableErrorCode: string;
 }
 
 /** Maps a non-approved consume result to an outcome without parsing error strings. */
@@ -195,6 +210,23 @@ export function createToolAuthorizationGraphNodes(
       const descriptor = confirmationRequiredDescriptorSchema.parse(
         outcome.descriptor
       );
+      const recorder = input.confirmationRequestRecorder;
+      if (recorder !== undefined) {
+        try {
+          await recorder.record({
+            descriptor,
+            call,
+            executionContext: readExecutionContext(undefined, config, "production"),
+          });
+        } catch {
+          return {
+            messages: [toolMessage(call, { errorCode: recorder.unavailableErrorCode })],
+            toolQueue: remaining,
+            activeToolCall: null,
+            pendingAuthorization: null,
+          };
+        }
+      }
       await input.confirmationStore.upsertPending(descriptor);
       await input.interruptManifestRepository.create(
         createConfirmationInterruptManifest({
