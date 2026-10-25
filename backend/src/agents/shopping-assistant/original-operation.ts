@@ -31,6 +31,8 @@ export class PgOriginalOperationResolver implements OriginalOperationResolver {
          FROM tool_executions e
          JOIN authorization_confirmations c ON c.decision_id = e.decision_id
         WHERE e.business_effect_id = $1
+          -- Deduplicated submissions also carry their own decision; they are never the original.
+          AND e.termination_cause IS DISTINCT FROM 'deduplicated'
           AND c.tenant_id = $2
           AND c.scope_id = $3
           AND $4 = ANY(c.principal_ids)
