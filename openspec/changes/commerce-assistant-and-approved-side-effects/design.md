@@ -320,6 +320,15 @@ tool 只知道「這次對模擬訂單系統做了什麼」，不知道 approval
   - `unknown` → `outcome_unknown`。
 - `outcome_unknown` MUST 建立 durable reconciliation task：`{ reconciliationTaskId, tenantId, scopeId, businessEffectId, toolExecutionId, externalOperationId?, reasonCode, status: "open", createdAt }`，以 `businessEffectId` 唯一（重複建立為 no-op）。
 - task 建立失敗 → 仍回報 `outcome_unknown`，同時發出 audit 與 typed `RECONCILIATION_TASK_PERSISTENCE_FAILED`，**不得**回報成功或失敗。
+- **提交後持久化不確定（第 10 版，Master 2026-10-25 決策）**：dispatch 之後第一次寫入 ledger 失敗（attempt 結束紀錄、標記未知、提交結果三者任一）時，runner MUST 先以 tool 宣告的 reconciler 查詢，不得直接回報未知：
+  - `committed`（且帶回結果）→ 以 reconciled 來源再寫入提交結果**一次**：成功 → `confirmed`；仍失敗 → `outcome_unknown`（`SIDE_EFFECT_PERSISTENCE_UNCERTAIN`）並建立 task。
+  - `not_committed` → 依 §6.8 釋放 claim → `failed`（`SIDE_EFFECT_NOT_COMMITTED`），不自動重試；釋放寫入失敗 → `outcome_unknown` 並建立 task。
+  - `unknown`、`committed` 但沒有結果、reconciler 拋錯，或 tool 未宣告 reconciler → `outcome_unknown` 並建立 task。
+  - 已在 reconciliation 之後才發生的寫入失敗（reconciled 結果寫入失敗、`not_committed` 的釋放失敗、重試前的狀態轉移失敗）不再 reconcile 第二次，直接建立 task。
+  - 再寫入時，同一個 tool execution 已存在的 result reference 若 result hash、tenant、scope、principal 與 tool version 都相同即沿用（result reference 本以 `tool_execution_id` 唯一）；任一不同仍為衝突，不覆蓋。
+  - 不迴圈、不重新 dispatch。先前失敗的寫入可能其實已生效（例如交易已提交但回應遺失），此時再寫入會因 CAS 不符而失敗並落入 task，由 X31 依 ledger 目前狀態結案。
+  - task 的 `reasonCode`：reconciler 回報 `unknown` 時用其 reason，其餘為 `SIDE_EFFECT_PERSISTENCE_UNCERTAIN`。
+  - 範圍：與建立 task 同為 runner 的 opt-in，只有 `shopping_assistant` 的 dispatch 來源開啟；未開啟的來源（`mcp_agent` 等）維持原行為與錯誤碼，`tool-scheduling-resilience` fixture 的 `persistenceUncertain`（首次 `SIDE_EFFECT_PERSISTENCE_UNCERTAIN`、resume `SIDE_EFFECT_RECONCILIATION_REQUIRED`）不變。
 - 存放於 runtime Postgres 新 migration（只建立新表，沿用 runtime migration runner，遵守既有 `rolling-deployment-migration` 規則，§6.11）。reconciliation worker 屬 X31。
 
 ### 6.7 操作識別
@@ -341,7 +350,7 @@ tool 只知道「這次對模擬訂單系統做了什麼」，不知道 approval
   - dispatch 前就結束：授權拒絕、dispatch 前拒絕、dispatch 前取消（含 §6.2 已 claim 未 dispatch 的取消）；
   - tool 回報 `failed_not_committed`（例如 `ORDER_NOT_FOUND`、`ORDER_NOT_ELIGIBLE`、`ORDER_PROVIDER_UNAVAILABLE`）；
   - reconciliation 確認 `not_committed`。
-- **絕不釋放**：結果未知（`unknown`）、已提交（`committed`）、持久化不確定。未知一律走 `outcome_unknown` 與 reconciliation task。
+- **絕不釋放**：結果未知（`unknown`）、已提交（`committed`）、持久化不確定本身。持久化不確定時，只有 §6.6 的 reconciler 確認 `not_committed` 後才釋放（第 10 版）；其餘未知一律走 `outcome_unknown` 與 reconciliation task。
 - **集中處理**：釋放放在 runner 的結束出口一次處理，不在各錯誤分支分別處理，避免遺漏任何一條路徑。
 - **釋放的寫入**：以 CAS 在 `commit_state = 'prepared' AND released_at IS NULL` 的 business effect 上寫入 `released_at`，同時把持有 claim 的 tool execution 轉為 failed；兩者依 §6.9 的順序在同一交易內完成。
 - **重新占用**：新的提交（必須是新的、已重新審批的 tool call）在 `prepare` 遇到「`prepared` 且 `released_at` 有值」時，以 CAS 清空 `released_at` 並建立新的 tool execution；並行的兩個重新占用只有一個成功，另一個依原效果的新狀態判定為 `in_flight_duplicate`。同一列 business effect 保留，歷次嘗試都在 tool execution 留下紀錄。
