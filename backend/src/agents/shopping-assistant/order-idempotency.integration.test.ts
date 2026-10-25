@@ -767,4 +767,40 @@ describePostgres("order idempotency against the Postgres ledger", () => {
     expect(await statusOf(h, tenantId, { operationId: `orphan-${tenantId}` })).toBeNull();
     expect(await statusOf(h, tenantId, { orderId: "ORD-1003" })).toBeNull();
   });
+
+  it("names the submission holding a reclaimed effect as the original, not the released attempt", async () => {
+    const gate = commitGate();
+    const { tenantId, used, h, anotherInstance } = await setup(
+      "status-reclaim",
+      { beforeCommit: gate.beforeCommit },
+      (inner) => new SwitchableProvider(inner)
+    );
+    const provider = used as SwitchableProvider;
+    provider.unavailable = true;
+    const released = await h.request("status-reclaim-a", refund("call-1"));
+    await released.approve();
+    provider.unavailable = false;
+    const holder = await h.request("status-reclaim-b", refund("call-2"));
+    const duplicate = await anotherInstance().request("status-reclaim-c", refund("call-3"));
+
+    const holderRun = holder.approve();
+    await gate.inCommit;
+    const held = await duplicate.approve();
+
+    expect(held.operations["call-3"]).toMatchObject({
+      state: "deduplicated",
+      dedup: { reason: "in_flight_duplicate", of: holder.descriptor.approvalId },
+    });
+    expect(await statusOf(h, tenantId, { operationId: duplicate.descriptor.approvalId })).toMatchObject({
+      state: "deduplicated",
+      dedup: { reason: "in_flight_duplicate", of: holder.descriptor.approvalId },
+    });
+
+    gate.release();
+    expect((await holderRun).operations["call-2"]?.state).toBe("confirmed");
+    expect(provider.inner.submissions).toBe(1);
+    expect(await statusOf(h, tenantId, { operationId: duplicate.descriptor.approvalId })).toMatchObject({
+      dedup: { reason: "in_flight_duplicate", of: holder.descriptor.approvalId },
+    });
+  });
 });

@@ -27,17 +27,23 @@ export class PgOriginalOperationResolver implements OriginalOperationResolver {
 
   async resolveApprovalId(query: OriginalOperationQuery): Promise<string | null> {
     const result = await this.db.query<ApprovalRow>(
+      // The original is the latest submission that claimed the effect: the one
+      // holding or having committed it. An earlier attempt released before a
+      // reclaim is not, and a holder not yet linked to its decision resolves to none.
       `SELECT c.approval_id
-         FROM tool_executions e
+         FROM (
+           SELECT decision_id
+             FROM tool_executions
+            WHERE business_effect_id = $1
+              -- Deduplicated submissions also carry their own decision; they are never the original.
+              AND termination_cause IS DISTINCT FROM 'deduplicated'
+            ORDER BY created_at DESC, tool_execution_id DESC
+            LIMIT 1
+         ) e
          JOIN authorization_confirmations c ON c.decision_id = e.decision_id
-        WHERE e.business_effect_id = $1
-          -- Deduplicated submissions also carry their own decision; they are never the original.
-          AND e.termination_cause IS DISTINCT FROM 'deduplicated'
-          AND c.tenant_id = $2
+        WHERE c.tenant_id = $2
           AND c.scope_id = $3
-          AND $4 = ANY(c.principal_ids)
-        ORDER BY e.created_at ASC
-        LIMIT 1`,
+          AND $4 = ANY(c.principal_ids)`,
       [query.businessEffectId, query.tenantId, query.scopeId, query.principalId]
     );
     const approvalId = result.rows[0]?.approval_id;
