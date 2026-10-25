@@ -167,9 +167,9 @@ npm run build
 
 > 前置：T4。對應 `commerce-assistant`「政策問答必須帶可驗證引用或明確拒答」「每輪檢索證據互相隔離」。
 
-- [ ] `policy_answer`：evidence found → 合成 → X42 citation 驗證；no source found → 拒答且無 citation；驗證失敗 → 無法提供經驗證答案並發出驗證失敗事件；檢索失敗 → 明確無法回答。
-- [ ] `turnEvidence` 每輪重設；citation 驗證只接受本輪結果。
-- [ ] 測試：上述四種結果；商品查詢後接政策問答時引用前一輪 citation 判定失敗；checkpoint 恢復後新一輪證據為空；注入 chunk 不觸發訂單 tool。
+- [x] `policy_answer`：evidence found → 合成 → X42 citation 驗證；no source found → 拒答且無 citation；驗證失敗 → 無法提供經驗證答案並發出驗證失敗事件；檢索失敗 → 明確無法回答。
+- [x] `turnEvidence` 每輪重設；citation 驗證只接受本輪結果。
+- [x] 測試：上述四種結果；商品查詢後接政策問答時引用前一輪 citation 判定失敗；checkpoint 恢復後新一輪證據為空；注入 chunk 不觸發訂單 tool。
 
 **D3 Gate**：同一 session 完成「商品查詢 → 政策問答」，政策引用正確且無跨輪污染（live，記錄於 `evidence/d3-live-smoke.json`）。
 
