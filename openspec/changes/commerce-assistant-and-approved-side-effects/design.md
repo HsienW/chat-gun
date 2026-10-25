@@ -172,10 +172,15 @@ shopping_assistant（每輪）
 - 狀態對照（讀取時計算，不寫入）：
   - 審批 `pending` 且未過期 → `awaiting_approval`（帶 `approvalExpiresAt`）；`pending` 但 `expires_at` 已過、或 `expired` → `approval_expired`；`denied` 且 `withdrawn_at` 有值 → `cancelled_before_effect`；其餘 `denied` → `approval_denied`。
   - 審批 `approved` 但沒有以其 decisionId 連結的 tool execution → `approved`（尚未 dispatch，或 dispatch 前被拒而未 claim；後者 ledger 沒有紀錄可區分）。
-  - 執行是去重（`termination_cause = 'deduplicated'`）→ `deduplicated`：執行為 `committed` 時 reason 是 `committed_result_reused`；否則依原效果目前狀態，`unknown` 為 `original_outcome_unknown`、其餘為 `in_flight_duplicate`（ledger 不保存當時的 reason）。`dedup.of` 是原效果第一筆非去重執行的審批。
+  - 執行是去重（`termination_cause = 'deduplicated'`）→ `deduplicated`：執行為 `committed` 時 reason 是 `committed_result_reused`；否則依原效果目前狀態，`unknown` 為 `original_outcome_unknown`、其餘為 `in_flight_duplicate`（ledger 不保存當時的 reason）。`dedup.of` 是原效果最近一筆非去重執行的審批（§6.5）。
   - 持有 claim 的執行：效果 `committed` → `confirmed`（帶 businessEffectId、externalOperationId）；有 reconciliation task、效果或執行為 `unknown` → `outcome_unknown`（帶 `reconciliationTaskId`）；效果已釋放且 `termination_cause = 'cancelled_before_dispatch'` → `cancelled_before_effect`；其他已釋放 → `failed`（ledger 不保存 provider 失敗碼，不帶 `reasonCode`）；仍持有 claim → `executing`。
   - 以上皆不符的組合 → `outcome_unknown`，`reasonCode = ORDER_OPERATION_STATE_INDETERMINATE`，不推測為成功或失敗。
 - 查詢結果的 `stateVersion` 是生命週期序位（`awaiting_approval` 2、`approved` 3、`executing` 4、`outcome_unknown` 5、terminal 6）。查詢結果是獨立的 tool 結果，不併入對話中以 toolCallId 為鍵的 card reducer。
+- **Master 決策（2026-10-25，階段性 review M1、M2、M4、m1）**：
+  - M1：ledger 已 `committed` 時回報 `confirmed`，即使持久化不確定時開的 reconciliation task 仍 open。理由：查詢以權威 ledger 為準；對話中的 card 是當下 runner 無法確認時的結果，查詢不改寫它。spec「查詢自己的操作」的未知結果情境指 ledger 本身為未知。
+  - M2：去重 reason 依原效果目前狀態推得，不另行保存；原效果之後狀態改變時，查詢的 reason 可能與當時 card 不同。
+  - M4：核准後、claim 前被拒（例如 decision 驗證失敗）不在 ledger 留紀錄，查詢停在 `approved`。只在異常情況發生，列為後續評估。
+  - m1：查詢不呈現 note、reasonCode、數量或金額，操作摘要刻意只存識別碼（資料最小化）；呈現操作細節不在本 change。
 
 ### 5.4 註冊、授予與 dispatch 強制
 
@@ -284,7 +289,7 @@ tool 只知道「這次對模擬訂單系統做了什麼」，不知道 approval
 - runner 重用已提交結果（`existing_committed`）→ `deduplicated`、`reason: committed_result_reused`，帶原 business effect 參照與原結果 → `order_present` 組成 `state: deduplicated`、`dedup.of` 指向原操作，並帶回原操作結果（`confirmed`）。
 - 並行重複且原操作仍在進行（原 business effect 為 `prepared` 且 `released_at` 為 null，即有一個執行正持有 claim）→ `deduplicated`、`reason: in_flight_duplicate`，不是 `rejected_before_dispatch` 也不是 failure；第二次提交不執行 provider 呼叫。原效果已釋放（`commit_state = prepared` 且 `released_at` 有值，§6.8）時**不是**重複，而是可重新占用。
 - 原效果的結果未知（`commit_state = unknown`）→ `deduplicated`、`reason: original_outcome_unknown`；本次提交不 dispatch、不建立 reconciliation task，原操作自己維持 `outcome_unknown`。
-- **原操作識別的解析**：`deduplicated` 只帶 `original.businessEffectId`（與可得時的 `original.toolExecutionId`），不帶 approvalId（harness 不認識業務操作識別）。`order_present` 以唯讀查詢依 business effect 找出持有或完成該效果的執行，經既有 decisionId 連結找到原審批的 approvalId，作為 `dedup.of`。查詢只限目前 tenant 與 principal；查不到時仍為 `deduplicated`，`dedup.of` 省略，並記錄 typed observation（不得改判為失敗）。
+- **原操作識別的解析**：`deduplicated` 只帶 `original.businessEffectId`（與可得時的 `original.toolExecutionId`），不帶 approvalId（harness 不認識業務操作識別）。`order_present` 以唯讀查詢依 business effect 找出持有或完成該效果的執行，經既有 decisionId 連結找到原審批的 approvalId，作為 `dedup.of`。第 11 版（Master 決策，階段性 review M3）：取**最近一筆非去重**的執行，也就是目前持有 claim 或完成提交的那一次；效果被釋放後重新占用時，較早已釋放的嘗試不是原操作。查詢只限目前 tenant 與 principal；查不到時仍為 `deduplicated`，`dedup.of` 省略，並記錄 typed observation（不得改判為失敗）。
 - circuit breaker：`deduplicated` 不計為失敗（既有 `toCircuitRecordOutcome` 只計 `failed_not_committed`，新增類型 MUST 明確列為非失敗）。
 - **進行中重複的執行紀錄不是未知效果**：目前 `prepare` 會為未取得 claim 的提交寫入 `status: 'unknown'`，重播時被判為需要 reconciliation。修正後：
   - 該執行紀錄 MUST 可與「已 dispatch 但結果未知」區分：`tool_executions` 新增 nullable 欄位 `claim_disposition`（新欄位自帶 CHECK，值只有 `not_claimed`），未取得 claim 時寫入 `status = 'failed'`（既有值）與 `claim_disposition = 'not_claimed'`，不再寫 `unknown`（§6.11）。如此取消判定（`deriveCancellationPhase`）也不會再把重複提交誤判為結果未知。
@@ -404,7 +409,7 @@ tool 只知道「這次對模擬訂單系統做了什麼」，不知道 approval
 | claim 釋放（§6.8） | `business_effects` 新增 nullable `released_at TIMESTAMPTZ` | `commit_state = 'prepared'` | `prepared` 且 `released_at` 有值 → 可重新占用 | 進行中，回報未取得 claim，不會重複執行 |
 | 未取得 claim 的執行（§6.5） | `tool_executions` 新增 nullable `claim_disposition TEXT CHECK (claim_disposition IN ('not_claimed'))` | `status = 'failed'`（原本寫 `unknown`） | `claim_disposition = 'not_claimed'` → 去重，不觸發 reconciliation | 失敗的執行，不會被當成結果未知 |
 | reconciliation task（§6.6） | 新表 | — | — | 不讀取 |
-| 操作摘要（§6.7，第 11 版） | 新表 `order_operation_requests` | — | — | 不讀取、不寫入；舊版 instance 建立的審批沒有摘要，查詢視為不存在 |
+| 操作摘要（§6.7，第 11 版） | 新表 `order_operation_requests` | — | — | 不讀取、不寫入；舊版 instance 建立的審批沒有摘要，查詢視為不存在（Master 2026-10-25 接受，階段性 review m2） |
 
 - 所有 migration 只用 `ADD COLUMN IF NOT EXISTS` 或 `CREATE TABLE IF NOT EXISTS`，與既有 migration 017、022 相同；必須通過 `migration-additive` 檢查（不得出現 DROP／RENAME／ALTER COLUMN TYPE）。
 - 新增欄位一律 nullable、無 default 值，舊版 instance 的寫入不受影響。

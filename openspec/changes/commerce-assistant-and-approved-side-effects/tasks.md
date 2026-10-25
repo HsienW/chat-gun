@@ -211,7 +211,7 @@ npm run build
 - [x] **並行**重複提交整合測試：真實 Postgres ledger，同一使用者在同一 tenant 的**兩個 thread** 各自提交並核准同一邏輯退款，兩次提交以並行方式同時進入 dispatch（對應使用者實際能觸發的路徑，design §13 Q2）；斷言 provider 提交一次、ledger 一筆已提交 business effect、另一次為 `in_flight_duplicate` 或 `committed_result_reused` 去重。測試必須證明兩次提交實際重疊（例如以 provider 的阻塞閘門讓第一次停在提交中）。
 - [x] 其他測試：provider 在 dispatch 前不可用而失敗後，同一使用者重新申請並重新核准時實際執行一次、不是去重；已確認後以不同理由重複申請為去重；同一使用者在不同 thread 重複申請為去重；同 tenant 的他人對已退款訂單申請相同退款時為 `ORDER_NOT_FOUND` 而非去重，回應不含原操作的任何識別，provider 無提交；不同明細獨立執行；回應遺失三種 reconciler 結果；task 不重複建立；確認後 ledger 連結審批決策與 externalOperationId。
 
-**D4 Gate**：並行重複提交只提交一次，第二次可觀察為去重。**Human：確認測試為並行**（記錄於 `evidence/d4-concurrency.md`）。
+**D4 Gate**：並行重複提交只提交一次，第二次可觀察為去重。**Human：確認測試為並行**（記錄於 `evidence/d4-concurrency.md`）。Master 已於 2026-10-25 確認：以兩個 pipeline 模擬兩個 instance 的並行重複提交測試，符合「確認測試為並行」的意圖。
 
 驗證命令：
 
