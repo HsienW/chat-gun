@@ -51,6 +51,10 @@ export interface OrderOperationRecord {
     of?: string;
     reason: "committed_result_reused" | "in_flight_duplicate" | "original_outcome_unknown";
   };
+  /** Server-provided approval deadline while awaiting approval. */
+  approvalExpiresAt?: string;
+  /** From the effect result, including a reused one. */
+  externalOperationId?: string;
 }
 
 export type OrderOperations = Readonly<Record<string, OrderOperationRecord>>;
