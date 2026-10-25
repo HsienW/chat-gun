@@ -226,9 +226,10 @@ npm run build
 
 > 前置：T1、T3、T7。對應 `approved-order-operations`「訂單狀態查詢只讀取權威狀態」「操作識別從申請起即存在且可連結至 ledger」。
 
-- [ ] `order_operation_status` 以 `operationId`（= approvalId）或 orderId 查詢：審批前與審批中讀審批紀錄（`pending` 且已過期限時計算並回報為逾期，**不寫入**），dispatch 後經 decisionId 連結讀 ledger 與 reconciliation task；只回傳目前 tenant 與 principal 的操作。
-- [ ] 確認 ledger 的 tool execution 確實寫入 decisionId；若未寫入，於 T2a 以 additive 方式補上。
-- [ ] 測試：審批中查詢回傳等待審批；過期未決的審批查詢回傳逾期且審批紀錄未被修改，之後的核准 resume 仍判定為逾期；確認後連結 business effect 與 externalOperationId；未知結果回傳 task 識別；他人操作 typed not found；不讀取對話文字。
+- [x] 操作摘要（design §6.7 第 11 版，Master 決策 A1）：additive migration 新增 `order_operation_requests` 表（通過 `migrations:check`）並登記 data inventory；授權 gate 新增 opt-in 的「建立審批前記錄」掛點，只有 `shopping_assistant` 開啟、只記錄訂單變更 tool；摘要先於審批紀錄寫入，寫入失敗時不建立審批與 interrupt，以 `ORDER_DISPATCH_NOT_READY` 結束並記 audit；不存 note、reasonCode 或數量。
+- [x] `order_operation_status` 以 `operationId`（= approvalId）或 orderId 查詢：從操作摘要取得 toolCallId、kind、orderId，審批前與審批中讀審批紀錄（`pending` 且已過期限時計算並回報為逾期，**不寫入**），dispatch 後經 decisionId 連結讀 ledger 與 reconciliation task，狀態對照依 design §5.3；只回傳目前 tenant、scope 與 principal 的操作；production 以 Pg reader 取代 fail-closed 的暫時 reader。
+- [x] 確認 ledger 的 tool execution 確實寫入 decisionId；若未寫入，於 T2a 以 additive 方式補上。
+- [x] 測試：審批中查詢回傳等待審批；過期未決的審批查詢回傳逾期且審批紀錄未被修改，之後的核准 resume 仍判定為逾期；確認後連結 business effect 與 externalOperationId；未知結果回傳 task 識別；他人操作 typed not found；不讀取對話文字；摘要寫入失敗時沒有審批紀錄與 interrupt、操作為 `failed`／`ORDER_DISPATCH_NOT_READY`；只有摘要沒有審批紀錄時查詢為 not found；未開啟掛點的 graph 行為不變。
 
 驗證命令：
 

@@ -165,8 +165,17 @@ shopping_assistant（每輪）
 ### 5.3 `order_operation_status`（唯讀）
 
 - input：`{ operationId?: string, orderId?: string }`，至少一個；strict。
-- 只讀取 ledger、審批決策與 reconciliation task，回傳目前狀態（不是歷史）。`read-only`、`idempotency: read_only`、`approvalPolicyKey` 為 none、`compensation: none`。
-- 只回傳屬於目前 tenant 與 principal 的操作；其他一律 `ORDER_OPERATION_NOT_FOUND`。
+- 只讀取操作摘要（§6.7）、ledger、審批決策與 reconciliation task，回傳目前狀態（不是歷史）。`read-only`、`idempotency: read_only`、`approvalPolicyKey` 為 none、`compensation: none`。
+- 只回傳屬於目前 tenant、scope 與 principal 的操作；其他一律 `ORDER_OPERATION_NOT_FOUND`。
+- 第 11 版（Master 2026-10-25 決策 A1）：`order_operation_status@1` 的 `orderRef`、`kind` 與 `operationRef.toolCallId` 是必填，但審批紀錄只有 tool 名稱，不含 tool input。因此在建立審批時另存操作摘要（§6.7），查詢從摘要取得這些欄位；契約不放寬。
+- 以 `operationId` 查詢時以摘要的 approvalId 比對；以 `orderId` 查詢時回傳該訂單最近建立的一筆操作；兩者都給時須同時相符。只有摘要沒有對應審批紀錄（審批未建立成功）時視為不存在。
+- 狀態對照（讀取時計算，不寫入）：
+  - 審批 `pending` 且未過期 → `awaiting_approval`（帶 `approvalExpiresAt`）；`pending` 但 `expires_at` 已過、或 `expired` → `approval_expired`；`denied` 且 `withdrawn_at` 有值 → `cancelled_before_effect`；其餘 `denied` → `approval_denied`。
+  - 審批 `approved` 但沒有以其 decisionId 連結的 tool execution → `approved`（尚未 dispatch，或 dispatch 前被拒而未 claim；後者 ledger 沒有紀錄可區分）。
+  - 執行是去重（`termination_cause = 'deduplicated'`）→ `deduplicated`：執行為 `committed` 時 reason 是 `committed_result_reused`；否則依原效果目前狀態，`unknown` 為 `original_outcome_unknown`、其餘為 `in_flight_duplicate`（ledger 不保存當時的 reason）。`dedup.of` 是原效果第一筆非去重執行的審批。
+  - 持有 claim 的執行：效果 `committed` → `confirmed`（帶 businessEffectId、externalOperationId）；有 reconciliation task、效果或執行為 `unknown` → `outcome_unknown`（帶 `reconciliationTaskId`）；效果已釋放且 `termination_cause = 'cancelled_before_dispatch'` → `cancelled_before_effect`；其他已釋放 → `failed`（ledger 不保存 provider 失敗碼，不帶 `reasonCode`）；仍持有 claim → `executing`。
+  - 以上皆不符的組合 → `outcome_unknown`，`reasonCode = ORDER_OPERATION_STATE_INDETERMINATE`，不推測為成功或失敗。
+- 查詢結果的 `stateVersion` 是生命週期序位（`awaiting_approval` 2、`approved` 3、`executing` 4、`outcome_unknown` 5、terminal 6）。查詢結果是獨立的 tool 結果，不併入對話中以 toolCallId 為鍵的 card reducer。
 
 ### 5.4 註冊、授予與 dispatch 強制
 
@@ -338,6 +347,11 @@ tool 只知道「這次對模擬訂單系統做了什麼」，不知道 approval
 - **`operationId = approvalId`**：審批描述建立後存在、durable，供 `order_operation_status` 查詢與 `dedup.of` 參照。
 - 連結沿用既有欄位，不新增對照表：approvalId ↔ decisionId（審批紀錄）↔ tool execution 的 decisionId（ledger 既有 `linkAuthorizationDecision`）↔ businessEffectId。T0 確認 pipeline 確實寫入 decisionId；若未寫入，以 T2 的 additive 修改補上。
 - `order_operation_status` 對審批前與審批中的狀態讀取審批紀錄；dispatch 後讀取 ledger 與 reconciliation task。
+- **操作摘要（第 11 版，Master 決策 A1）**：審批紀錄不含 tool input，查不到 orderId。因此 `shopping_assistant` 在建立審批時，先把操作摘要寫入新表 `order_operation_requests`（approvalId、tenant、scope、申請者 principal、toolCallId、kind、orderId、正規化的明細識別；不存 note、reasonCode 或數量），再寫審批紀錄與 interrupt manifest。
+  - 寫入點：授權 gate 新增 opt-in 的「建立審批前記錄」掛點，只有 `shopping_assistant` 開啟且只記錄訂單變更 tool；其他 graph 不受影響。
+  - **fail-closed**：摘要寫入失敗時不建立審批與 interrupt，該 tool call 以 `ORDER_DISPATCH_NOT_READY` 結束（同就緒預檢失敗），audit `shopping.order.request_not_recorded`。
+  - 摘要先寫、審批後寫：審批寫入失敗時只留下沒有審批紀錄的摘要，查詢一律視為不存在，不影響任何狀態。
+  - 摘要只新增、不更新；狀態永遠由審批紀錄與 ledger 決定，摘要只提供識別。
 - `requested` 在 dispatch 就緒預檢失敗或授權拒絕時是唯一出現過的狀態，此時沒有 operationId，只能以 toolCallId 參照，`order_operation_status` 查不到（只存在於該輪對話）。
 
 ### 6.8 未提交即釋放 claim（S2，Master 決策：做法 A）
@@ -390,6 +404,7 @@ tool 只知道「這次對模擬訂單系統做了什麼」，不知道 approval
 | claim 釋放（§6.8） | `business_effects` 新增 nullable `released_at TIMESTAMPTZ` | `commit_state = 'prepared'` | `prepared` 且 `released_at` 有值 → 可重新占用 | 進行中，回報未取得 claim，不會重複執行 |
 | 未取得 claim 的執行（§6.5） | `tool_executions` 新增 nullable `claim_disposition TEXT CHECK (claim_disposition IN ('not_claimed'))` | `status = 'failed'`（原本寫 `unknown`） | `claim_disposition = 'not_claimed'` → 去重，不觸發 reconciliation | 失敗的執行，不會被當成結果未知 |
 | reconciliation task（§6.6） | 新表 | — | — | 不讀取 |
+| 操作摘要（§6.7，第 11 版） | 新表 `order_operation_requests` | — | — | 不讀取、不寫入；舊版 instance 建立的審批沒有摘要，查詢視為不存在 |
 
 - 所有 migration 只用 `ADD COLUMN IF NOT EXISTS` 或 `CREATE TABLE IF NOT EXISTS`，與既有 migration 017、022 相同；必須通過 `migration-additive` 檢查（不得出現 DROP／RENAME／ALTER COLUMN TYPE）。
 - 新增欄位一律 nullable、無 default 值，舊版 instance 的寫入不受影響。
@@ -496,6 +511,7 @@ requested ─▶ awaiting_approval ─┬─▶ approved ─┬─▶ executing 
 | 合成訂單 fixture | repo 資料目錄，provenance header 標註 synthetic | `commerce:internal-synthetic` | 非個資；不進 knowledge store |
 | 模擬 provider 狀態 | in-memory | 同上 | 程序結束即消失；不登記 data inventory（無持久化） |
 | reconciliation task | runtime Postgres 新表 | 與 business effect ledger 相同的營運紀錄分級 | 登記 data inventory；只存識別碼，不存 note 或自由文字 |
+| 操作摘要 `order_operation_requests` | runtime Postgres 新表 | 與審批紀錄相同的營運紀錄分級 | 登記 data inventory；只存識別碼與 Enum，不存 note、reasonCode 或自由文字 |
 | ledger、審批決策 | 既有表；新增 nullable 欄位 `withdrawn_at`、`withdrawn_by_principal_id`、`released_at`、`claim_disposition`（§6.11） | 既有 | 分級與保存不變；`withdrawn_by_principal_id` 是 principal 識別，與既有 `principal_ids` 欄位同等處理 |
 | card payload | 串流事件 | 不含個資；`note` 不進 card | — |
 | `turnEvidence`／`operations` state | checkpoint | 只存識別碼與 Enum | 既有 checkpoint redaction |
