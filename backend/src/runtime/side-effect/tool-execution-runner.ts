@@ -45,8 +45,9 @@ import {
   type TrustedScope,
 } from "./identity.js";
 import { decideReconciliationAction } from "./reconciler.js";
+import type { ReconciliationTaskStore } from "./reconciliation-task-store.js";
 import type { ResultReferenceStore } from "./result-reference-store.js";
-import type { SideEffectToolDescriptor } from "./side-effect-descriptor.js";
+import type { ReconciliationResult, SideEffectToolDescriptor } from "./side-effect-descriptor.js";
 import type { ExecutionProfileEvidence } from "../tool-dispatch/execution-profile.js";
 
 export type ToolExecutionRunResult<TResult> =
@@ -183,6 +184,12 @@ function dispatchStateOf<TResult>(
   return "after";
 }
 
+const PERSISTENCE_UNCERTAIN = "SIDE_EFFECT_PERSISTENCE_UNCERTAIN";
+
+function isPersistenceUncertain<TResult>(result: ToolExecutionRunResult<TResult>): boolean {
+  return result.type === "deferred" && result.errorCode === PERSISTENCE_UNCERTAIN;
+}
+
 function outcomeErrorCode<TResult>(
   outcome: GovernedToolOutcome<TResult>
 ): string | undefined {
@@ -265,7 +272,9 @@ export class ToolExecutionRunner {
     private readonly ledger: BusinessEffectLedger,
     private readonly resultStore: ResultReferenceStore,
     observability: Partial<ToolExecutionRunnerObservability> = {},
-    private readonly timing: ToolExecutionRunnerTiming = defaultTiming
+    private readonly timing: ToolExecutionRunnerTiming = defaultTiming,
+    /** Opt-in: an outcome that stays unknown after reconciliation opens a durable task. */
+    private readonly reconciliationTasks?: ReconciliationTaskStore
   ) {
     this.observability = { ...defaultObservability, ...observability };
   }
@@ -891,11 +900,14 @@ export class ToolExecutionRunner {
             : {}),
         });
       } catch {
-        return {
-          type: "deferred",
-          errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN",
+        return this.recoverUncertainPersistence(
+          input,
           toolExecutionId,
-        };
+          businessEffectId,
+          businessEffectKey,
+          "executing",
+          "prepared"
+        );
       }
 
       const metric = {
@@ -913,7 +925,7 @@ export class ToolExecutionRunner {
           : this.observability.recordMetric("tool.side_effect.outcome", metric)
       );
       if (outcome.type === "succeeded") {
-        return this.persistCommittedResult(
+        const committed = await this.persistCommittedResult(
           input,
           toolExecutionId,
           businessEffectId,
@@ -922,6 +934,16 @@ export class ToolExecutionRunner {
           outcome.result,
           "live"
         );
+        return isPersistenceUncertain(committed)
+          ? this.recoverUncertainPersistence(
+              input,
+              toolExecutionId,
+              businessEffectId,
+              businessEffectKey,
+              "executing",
+              "prepared"
+            )
+          : committed;
       }
       if (outcome.type === "rejected_before_dispatch") {
         return release(
@@ -998,18 +1020,22 @@ export class ToolExecutionRunner {
         businessEffectId
       );
       if (!unknownTransition) {
-        return {
-          type: "deferred",
-          errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN",
+        return this.recoverUncertainPersistence(
+          input,
           toolExecutionId,
-        };
+          businessEffectId,
+          businessEffectKey,
+          "executing",
+          "prepared"
+        );
       }
       const reconciled = await this.reconcile(
         input,
         toolExecutionId,
         businessEffectId,
         businessEffectKey,
-        retryBudget
+        retryBudget,
+        outcomeErrorCode(outcome) ?? "SIDE_EFFECT_RECONCILIATION_REQUIRED"
       );
       if (reconciled.type === "retry") {
         retryBudget = reconciled.retryBudget;
@@ -1035,7 +1061,8 @@ export class ToolExecutionRunner {
     toolExecutionId: string,
     businessEffectId: string,
     businessEffectKey: ReturnType<typeof hashBusinessEffectKey>,
-    retryBudget: RetryBudget | undefined
+    retryBudget: RetryBudget | undefined,
+    dispatchErrorCode: string
   ): Promise<
     | { type: "retry"; retryBudget: RetryBudget | undefined }
     | { type: "done"; result: ToolExecutionRunResult<TResult> }
@@ -1047,6 +1074,7 @@ export class ToolExecutionRunner {
         "manual_intervention_required",
         "ambiguous_after_dispatch"
       );
+      await this.openReconciliationTask(input, toolExecutionId, businessEffectId, dispatchErrorCode);
       return {
         type: "done",
         result: {
@@ -1086,6 +1114,7 @@ export class ToolExecutionRunner {
       if (ready) {
         return { type: "retry", retryBudget };
       }
+      await this.openReconciliationTask(input, toolExecutionId, businessEffectId, PERSISTENCE_UNCERTAIN);
       return {
         type: "done",
         result: {
@@ -1097,6 +1126,12 @@ export class ToolExecutionRunner {
     }
     if (action === "commit" && reconciliation.state === "committed") {
       if (reconciliation.result === undefined) {
+        await this.openReconciliationTask(
+          input,
+          toolExecutionId,
+          businessEffectId,
+          "SIDE_EFFECT_COMMITTED_RESULT_UNAVAILABLE"
+        );
         return {
           type: "done",
           result: {
@@ -1108,36 +1143,22 @@ export class ToolExecutionRunner {
       }
       return {
         type: "done",
-        result: await this.persistCommittedResult(
+        result: await this.persistReconciledResult(
           input,
           toolExecutionId,
           businessEffectId,
           "unknown",
           "unknown",
-          reconciliation.result,
-          "reconciled"
+          reconciliation.result
         ),
       };
     }
     if (reconciliation.state === "not_committed") {
       // Confirmed not committed and no automatic retry: release the claim so
       // that only a new, re-authorized submission can run the effect.
-      const released = await this.releaseOrFalse(
-        toolExecutionId,
-        businessEffectId,
-        "unknown",
-        "failed_not_committed",
-        "unknown"
-      );
       return {
         type: "done",
-        result: released
-          ? { type: "failed", errorCode: "SIDE_EFFECT_NOT_COMMITTED", toolExecutionId }
-          : {
-              type: "deferred",
-              errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN",
-              toolExecutionId,
-            },
+        result: await this.releaseNotCommitted(input, toolExecutionId, businessEffectId, "unknown", "unknown"),
       };
     }
     await this.transitionOrDefer(
@@ -1145,6 +1166,12 @@ export class ToolExecutionRunner {
       "unknown",
       "manual_intervention_required",
       "ambiguous_after_dispatch"
+    );
+    await this.openReconciliationTask(
+      input,
+      toolExecutionId,
+      businessEffectId,
+      (reconciliation.state === "unknown" ? reconciliation.reason : undefined) ?? dispatchErrorCode
     );
     return {
       type: "done",
@@ -1154,6 +1181,164 @@ export class ToolExecutionRunner {
         toolExecutionId,
       },
     };
+  }
+
+  /**
+   * A ledger write after dispatch failed (design §6.6, version 10). With the
+   * opt-in the reconciler decides once: committed is written again, not
+   * committed is released, anything else stays unknown with a task. Without
+   * it the result stays SIDE_EFFECT_PERSISTENCE_UNCERTAIN as before.
+   */
+  private async recoverUncertainPersistence<TInput, TResult>(
+    input: ToolExecutionRunInput<TInput, TResult> & {
+      descriptor: SideEffectToolDescriptor<TInput, TResult>;
+    },
+    toolExecutionId: string,
+    businessEffectId: string,
+    businessEffectKey: ReturnType<typeof hashBusinessEffectKey>,
+    expectedExecutionStatus: ToolExecutionStatus,
+    expectedEffectState: "prepared" | "unknown"
+  ): Promise<ToolExecutionRunResult<TResult>> {
+    const uncertain: ToolExecutionRunResult<TResult> = {
+      type: "deferred",
+      errorCode: PERSISTENCE_UNCERTAIN,
+      toolExecutionId,
+    };
+    if (this.reconciliationTasks === undefined) return uncertain;
+    let reconciliation: ReconciliationResult<TResult> | undefined;
+    if (input.descriptor.reconcile) {
+      const reconciliationStartedAt = performance.now();
+      try {
+        reconciliation = await input.descriptor.reconcile.reconcile({
+          toolExecutionId,
+          businessEffectKey,
+        });
+      } catch {
+        reconciliation = undefined;
+      } finally {
+        await this.recordLatency("tool.reconcile", reconciliationStartedAt, input);
+      }
+    }
+    if (reconciliation?.state === "committed" && reconciliation.result !== undefined) {
+      return this.persistReconciledResult(
+        input,
+        toolExecutionId,
+        businessEffectId,
+        expectedExecutionStatus,
+        expectedEffectState,
+        reconciliation.result
+      );
+    }
+    if (reconciliation?.state === "not_committed") {
+      return this.releaseNotCommitted(
+        input,
+        toolExecutionId,
+        businessEffectId,
+        expectedExecutionStatus,
+        expectedEffectState
+      );
+    }
+    await this.openReconciliationTask(
+      input,
+      toolExecutionId,
+      businessEffectId,
+      (reconciliation?.state === "unknown" ? reconciliation.reason : undefined) ?? PERSISTENCE_UNCERTAIN
+    );
+    return uncertain;
+  }
+
+  /** Writes a reconciled result once; a write that fails again stays unknown with a task. */
+  private async persistReconciledResult<TInput, TResult>(
+    input: ToolExecutionRunInput<TInput, TResult> & {
+      descriptor: SideEffectToolDescriptor<TInput, TResult>;
+    },
+    toolExecutionId: string,
+    businessEffectId: string,
+    expectedExecutionStatus: ToolExecutionStatus,
+    expectedEffectState: "prepared" | "unknown",
+    result: TResult
+  ): Promise<ToolExecutionRunResult<TResult>> {
+    const persisted = await this.persistCommittedResult(
+      input,
+      toolExecutionId,
+      businessEffectId,
+      expectedExecutionStatus,
+      expectedEffectState,
+      result,
+      "reconciled"
+    );
+    if (isPersistenceUncertain(persisted)) {
+      await this.openReconciliationTask(input, toolExecutionId, businessEffectId, PERSISTENCE_UNCERTAIN);
+    }
+    return persisted;
+  }
+
+  /** Releases a claim confirmed not committed; a release that cannot be written stays unknown with a task. */
+  private async releaseNotCommitted<TInput, TResult>(
+    input: ToolExecutionRunInput<TInput, TResult>,
+    toolExecutionId: string,
+    businessEffectId: string,
+    expectedExecutionStatus: ToolExecutionStatus,
+    expectedEffectState: "prepared" | "unknown"
+  ): Promise<ToolExecutionRunResult<TResult>> {
+    const released = await this.releaseOrFalse(
+      toolExecutionId,
+      businessEffectId,
+      expectedExecutionStatus,
+      "failed_not_committed",
+      expectedEffectState
+    );
+    if (released) {
+      return { type: "failed", errorCode: "SIDE_EFFECT_NOT_COMMITTED", toolExecutionId };
+    }
+    await this.openReconciliationTask(input, toolExecutionId, businessEffectId, PERSISTENCE_UNCERTAIN);
+    return { type: "deferred", errorCode: PERSISTENCE_UNCERTAIN, toolExecutionId };
+  }
+
+  /**
+   * The outcome stays unknown whatever happens here: a task that cannot be
+   * stored is audited as RECONCILIATION_TASK_PERSISTENCE_FAILED, never turned
+   * into success or failure (design §6.6).
+   */
+  private async openReconciliationTask<TInput, TResult>(
+    input: ToolExecutionRunInput<TInput, TResult>,
+    toolExecutionId: string,
+    businessEffectId: string,
+    reasonCode: string
+  ): Promise<void> {
+    if (this.reconciliationTasks === undefined) return;
+    const payload = {
+      resourceType: "business_effect",
+      resourceId: businessEffectId,
+      runId: input.identity.runId,
+      toolExecutionId,
+      businessEffectId,
+      reasonCode,
+    };
+    try {
+      const task = await this.reconciliationTasks.open({
+        tenantId: input.scope.tenantId,
+        scopeId: input.scope.scopeId,
+        businessEffectId,
+        toolExecutionId,
+        reasonCode,
+      });
+      await ignoreObservabilityFailure(() =>
+        this.observability.auditLogger.record(
+          "tool.side_effect.reconciliation_task_opened",
+          { ...payload, reconciliationTaskId: task.reconciliationTaskId, created: task.created },
+          input.executionContext
+        )
+      );
+    } catch {
+      await ignoreObservabilityFailure(() =>
+        this.observability.auditLogger.record(
+          "tool.side_effect.reconciliation_task_persistence_failed",
+          { ...payload, errorCode: "RECONCILIATION_TASK_PERSISTENCE_FAILED" },
+          input.executionContext
+        )
+      );
+    }
   }
 
   private async persistCommittedResult<TInput, TResult>(
@@ -1204,6 +1389,8 @@ export class ToolExecutionRunner {
           replayKey,
           businessEffectKey,
           toolExecutionId,
+          // A result confirmed by reconciliation is marked as such (design §6.6).
+          source,
           ...(reference.externalSystemNamespace
             ? { externalSystemNamespace: reference.externalSystemNamespace }
             : {}),

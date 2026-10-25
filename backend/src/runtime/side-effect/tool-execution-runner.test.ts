@@ -19,6 +19,7 @@ import type {
 } from "./governed-outcome.js";
 import { createConfirmationRequiredDescriptor } from "../authorization/confirmation.js";
 import { createReplayKey, hashBusinessEffectKey } from "./identity.js";
+import type { ReconciliationTaskStore } from "./reconciliation-task-store.js";
 import type { ResultReferenceStore } from "./result-reference-store.js";
 import type { SideEffectToolDescriptor } from "./side-effect-descriptor.js";
 import {
@@ -1542,5 +1543,244 @@ describe("ToolExecutionRunner claim release and pre-claim checks", () => {
       ).resolves.toEqual({ type: "conflict", errorCode: "SIDE_EFFECT_REPLAY_CONFLICT" });
       expect(ledger.findBusinessEffectSnapshot).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("ToolExecutionRunner reconciliation tasks", () => {
+  function runnerWithTasks(open: ReconciliationTaskStore["open"], ledger: BusinessEffectLedger = createLedger()) {
+    const auditLogger: AuditLogger = { record: vi.fn(async () => undefined) };
+    const tasks = { open: vi.fn(open) };
+    const runner = new ToolExecutionRunner(
+      ledger,
+      createResultStore(),
+      { auditLogger, spanManager: createNoopSpanManager(), recordMetric: vi.fn(async () => undefined) },
+      { wait: vi.fn(async () => undefined) },
+      tasks
+    );
+    return { runner, tasks, auditLogger };
+  }
+
+  const unknownReconcile = vi.fn(async () => ({ state: "unknown" as const, reason: "LOOKUP_INDETERMINATE" }));
+  const opened = async () => ({ reconciliationTaskId: "task-1", created: true });
+
+  it("opens one task with the reconciler's reason when the outcome stays unknown", async () => {
+    const { runner, tasks, auditLogger } = runnerWithTasks(opened);
+
+    await expect(
+      runner.execute(runInput(
+        createExecutor([{ type: "ambiguous_after_dispatch", errorCode: "RESPONSE_LOST" }]),
+        createDescriptor({ reconcile: unknownReconcile })
+      ))
+    ).resolves.toEqual({ type: "deferred", errorCode: "SIDE_EFFECT_RECONCILIATION_REQUIRED", toolExecutionId: "execution-1" });
+    expect(tasks.open).toHaveBeenCalledExactlyOnceWith({
+      tenantId: "tenant-1",
+      scopeId: "scope-1",
+      businessEffectId: "effect-1",
+      toolExecutionId: "execution-1",
+      reasonCode: "LOOKUP_INDETERMINATE",
+    });
+    expect(auditLogger.record).toHaveBeenCalledWith(
+      "tool.side_effect.reconciliation_task_opened",
+      expect.objectContaining({ reconciliationTaskId: "task-1", created: true, reasonCode: "LOOKUP_INDETERMINATE" }),
+      undefined
+    );
+  });
+
+  it("uses the dispatch error as the reason when the tool declares no reconciler", async () => {
+    const { runner, tasks } = runnerWithTasks(opened);
+
+    await runner.execute(runInput(
+      createExecutor([{ type: "ambiguous_after_dispatch", errorCode: "RESPONSE_LOST" }]),
+      createDescriptor()
+    ));
+
+    expect(tasks.open).toHaveBeenCalledWith(expect.objectContaining({ reasonCode: "RESPONSE_LOST" }));
+  });
+
+  it("stays unknown and audits a typed failure when the task cannot be stored", async () => {
+    const { runner, auditLogger } = runnerWithTasks(async () => {
+      throw new Error("store down");
+    });
+
+    await expect(
+      runner.execute(runInput(
+        createExecutor([{ type: "ambiguous_after_dispatch", errorCode: "RESPONSE_LOST" }]),
+        createDescriptor({ reconcile: unknownReconcile })
+      ))
+    ).resolves.toMatchObject({ type: "deferred", errorCode: "SIDE_EFFECT_RECONCILIATION_REQUIRED" });
+    expect(auditLogger.record).toHaveBeenCalledWith(
+      "tool.side_effect.reconciliation_task_persistence_failed",
+      expect.objectContaining({ errorCode: "RECONCILIATION_TASK_PERSISTENCE_FAILED", businessEffectId: "effect-1" }),
+      undefined
+    );
+  });
+
+  it.each([
+    ["committed", { state: "committed" as const, result: { operationId: "reconciled" } }],
+    ["not_committed", { state: "not_committed" as const }],
+  ])("opens no task when reconciliation finds %s", async (_case, result) => {
+    const { runner, tasks, auditLogger } = runnerWithTasks(opened);
+
+    await runner.execute(runInput(
+      createExecutor([{ type: "ambiguous_after_dispatch", errorCode: "RESPONSE_LOST" }]),
+      createDescriptor({ reconcile: vi.fn(async () => result) })
+    ));
+
+    expect(tasks.open).not.toHaveBeenCalled();
+    if (result.state === "committed") {
+      expect(auditLogger.record).toHaveBeenCalledWith(
+        "tool.side_effect.committed",
+        expect.objectContaining({ source: "reconciled" }),
+        undefined
+      );
+    }
+  });
+
+  it("opens no task for a committed result reused on replay", async () => {
+    const { runner, tasks } = runnerWithTasks(opened);
+
+    await runner.execute(runInput(
+      createExecutor([{ type: "succeeded", result: { operationId: "operation-1" } }]),
+      createDescriptor()
+    ));
+
+    expect(tasks.open).not.toHaveBeenCalled();
+  });
+});
+
+describe("ToolExecutionRunner uncertain persistence after dispatch", () => {
+  const opened = async () => ({ reconciliationTaskId: "task-1", created: true });
+  const committedResult = { state: "committed" as const, result: { operationId: "operation-1" } };
+
+  function runnerWith(ledger: ReturnType<typeof createLedger>, withTasks = true) {
+    const auditLogger: AuditLogger = { record: vi.fn(async () => undefined) };
+    const tasks = { open: vi.fn(opened) };
+    const runner = new ToolExecutionRunner(
+      ledger,
+      createResultStore(),
+      { auditLogger, spanManager: createNoopSpanManager(), recordMetric: vi.fn(async () => undefined) },
+      { wait: vi.fn(async () => undefined) },
+      withTasks ? tasks : undefined
+    );
+    return { runner, tasks };
+  }
+
+  const succeeded = () => createExecutor([{ type: "succeeded", result: { operationId: "operation-1" } }]);
+  const throwingReconcile = vi.fn(async (): Promise<{ state: "unknown" }> => {
+    throw new Error("lookup failed");
+  });
+
+  it("writes a committed result found by the reconciler when the attempt record failed", async () => {
+    const ledger = createLedger();
+    ledger.completeAttempt.mockRejectedValueOnce(new Error("ledger unavailable"));
+    const reconcile = vi.fn(async () => committedResult);
+    const { runner, tasks } = runnerWith(ledger);
+
+    await expect(runner.execute(runInput(succeeded(), createDescriptor({ reconcile }))))
+      .resolves.toMatchObject({ type: "succeeded", source: "reconciled", result: { operationId: "operation-1" } });
+    expect(reconcile).toHaveBeenCalledOnce();
+    expect(ledger.commitExecutionAndBusinessEffect).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedExecutionStatus: "executing", expectedEffectState: "prepared" })
+    );
+    expect(tasks.open).not.toHaveBeenCalled();
+  });
+
+  it("writes the committed result once more after a failed commit write", async () => {
+    const ledger = createLedger();
+    ledger.commitExecutionAndBusinessEffect.mockRejectedValueOnce(new Error("commit response lost"));
+    const executor = succeeded();
+    const { runner, tasks } = runnerWith(ledger);
+
+    await expect(runner.execute(runInput(executor, createDescriptor({ reconcile: vi.fn(async () => committedResult) }))))
+      .resolves.toMatchObject({ type: "succeeded", source: "reconciled" });
+    expect(ledger.commitExecutionAndBusinessEffect).toHaveBeenCalledTimes(2);
+    expect(executor.executeTyped).toHaveBeenCalledOnce();
+    expect(tasks.open).not.toHaveBeenCalled();
+  });
+
+  it("stays unknown with a task when the committed result cannot be written again", async () => {
+    const ledger = createLedger();
+    ledger.commitExecutionAndBusinessEffect.mockRejectedValue(new Error("ledger down"));
+    const { runner, tasks } = runnerWith(ledger);
+
+    await expect(runner.execute(runInput(succeeded(), createDescriptor({ reconcile: vi.fn(async () => committedResult) }))))
+      .resolves.toEqual({ type: "deferred", errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN", toolExecutionId: "execution-1" });
+    expect(ledger.commitExecutionAndBusinessEffect).toHaveBeenCalledTimes(2);
+    expect(tasks.open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ reasonCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN" }));
+  });
+
+  it("releases the claim when the reconciler confirms not committed after the unknown mark failed", async () => {
+    const ledger = createLedger();
+    ledger.transitionBusinessEffectAndExecution.mockRejectedValueOnce(new Error("ledger unavailable"));
+    const executor = createExecutor([{ type: "ambiguous_after_dispatch", errorCode: "RESPONSE_LOST" }]);
+    const { runner, tasks } = runnerWith(ledger);
+
+    await expect(runner.execute(runInput(
+      executor,
+      createDescriptor({ reconcile: vi.fn(async () => ({ state: "not_committed" as const })) }),
+      createBudget(3)
+    ))).resolves.toEqual({ type: "failed", errorCode: "SIDE_EFFECT_NOT_COMMITTED", toolExecutionId: "execution-1" });
+    expect(ledger.releaseClaim).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedEffectState: "prepared", expectedExecutionStatus: "executing", terminationCause: "failed_not_committed" })
+    );
+    expect(executor.executeTyped).toHaveBeenCalledOnce();
+    expect(tasks.open).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the release cannot be written", { state: "not_committed" as const }, true, "SIDE_EFFECT_PERSISTENCE_UNCERTAIN"],
+    ["the reconciler cannot decide", { state: "unknown" as const, reason: "LOOKUP_INDETERMINATE" }, false, "LOOKUP_INDETERMINATE"],
+  ])("stays unknown with a task when %s", async (_case, result, releaseFails, reasonCode) => {
+    const ledger = createLedger();
+    ledger.completeAttempt.mockRejectedValueOnce(new Error("ledger unavailable"));
+    if (releaseFails) ledger.releaseClaim.mockRejectedValueOnce(new Error("ledger unavailable"));
+    const { runner, tasks } = runnerWith(ledger);
+
+    await expect(runner.execute(runInput(succeeded(), createDescriptor({ reconcile: vi.fn(async () => result) }))))
+      .resolves.toEqual({ type: "deferred", errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN", toolExecutionId: "execution-1" });
+    expect(tasks.open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ reasonCode }));
+  });
+
+  it.each([
+    ["throws", createDescriptor({ reconcile: throwingReconcile })],
+    ["is not declared", createDescriptor()],
+  ])("stays unknown with a task when the reconciler %s", async (_case, descriptor) => {
+    const ledger = createLedger();
+    ledger.completeAttempt.mockRejectedValueOnce(new Error("ledger unavailable"));
+    const { runner, tasks } = runnerWith(ledger);
+
+    await expect(runner.execute(runInput(succeeded(), descriptor)))
+      .resolves.toMatchObject({ type: "deferred", errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN" });
+    expect(tasks.open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ reasonCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN" }));
+  });
+
+  it("opens a task for failed writes after an earlier reconciliation", async () => {
+    const first = runnerWith(createLedger());
+    await expect(first.runner.execute(runInput(
+      createExecutor([{ type: "ambiguous_after_dispatch", errorCode: "RESPONSE_LOST" }]),
+      createDescriptor({ reconcile: vi.fn(async () => ({ state: "committed" as const })) })
+    ))).resolves.toMatchObject({ errorCode: "SIDE_EFFECT_COMMITTED_RESULT_UNAVAILABLE" });
+    expect(first.tasks.open).toHaveBeenCalledWith(expect.objectContaining({ reasonCode: "SIDE_EFFECT_COMMITTED_RESULT_UNAVAILABLE" }));
+
+    const releaseFails = createLedger();
+    releaseFails.releaseClaim.mockRejectedValueOnce(new Error("ledger unavailable"));
+    const second = runnerWith(releaseFails);
+    await expect(second.runner.execute(runInput(
+      createExecutor([{ type: "ambiguous_after_dispatch", errorCode: "RESPONSE_LOST" }]),
+      createDescriptor({ reconcile: vi.fn(async () => ({ state: "not_committed" as const })) })
+    ))).resolves.toMatchObject({ errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN" });
+    expect(second.tasks.open).toHaveBeenCalledWith(expect.objectContaining({ reasonCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN" }));
+  });
+
+  it("keeps the previous result and never reconciles without the opt-in", async () => {
+    const ledger = createLedger();
+    ledger.completeAttempt.mockRejectedValueOnce(new Error("ledger unavailable"));
+    const reconcile = vi.fn(async () => committedResult);
+    const { runner } = runnerWith(ledger, false);
+
+    await expect(runner.execute(runInput(succeeded(), createDescriptor({ reconcile }))))
+      .resolves.toEqual({ type: "deferred", errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN", toolExecutionId: "execution-1" });
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(ledger.commitExecutionAndBusinessEffect).not.toHaveBeenCalled();
   });
 });
