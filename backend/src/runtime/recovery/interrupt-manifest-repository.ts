@@ -147,13 +147,13 @@ export class PgInterruptManifestRepository
              jsonb_set(manifest, '{status}', to_jsonb('resumed'::text)),
              '{updatedAt}', to_jsonb($5::text)
            ),
-           updated_at = $5
+           updated_at = $5::text::timestamptz
        WHERE interrupt_id = $1
          AND run_id = $2
          AND task_id = $3
          AND scope_id = $4
          AND status = 'waiting'
-         AND expiry_at > $5
+         AND expiry_at > $5::text::timestamptz
        RETURNING manifest`,
       [input.interruptId, input.runId, input.taskId, input.scopeId, consumedAt]
     );
@@ -171,7 +171,7 @@ export class PgInterruptManifestRepository
              jsonb_set(manifest, '{status}', to_jsonb($3::text)),
              '{updatedAt}', to_jsonb($4::text)
            ),
-           updated_at = $4
+           updated_at = $4::text::timestamptz
        WHERE interrupt_id = $1 AND status = $2
        RETURNING manifest`,
       [

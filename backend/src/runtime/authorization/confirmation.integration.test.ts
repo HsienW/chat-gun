@@ -5,7 +5,7 @@ import { Pool } from "pg";
 
 import { runMigrations } from "../persistence/migration-runner.js";
 import type { Queryable } from "../persistence/rows.js";
-import { createConfirmationInterruptManifest } from "../recovery/confirmation-manifest.js";
+import { createConfirmationInterruptId, createConfirmationInterruptManifest } from "../recovery/confirmation-manifest.js";
 import { PgInterruptManifestRepository } from "../recovery/interrupt-manifest-repository.js";
 import {
   createConfirmationRequiredDescriptor,
@@ -323,6 +323,41 @@ describePostgres("PgAuthorizationConfirmationStore withdrawal against Postgres",
       await expect(
         verifier.verify({ decisionId, toolName: "order_refund_request", executionContext })
       ).resolves.toBe(false);
+    });
+  });
+
+  describe("PgInterruptManifestRepository status writes", () => {
+    it("moves a waiting confirmation manifest to resumed and writes a real timestamp", async () => {
+      const { descriptor } = await pendingConfirmation("manifest-transition");
+      const repository = new PgInterruptManifestRepository(db);
+      const interruptId = createConfirmationInterruptId(descriptor);
+      const now = new Date();
+
+      const resumed = await repository.transitionStatus({ interruptId, expectedStatus: "waiting", nextStatus: "resumed", now });
+
+      expect(resumed?.status).toBe("resumed");
+      const row = await pool.query("SELECT status, updated_at FROM interrupt_manifests WHERE interrupt_id = $1", [interruptId]);
+      expect(row.rows[0]?.status).toBe("resumed");
+      expect((row.rows[0]?.updated_at as Date).toISOString()).toBe(now.toISOString());
+      await expect(
+        repository.transitionStatus({ interruptId, expectedStatus: "waiting", nextStatus: "rejected" })
+      ).resolves.toBeNull();
+    });
+
+    it("consumes a waiting manifest only before it expires", async () => {
+      const { descriptor, executionContext } = await pendingConfirmation("manifest-consume");
+      const repository = new PgInterruptManifestRepository(db);
+      const interruptId = createConfirmationInterruptId(descriptor);
+      const binding = {
+        interruptId,
+        runId: executionContext.runId,
+        taskId: executionContext.taskId,
+        scopeId: executionContext.scope.scopeId,
+      };
+
+      await expect(repository.consume({ ...binding, now: new Date(Date.now() + 120_000) })).resolves.toBeNull();
+      await expect(repository.consume(binding)).resolves.toMatchObject({ status: "resumed" });
+      await expect(repository.consume(binding)).resolves.toBeNull();
     });
   });
 });
