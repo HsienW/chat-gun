@@ -186,12 +186,12 @@ npm run build
 
 > 前置：T1、T2b、T3、T4。對應 `approved-order-operations`「durable 人工審批」「取消只在生效前有效」。
 
-- [ ] 訂單分支：只綁訂單 tool，經 dispatch 就緒預檢 → gate → confirmation interrupt → dispatch；`operations` state 為以 toolCallId 為鍵的 map，同一則訊息的多個訂單 tool call 各自獨立，reducer 依 design §4.2 規則（依 toolCallId 合併、只接受較新 `stateVersion`、terminal 後忽略非 terminal）。`order_present` 依 graph state、`confirmationOutcome` 與 governed outcome 組成 `order_operation_status@1` card（`operationRef` 一律為本次提交；`stateVersion` 單調；`requested` 起即發出；審批後帶 `operationId = approvalId` 與 server 提供的期限；去重時原操作只在 `dedup.of`）。`dedup.of` 以唯讀查詢依 `deduplicated.original` 經 decisionId 連結解析為原 approvalId，只限目前 tenant 與 principal；查不到時省略 `dedup.of` 並記錄 typed observation，仍為 `deduplicated`（design §6.5）。
-- [ ] dispatch 就緒預檢：pipeline、ledger 或審批儲存不可用時 `ORDER_DISPATCH_NOT_READY`，不建立審批。
-- [ ] 取消（design §6.2）：shopping graph state 宣告 `kind`、`targetRunId` channel；START 依 `kind` 分流；`cancel_pending_operation` 只依 checkpoint 中的審批描述撤回（`targetRunId` 只比對），成功時發出 `cancelled_before_effect` card 並清除等待狀態，`toolQueue` 中尚未建立審批的訂單 tool call 一併結束為 `cancelled_before_effect`；沒有等待中的審批時回覆無可取消；撤回失敗時保留可重試狀態；shopping orchestrator 開啟 T1 的 opt-in 轉送。測試須涵蓋 governance 未啟用與已啟用兩種設定，並以真實 checkpointer 驗證取消後舊 interrupt 不再被 resume。
-- [ ] 取消（其餘狀態）：已核准未 claim 時取消為 `cancelled_before_effect` 且無 ledger claim；已 claim 未送出時取消為 `cancelled_before_effect` 且 claim 被釋放（T2a）；執行中取消不中止效果、不呈現為取消。
-- [ ] 版本化審批逾時設定（預設 15 分鐘）；測試使用短逾時。
-- [ ] 測試：核准執行一次；拒絕、逾期、撤回無 provider 呼叫且結果可區分；預檢失敗不建立審批；核准後 ledger 失效 fail-closed；重放審批不重複執行；等待審批時重啟後仍可決定、不重複建立審批，且前後事件的 tool call 參照與操作識別相同；同一則訊息兩筆訂單產生兩個獨立操作且互不覆蓋；`operations` reducer 拒絕較舊 `stateVersion` 與 terminal 後的非 terminal 更新；重用已提交結果時狀態的識別屬於本次提交、原操作卡片不變；檢索內容聲稱已預先核准仍需審批；已確認後要求撤銷不呼叫任何補償。
+- [x] 訂單分支：只綁訂單 tool，經 dispatch 就緒預檢 → gate → confirmation interrupt → dispatch；`operations` state 為以 toolCallId 為鍵的 map，同一則訊息的多個訂單 tool call 各自獨立，reducer 依 design §4.2 規則（依 toolCallId 合併、只接受較新 `stateVersion`、terminal 後忽略非 terminal）。`order_present` 依 graph state、`confirmationOutcome` 與 governed outcome 組成 `order_operation_status@1` card（`operationRef` 一律為本次提交；`stateVersion` 單調；`requested` 起即發出；審批後帶 `operationId = approvalId` 與 server 提供的期限；去重時原操作只在 `dedup.of`）。`dedup.of` 以唯讀查詢依 `deduplicated.original` 經 decisionId 連結解析為原 approvalId，只限目前 tenant 與 principal；查不到時省略 `dedup.of` 並記錄 typed observation，仍為 `deduplicated`（design §6.5）。
+- [x] dispatch 就緒預檢：pipeline、ledger 或審批儲存不可用時 `ORDER_DISPATCH_NOT_READY`，不建立審批。
+- [x] 取消（design §6.2）：shopping graph state 宣告 `kind`、`targetRunId` channel；START 依 `kind` 分流；`cancel_pending_operation` 只依 checkpoint 中的審批描述撤回（`targetRunId` 只比對），成功時發出 `cancelled_before_effect` card 並清除等待狀態，`toolQueue` 中尚未建立審批的訂單 tool call 一併結束為 `cancelled_before_effect`；沒有等待中的審批時回覆無可取消；撤回失敗時保留可重試狀態；shopping orchestrator 開啟 T1 的 opt-in 轉送。測試須涵蓋 governance 未啟用與已啟用兩種設定，並以真實 checkpointer 驗證取消後舊 interrupt 不再被 resume。
+- [x] 取消（其餘狀態）：已核准未 claim 時取消為 `cancelled_before_effect` 且無 ledger claim；已 claim 未送出時取消為 `cancelled_before_effect` 且 claim 被釋放（T2a）；執行中取消不中止效果、不呈現為取消。
+- [x] 版本化審批逾時設定（預設 15 分鐘）；測試使用短逾時。
+- [x] 測試：核准執行一次；拒絕、逾期、撤回無 provider 呼叫且結果可區分；預檢失敗不建立審批；核准後 ledger 失效 fail-closed；重放審批不重複執行；等待審批時重啟後仍可決定、不重複建立審批，且前後事件的 tool call 參照與操作識別相同；同一則訊息兩筆訂單產生兩個獨立操作且互不覆蓋；`operations` reducer 拒絕較舊 `stateVersion` 與 terminal 後的非 terminal 更新；重用已提交結果時狀態的識別屬於本次提交、原操作卡片不變；檢索內容聲稱已預先核准仍需審批；已確認後要求撤銷不呼叫任何補償。
 
 驗證命令：
 
