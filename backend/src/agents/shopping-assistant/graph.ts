@@ -12,7 +12,10 @@ import { END, START, type BaseCheckpointSaver } from "@langchain/langgraph";
 import type { ChatModelInvoker } from "../../platform/llm-gateway.js";
 import type { AuditPayload } from "../../platform/observability.js";
 import { withOpikNode } from "../../platform/tracing/opik/opik-graph.js";
-import type { AuthorizationConfirmationStore } from "../../runtime/authorization/confirmation.js";
+import type {
+  AuthorizationConfirmationStore,
+  AuthorizationConfirmationWithdrawalStore,
+} from "../../runtime/authorization/confirmation.js";
 import {
   createToolAuthorizationGraphNodes,
   routeAfterAuthorizationConfirmation,
@@ -31,6 +34,8 @@ import {
 import { KB_SEARCH_TOOL_NAME } from "../../tools/kb-search.js";
 import { emitCardEvents } from "./card-events.js";
 import type { ShoppingIntentRouter } from "./intent-router.js";
+import { createOrderBranchNodes, isOrderMutationCall } from "./order-branch.js";
+import type { OriginalOperationResolver } from "./original-operation.js";
 import type { PolicyAnswerSynthesizer } from "./policy-answer.js";
 import { buildProductCards, readKbSearchOutcome, toCardEmissions } from "./product-results.js";
 import {
@@ -51,8 +56,13 @@ export const SHOPPING_ASSISTANT_NODES = [
   "physical_dispatch",
   "product_present",
   "policy_answer",
+  "order_request",
+  "order_readiness",
+  "order_awaiting_approval",
+  "order_executing",
+  "order_settle",
+  "order_present",
   "respond_scope",
-  "capability_pending",
   "cancel_pending_operation",
 ] as const;
 
@@ -90,13 +100,11 @@ const REPLIES = {
   multipleRequests: "您的訊息同時包含多項需求，請分開一次說明一件，我會逐一協助。",
   unsupported: "這超出我目前能協助的範圍。我可以協助查詢商品、說明商店政策，以及對您的訂單申請退款或取消（模擬訂單操作）。",
   routingUnavailable: "目前暫時無法處理您的請求，請稍後再試。",
-  capabilityPending: "這項功能尚未在此版本開放，目前我可以協助查詢商品與說明商店政策。",
   policyNotCovered: "知識庫沒有涵蓋這個問題，我無法提供答案。",
   policyUnavailable: "目前無法回答這個問題，請稍後再試。",
   policyUnverified: "目前無法提供經驗證的答案。",
   productNotFound: "知識庫中沒有找到符合的商品。",
   productUnavailable: "目前無法查詢商品資訊，請稍後再試。",
-  nothingToCancel: "目前沒有可取消的申請。",
 } as const;
 
 export interface ShoppingAssistantGraphDependencies {
@@ -108,6 +116,13 @@ export interface ShoppingAssistantGraphDependencies {
   /** Binds kb_search for both the product and the policy lookup. */
   createProductRequestModel: () => ChatModelInvoker;
   policyAnswerSynthesizer: PolicyAnswerSynthesizer;
+  /** Binds only the order tools. */
+  createOrderRequestModel: () => ChatModelInvoker;
+  /** Pipeline, side-effect ledger and approval store must be usable before an approval is created. */
+  checkDispatchReadiness: () => Promise<boolean>;
+  /** Withdraws approvals and reports their status for the confirmation outcome. */
+  confirmationWithdrawal: AuthorizationConfirmationWithdrawalStore;
+  originalOperationResolver: OriginalOperationResolver;
   audit: (eventName: string, payload: AuditPayload, context?: ExecutionContext) => Promise<void>;
   now?: () => Date;
 }
@@ -147,7 +162,10 @@ export function createShoppingAssistantGraph(
     confirmationStore: dependencies.confirmationStore,
     interruptManifestRepository: dependencies.interruptManifestRepository,
     executionManifest,
+    // Denied, expired and withdrawn approvals stay distinguishable (design §6.4).
+    confirmationOutcome: { statusReader: dependencies.confirmationWithdrawal },
   });
+  const orderNodes = createOrderBranchNodes(dependencies);
   const kbSearchTool = dependencies.tools.find((tool) => tool.name === KB_SEARCH_TOOL_NAME);
 
   async function routeIntent(
@@ -190,7 +208,7 @@ export function createShoppingAssistantGraph(
 
   function routeAfterIntent(
     state: ShoppingAssistantState
-  ): "kb_request" | "respond_scope" | "capability_pending" | typeof END {
+  ): "kb_request" | "respond_scope" | "order_request" | typeof END {
     const turn = state.turn;
     if (turn === null || turn.routeStatus === "cancelled") return END;
     switch (turn.routedIntent) {
@@ -198,7 +216,7 @@ export function createShoppingAssistantGraph(
       case "policy_question":
         return "kb_request";
       case "order_operation":
-        return "capability_pending";
+        return "order_request";
       default:
         return "respond_scope";
     }
@@ -242,12 +260,69 @@ export function createShoppingAssistantGraph(
     const last = state.messages.at(-1);
     return last !== undefined && isAIMessage(last) && (last.tool_calls?.length ?? 0) > 0
       ? "authorization_gate"
-      : routeAfterTools(state);
+      : routeAfterKnowledgeTools(state);
   }
 
-  function routeAfterTools(state: ShoppingAssistantState): "product_present" | "policy_answer" | "respond_scope" {
+  function routeAfterKnowledgeTools(state: ShoppingAssistantState): "product_present" | "policy_answer" | "respond_scope" {
     const intent = knowledgeIntent(state.turn);
     return intent === "product_lookup" ? "product_present" : intent === "policy_question" ? "policy_answer" : "respond_scope";
+  }
+
+  function isOrderTurn(state: ShoppingAssistantState): boolean {
+    return state.turn?.routedIntent === "order_operation";
+  }
+
+  type AfterToolsNode = "product_present" | "policy_answer" | "respond_scope" | "order_settle";
+
+  /** Every order tool result is settled into its operation before the next call or the reply. */
+  function routeAfterTools(state: ShoppingAssistantState): AfterToolsNode {
+    return isOrderTurn(state) ? "order_settle" : routeAfterKnowledgeTools(state);
+  }
+
+  function routeToNextCall(state: ShoppingAssistantState): "authorization_gate" | "order_settle" {
+    return isOrderTurn(state) ? "order_settle" : "authorization_gate";
+  }
+
+  function routeAfterGate(
+    state: ShoppingAssistantState
+  ):
+    | "order_awaiting_approval"
+    | "authorization_confirmation"
+    | "order_executing"
+    | "physical_dispatch"
+    | "authorization_gate"
+    | AfterToolsNode {
+    const next = routeAfterAuthorizationGate(state);
+    if (next === "confirmation") {
+      return isOrderMutationCall(state.activeToolCall) ? "order_awaiting_approval" : "authorization_confirmation";
+    }
+    if (next === "dispatch") return isOrderMutationCall(state.activeToolCall) ? "order_executing" : "physical_dispatch";
+    if (next === "gate") return routeToNextCall(state);
+    return routeAfterTools(state);
+  }
+
+  function routeAfterConfirmation(
+    state: ShoppingAssistantState
+  ): "order_executing" | "physical_dispatch" | "authorization_gate" | AfterToolsNode {
+    const next = routeAfterAuthorizationConfirmation(state);
+    if (next === "dispatch") return isOrderMutationCall(state.activeToolCall) ? "order_executing" : "physical_dispatch";
+    if (next === "gate") return routeToNextCall(state);
+    return routeAfterTools(state);
+  }
+
+  function routeAfterDispatch(state: ShoppingAssistantState): "authorization_gate" | AfterToolsNode {
+    return routeAfterPhysicalDispatch(state) === "gate" ? routeToNextCall(state) : routeAfterTools(state);
+  }
+
+  function routeAfterOrderRequest(
+    state: ShoppingAssistantState
+  ): "order_present" | "order_readiness" | "authorization_gate" {
+    if (state.toolQueue.length === 0) return "order_present";
+    return state.toolQueue.some((call) => isOrderMutationCall(call)) ? "order_readiness" : "authorization_gate";
+  }
+
+  function routeWhileQueued(state: ShoppingAssistantState): "authorization_gate" | "order_present" {
+    return state.toolQueue.length > 0 ? "authorization_gate" : "order_present";
   }
 
   /** The kb_search call of this turn and its governed outcome. */
@@ -363,26 +438,6 @@ export function createShoppingAssistantGraph(
     return { messages: [reply(content)], runtimeEvents: [] };
   }
 
-  async function capabilityPending(): Promise<Partial<ShoppingAssistantState>> {
-    return { messages: [reply(REPLIES.capabilityPending)], runtimeEvents: [] };
-  }
-
-  async function cancelPendingOperation(
-    state: ShoppingAssistantState
-  ): Promise<Partial<ShoppingAssistantState>> {
-    // The order branch that creates approvals does not exist yet, so a waiting
-    // approval here is an inconsistent checkpoint: fail closed, never pretend.
-    if (state.pendingAuthorization) {
-      throw new Error("Withdrawing a pending approval is not available in this graph version");
-    }
-    return {
-      messages: [reply(REPLIES.nothingToCancel)],
-      kind: null,
-      targetRunId: null,
-      runtimeEvents: [],
-    };
-  }
-
   function routeStart(state: ShoppingAssistantState): "cancel_pending_operation" | "route_intent" {
     return state.kind === "cancel" ? "cancel_pending_operation" : "route_intent";
   }
@@ -398,9 +453,14 @@ export function createShoppingAssistantGraph(
     .addNode("physical_dispatch", withOpikNode("physical_dispatch", authorizationNodes.physicalDispatch))
     .addNode("product_present", withOpikNode("product_present", productPresent))
     .addNode("policy_answer", withOpikNode("policy_answer", policyAnswer))
+    .addNode("order_request", withOpikNode("order_request", orderNodes.orderRequest))
+    .addNode("order_readiness", withOpikNode("order_readiness", orderNodes.orderReadiness))
+    .addNode("order_awaiting_approval", withOpikNode("order_awaiting_approval", orderNodes.orderAwaitingApproval))
+    .addNode("order_executing", withOpikNode("order_executing", orderNodes.orderExecuting))
+    .addNode("order_settle", withOpikNode("order_settle", orderNodes.orderSettle))
+    .addNode("order_present", withOpikNode("order_present", orderNodes.orderPresent))
     .addNode("respond_scope", withOpikNode("respond_scope", respondScope))
-    .addNode("capability_pending", withOpikNode("capability_pending", capabilityPending))
-    .addNode("cancel_pending_operation", withOpikNode("cancel_pending_operation", cancelPendingOperation))
+    .addNode("cancel_pending_operation", withOpikNode("cancel_pending_operation", orderNodes.cancelPendingOperation))
     .addConditionalEdges(START, routeStart, {
       cancel_pending_operation: "cancel_pending_operation",
       route_intent: "route_intent",
@@ -408,7 +468,7 @@ export function createShoppingAssistantGraph(
     .addConditionalEdges("route_intent", routeAfterIntent, {
       kb_request: "kb_request",
       respond_scope: "respond_scope",
-      capability_pending: "capability_pending",
+      order_request: "order_request",
       [END]: END,
     })
     .addConditionalEdges("kb_request", routeAfterKbRequest, {
@@ -417,40 +477,52 @@ export function createShoppingAssistantGraph(
       policy_answer: "policy_answer",
       respond_scope: "respond_scope",
     })
-    .addConditionalEdges("authorization_gate", (state: ShoppingAssistantState) => {
-      const next = routeAfterAuthorizationGate(state);
-      return next === "model" ? routeAfterTools(state) : next;
-    }, {
-      confirmation: "authorization_confirmation",
-      dispatch: "physical_dispatch",
-      gate: "authorization_gate",
+    .addConditionalEdges("order_request", routeAfterOrderRequest, {
+      order_present: "order_present",
+      order_readiness: "order_readiness",
+      authorization_gate: "authorization_gate",
+    })
+    .addConditionalEdges("order_readiness", routeWhileQueued, {
+      authorization_gate: "authorization_gate",
+      order_present: "order_present",
+    })
+    .addConditionalEdges("authorization_gate", routeAfterGate, {
+      order_awaiting_approval: "order_awaiting_approval",
+      authorization_confirmation: "authorization_confirmation",
+      order_executing: "order_executing",
+      physical_dispatch: "physical_dispatch",
+      authorization_gate: "authorization_gate",
+      order_settle: "order_settle",
       product_present: "product_present",
       policy_answer: "policy_answer",
       respond_scope: "respond_scope",
     })
-    .addConditionalEdges("authorization_confirmation", (state: ShoppingAssistantState) => {
-      const next = routeAfterAuthorizationConfirmation(state);
-      return next === "model" ? routeAfterTools(state) : next;
-    }, {
-      dispatch: "physical_dispatch",
-      gate: "authorization_gate",
+    .addEdge("order_awaiting_approval", "authorization_confirmation")
+    .addConditionalEdges("authorization_confirmation", routeAfterConfirmation, {
+      order_executing: "order_executing",
+      physical_dispatch: "physical_dispatch",
+      authorization_gate: "authorization_gate",
+      order_settle: "order_settle",
       product_present: "product_present",
       policy_answer: "policy_answer",
       respond_scope: "respond_scope",
     })
-    .addConditionalEdges("physical_dispatch", (state: ShoppingAssistantState) => {
-      const next = routeAfterPhysicalDispatch(state);
-      return next === "model" ? routeAfterTools(state) : next;
-    }, {
-      gate: "authorization_gate",
+    .addEdge("order_executing", "physical_dispatch")
+    .addConditionalEdges("physical_dispatch", routeAfterDispatch, {
+      authorization_gate: "authorization_gate",
+      order_settle: "order_settle",
       product_present: "product_present",
       policy_answer: "policy_answer",
       respond_scope: "respond_scope",
+    })
+    .addConditionalEdges("order_settle", routeWhileQueued, {
+      authorization_gate: "authorization_gate",
+      order_present: "order_present",
     })
     .addEdge("product_present", END)
     .addEdge("policy_answer", END)
+    .addEdge("order_present", END)
     .addEdge("respond_scope", END)
-    .addEdge("capability_pending", END)
     .addEdge("cancel_pending_operation", END);
 
   return builder.compile(options.checkpointer ? { checkpointer: options.checkpointer } : {});

@@ -146,6 +146,26 @@ function governedKbSearch(output: () => string) {
   return { tools, runnerExecute };
 }
 
+/** Knowledge-branch tests never reach the order branch; any call fails the test. */
+const unusedOrderBranch = {
+  createOrderRequestModel: () => {
+    throw new Error("order branch is not expected in this test");
+  },
+  checkDispatchReadiness: async () => {
+    throw new Error("order branch is not expected in this test");
+  },
+  confirmationWithdrawal: {
+    withdraw: async () => {
+      throw new Error("order branch is not expected in this test");
+    },
+    findStatus: async () => null,
+  },
+  originalOperationResolver: { resolveApprovalId: async () => null },
+} satisfies Pick<
+  ShoppingAssistantGraphDependencies,
+  "createOrderRequestModel" | "checkDispatchReadiness" | "confirmationWithdrawal" | "originalOperationResolver"
+>;
+
 function setup(
   route: ShoppingIntentRouteResult | (() => ShoppingIntentRouteResult),
   options: {
@@ -173,6 +193,7 @@ function setup(
     intentRouter: router,
     createProductRequestModel: () => model.model,
     policyAnswerSynthesizer: { promptVersion: "shopping-policy-answer-v1", synthesize },
+    ...unusedOrderBranch,
     audit,
     now: () => new Date("2026-10-24T12:00:00.000Z"),
   };
@@ -234,20 +255,6 @@ describe("shopping assistant intent routing", () => {
     ]);
     expect(state.runtimeEventCursor).toEqual({ runId: "run-1", nextSequence: 3 });
     expect(lastText(state.messages)).toContain("Tonic Earbuds 2 [c1]");
-  });
-
-  it("keeps order operations away from every tool until the order branch exists", async () => {
-    const { graph, kb, model } = setup(
-      routed({ status: "routed", intent: "order_operation", rationaleCode: "requests_order_change", attempts: 1 })
-    );
-
-    const state = await graph.invoke({ messages: [new HumanMessage("question")] }, runConfig("thread-order"));
-
-    expect(state.turn?.routedIntent).toBe("order_operation");
-    expect(model.bindTools).not.toHaveBeenCalled();
-    expect(kb.runnerExecute).not.toHaveBeenCalled();
-    expect(state.runtimeEvents).toEqual([]);
-    expect(lastText(state.messages)).toContain("尚未");
   });
 
   it.each([
@@ -535,6 +542,7 @@ describe("shopping assistant policy answers", () => {
       intentRouter: deps.router,
       createProductRequestModel: () => deps.model.model,
       policyAnswerSynthesizer: { promptVersion: "shopping-policy-answer-v1", synthesize: deps.synthesize },
+      ...unusedOrderBranch,
       audit: deps.audit,
     };
 
