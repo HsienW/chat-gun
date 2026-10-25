@@ -246,7 +246,9 @@ npm run build
 
 - [ ] 在 bff 既有測試目錄新增測試檔（以既有 vitest／node test 入口執行；BFF 正式程式只有 TS 的變更），證明：經 BFF 的 tool 審批 resume 與 `cancel` 輸入能延續原 run（active run 識別）並通過審批綁定；`shopping_assistant` 串流透傳，含 backend 新增的 `card.emit` 事件原樣到達前端；client 注入的身分 header 被 strip；取消與斷線透傳不變。
 - [ ] 證明失敗，或需要 TS 以外的 bff 正式程式碼或 `package.json` 修改：停止並回報 CCR，退回 PLAN_DRAFT 補 BFF delta，不得直接修改。
-- [ ] 以 Git Diff 確認 bff 正式程式只有 TS 的變更，其餘為新增測試檔。
+- [x] 以 Git Diff 確認 bff 正式程式只有 TS 的變更，其餘為新增測試檔。
+
+> 進度註記（2026-10-25）：第 1 項的 BFF 透傳部分已由 `bff/test/shopping-passthrough.test.mjs` 證明（`card.emit` 逐位元組透傳、resume 與 `cancel` 的本文及 active-run header 原樣轉送到原 thread、身分 header strip、斷線中止上游與取消透傳）；但「通過審批綁定」在 backend 不成立（S9：經 LangGraph API 的 resume 一定是新 run，`consume` 要求原 runId），因此第 1 項不勾，第 2 項的停止條件已觸發並回報 Master，待決策。
 
 驗證命令：
 
