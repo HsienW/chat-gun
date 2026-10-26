@@ -86,6 +86,19 @@ describe("trusted graph entry", () => {
     expect(outputs[0]?.taskId).not.toBe(outputs[1]?.taskId);
   });
 
+  it("reads the candidate with a graph-supplied reader and still owns the task id", async () => {
+    const admit = vi.fn(async (context: ExecutionContext) => context.taskId);
+    const graph = { getState: vi.fn(async () => ({ values: {} })), invoke: vi.fn(async (_input: unknown, prepared: unknown) => prepared) };
+    const reader = vi.fn((_input: unknown, entry: unknown) => readDevelopmentExecutionContext(null, entry));
+    const wrapped = instrumentGraphWithExecutionContext(graph, createGraphEntryContextResolver(graph, { admit }, reader));
+    const prepared = await wrapped.invoke({}, { configurable: { ...config.configurable, task_id: "forged" } });
+    expect(reader).toHaveBeenCalledOnce();
+    const context = readCanonicalExecutionContext(prepared);
+    expect(context?.principal.principalId).toBe("anonymous");
+    expect(context?.taskId).not.toBe("forged");
+    expect(admit).toHaveBeenCalledWith(expect.objectContaining({ taskId: context?.taskId }), undefined);
+  });
+
   it("does not invoke after cancellation during admission", async () => {
     const { wrapped, graph, admit } = setup();
     const controller = new AbortController();
