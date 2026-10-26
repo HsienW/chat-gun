@@ -240,15 +240,60 @@ npm run test
 npm run build
 ```
 
+## TR 審批 resume 以伺服器端記錄的等待中 run 綁定（第 12 版，S9；第 13 版修訂）
+
+> 前置：T1、T6。對應以下 Requirement：
+> - `trusted-tool-authorization`「resume MUST 為一次性、scoped，且 Agent MUST NOT 自我批准」（MODIFIED）
+> - `durable-hitl-conversation-recovery`「resume 只回到預期 waiting Task 且最多消費一次」（MODIFIED）
+> - `approved-order-operations`「訂單變更只在 durable 人工審批後執行」
+>
+> 依據 design §6.14。修改位於共用授權節點與審批儲存，`shopping_assistant` 與 `mcp_agent` 同時生效（Master 決策：`mcp_agent` 直接納入），不另設 opt-in。只需 `backend/src/` 寫入授權；不改 BFF、frontend、harness 與 migration。
+>
+> 第 13 版（Master 2026-10-26 決策：方案 1，`evidence/tr-inventory-and-stop.md` §2）：節點新增的 `waiting` 與 thread 檢查改為 typed failure＋audit；production 補接 confirmation audit sink。施工順序依 Master 指示：先把既有斷言與測試替身調整為新契約並補上 `shopping_assistant` 與 `mcp_agent` 的不同 run 測試，再實作，之後才進入隔離 Postgres integration；T9 第 2 項的 live smoke 最後執行。
+
+- [x] 實作前唯讀盤點 `mcp_agent` 實際會進入審批的 tool（risk tier 為 `sensitive`／`communication` 或宣告 `requireConfirmation`），記入 evidence，作為下方 `mcp_agent` 測試的涵蓋依據。（2026-10-26：只有 MCP `filesystem` 的 `write_file`、`edit_file`、`create_directory`、`move_file`；`evidence/tr-inventory-and-stop.md` §1）
+- [x] **先調整既有測試為新契約**（實作前，記錄修改前的失敗證據）：（2026-10-26，HEAD 程式＋新測試 25 項失敗；`evidence/tr-summary.md` §3）
+  - 既有測試替身中依 runId 相等判定綁定的部分（例如 `order-branch.test.ts` 的 `MemoryConfirmations.consume`）改為 threadId 相等；其他綁定不得放寬。
+  - `order-branch.test.ts`「does not run a replayed approval again」維持既有斷言（`failed`、`CONFIRMATION_REPLAYED_OR_EXPIRED`、訂單系統只呼叫一次），並補上新契約的斷言：重放不呼叫 `consume`、記有 `authorization.confirmation.rejected` audit。不得刪除或放寬既有斷言。
+  - 既有「interrupt 與 resume 共用 `run-1`」的測試保留（作為「resume 的 run 等於原 run」的情境），新測試另用不同 run 識別。
+- [x] **補上不同 run 的測試**（interrupt 與 resume MUST 使用不同的 run 識別，模擬 Agent Server），`shopping_assistant` 與 `mcp_agent`（以 filesystem 的 `write_file` 代表，依第 1 項盤點）各一組，涵蓋：
+  - 由新 run 承載的核准只 dispatch 一次；
+  - 承載 resume 的 run 等於或不等於原 run，結果相同；
+  - 不同 thread 的 resume 回傳 `CONFIRMATION_BINDING_MISMATCH` 且不 consume、不 dispatch；
+  - manifest 非 `waiting` 時回傳 `CONFIRMATION_REPLAYED_OR_EXPIRED` 且不 consume、不 dispatch；
+  - 重放回傳 `CONFIRMATION_REPLAYED_OR_EXPIRED` typed failure（不是 run 錯誤）；
+  - 撤回後、由新 run 承載的核准被拒且不 dispatch（`mcp_agent` 沒有圖內撤回，以審批儲存的 `withdraw` 撤回後再 resume）；
+  - 逾期後、由新 run 承載的核准回傳 `CONFIRMATION_TIMEOUT` 且不 dispatch；
+  - principal 不在允許清單時被拒；
+  - 夾帶的 active-run hint 不影響結果；
+  - 核准與每一種拒絕（含節點層）的 audit 都帶 `waitingRunId` 與 `resumeRunId`，且不含 `approvalId`。
+  這些測試在實作前應失敗（至少「由新 run 承載的核准」必定回 `CONFIRMATION_BINDING_MISMATCH`），記錄為修改前證據。
+  （2026-10-26：情境對照見 `evidence/tr-summary.md` §6；HEAD 上 12 項 Postgres 整合全部失敗，新 run 核准回 `CONFIRMATION_BINDING_MISMATCH`）
+- [x] confirmation 節點（design §6.14 第 1 點，第 13 版）：既有 manifest 結構比對不符時維持拋錯；新增的 manifest 非 `waiting` 與 thread 不一致改為 typed failure（`CONFIRMATION_REPLAYED_OR_EXPIRED`／`CONFIRMATION_BINDING_MISMATCH`）並記 audit，不 consume、不 dispatch、不轉移 manifest；檢查在 `interrupt()` 之前；`confirmationOutcome` 沿用 `resolveConfirmationOutcome`。
+- [x] `consume` 綁定：移除「execution context 的 runId 等於審批描述的 runId」，改為 `threadId` 相等。SQL 單列 CAS 仍以審批描述的 runId 比對 `run_id`，這是等待中 Run 的資料庫層綁定，MUST NOT 移除或改為比對承載 resume 的 run；approvalId、decisionId、scope、tenant、resource tenant 與允許審批人的檢查不變。`authorization.confirmation.consumed`／`rejected` audit 新增 `waitingRunId` 與 `resumeRunId`，不作 metric label。撤回與天氣澄清 resume 的綁定不變。
+- [x] audit 接線（design §6.14 第 3 點，第 13 版）：`createToolAuthorizationGraphNodes` 新增選填 confirmation audit sink（未提供時 no-op）；production 組裝的 `PgAuthorizationConfirmationStore` 與 `mcp_agent`、`shopping_assistant` 的 confirmation 節點注入既有 `auditLogger`；節點層 audit 失敗不改變結果。以測試證明 production 組裝不再是 no-op。（2026-10-26：production 審批儲存以測試證明，修改前失敗；`mcp_agent` 節點的 production 注入只以原始碼與 tsc 核對，沒有執行期測試；`evidence/tr-summary.md` §7）
+- [x] 隔離的真實 Postgres 整合測試（需要 Docker，開始前先告知 Master；使用獨立 schema 或資料庫，測試後清除）：以 `PgAuthorizationConfirmationStore`、`PgInterruptManifestRepository` 與 `PostgresSaver` 跑一次「interrupt → 以不同 run 識別 resume → 核准 → dispatch 一次」，並驗證重放與跨 thread 為 typed failure；補上階段性 review m3 的 `mcp_agent` 審批路徑 Postgres 回歸（確認 T7 的 manifest 時間參數修正沒有引入回歸）。（2026-10-26：`confirmation-resume.integration.test.ts` 12 passed，隨機 schema 測試後 DROP；T8 同範圍＋TR 共 11 files、168 passed、0 skipped；另修正撤回 `updatedAt` 序列化缺陷，`evidence/tr-summary.md` §4–§5）
+- [x] 回歸：既有 confirmation、撤回、逾期、澄清 resume 測試與 `mcp_agent` tool message snapshot 全數通過。（2026-10-26：回歸 15 files、110 passed；完整測試 1998 passed，只有 2 個既有環境失敗，已在 HEAD 重現；`evidence/tr-summary.md` §4）
+
+驗證命令（整合測試需要 Docker 的 Postgres）：
+
+```bash
+cd backend
+npm run lint
+npm run test
+npm run build
+SIDE_EFFECT_INTEGRATION_DATABASE_URL=<本機 Postgres> npx vitest run <TR 新增與受影響的 integration test>
+```
+
 ## T9 BFF 透傳證明（先證明，再宣稱無變更）
 
-> 前置：T0、T1。T6 的前端串接與 T10 依賴本 Task 結論。對應 design §12。「BFF 無變更」是未驗證的假設。
+> 前置：T0、T1；第 2 項另需 TR。T6 的前端串接與 T10 依賴本 Task 結論。對應 design §12、§6.14。
+>
+> 停止條件：傳輸證明失敗，或需要 TS 以外的 bff 正式程式碼或 `package.json` 修改時，停止並回報 CCR，退回 PLAN_DRAFT 補 BFF delta，不得直接修改。審批綁定屬 backend，由 TR 處理（第 12 版，S9）。
 
-- [ ] 在 bff 既有測試目錄新增測試檔（以既有 vitest／node test 入口執行；BFF 正式程式只有 TS 的變更），證明：經 BFF 的 tool 審批 resume 與 `cancel` 輸入能延續原 run（active run 識別）並通過審批綁定；`shopping_assistant` 串流透傳，含 backend 新增的 `card.emit` 事件原樣到達前端；client 注入的身分 header 被 strip；取消與斷線透傳不變。
-- [ ] 證明失敗，或需要 TS 以外的 bff 正式程式碼或 `package.json` 修改：停止並回報 CCR，退回 PLAN_DRAFT 補 BFF delta，不得直接修改。
+- [x] 在 bff 既有測試目錄新增測試檔（以既有 vitest／node test 入口執行；BFF 正式程式只有 TS 的變更），證明 BFF 的傳輸行為：tool 審批 resume 與 `cancel` 輸入的本文及 active-run header 原樣送到原 thread；`shopping_assistant` 串流透傳，含 backend 新增的 `card.emit` 事件原樣到達前端；client 注入的身分 header 被 strip；取消與斷線透傳不變。（2026-10-25，`bff/test/shopping-passthrough.test.mjs`，commit `9154377`；`evidence/t9-summary.md`）
+- [ ] TR 全部完成後（第 13 版，Master 指示：在隔離 Postgres integration 之後最後執行），經 BFF 與真實 Agent Server（含 Postgres 的審批儲存與 checkpointer）執行一次審批 resume smoke：核准由新 run 承載、通過綁定，且訂單系統只被呼叫一次；同時確認 update chunk 帶有 `runtimeEvents`（design §8.1）。記錄為 live／integration，與 deterministic 分開。需要 Docker。
 - [x] 以 Git Diff 確認 bff 正式程式只有 TS 的變更，其餘為新增測試檔。
-
-> 進度註記（2026-10-25）：第 1 項的 BFF 透傳部分已由 `bff/test/shopping-passthrough.test.mjs` 證明（`card.emit` 逐位元組透傳、resume 與 `cancel` 的本文及 active-run header 原樣轉送到原 thread、身分 header strip、斷線中止上游與取消透傳）；但「通過審批綁定」在 backend 不成立（S9：經 LangGraph API 的 resume 一定是新 run，`consume` 要求原 runId），因此第 1 項不勾，第 2 項的停止條件已觸發並回報 Master，待決策。
 
 驗證命令：
 
@@ -260,7 +305,7 @@ npm run test
 
 ## T10 Frontend：卡片、審批與狀態
 
-> 前置：T0、T6、T9。對應 `order-operation-status-surface` 全部 Requirement。
+> 前置：T0、T6、TR、T9。對應 `order-operation-status-surface` 全部 Requirement。
 
 - [ ] agent 清單新增 `shopping_assistant`（`showActivityTimeline: true`，design §8.1、§11）；`OrderOperationState` Transport Enum 與 card payload 以 runtime validation 解析；卡片從既有事件處理路徑取得 payload，不另建傳輸。
 - [ ] `ProductResultCard`、`OperationApprovalCard`（核准／拒絕經 resume 並帶原 run 識別；取消申請經既有 `cancel` 輸入；顯示 server 提供的期限；送出期間防重複；resume 失敗顯示 typed 錯誤）、`OperationStatusCard`（全部狀態的繁中標籤與說明；標註 mock）。
@@ -324,7 +369,7 @@ npm run build
 
 ## T13 完整回歸與完成回報
 
-> 前置：TH、TS、T1–T11（含 T2a、T2b）、TB1、T12（若觸發）。
+> 前置：TH、TS、TR、T1–T11（含 T2a、T2b）、TB1、T12（若觸發）。
 
 - [ ] backend、frontend 全部驗證命令通過；bff build 與 test 通過；以 Git Diff 確認無無關修改。
 - [ ] Non-Waivable Invariants 1、2、5、6、8、9、10、11 逐條附證據；repository-wide 檢查應用程式碼無模型名稱條件判斷。
