@@ -9,6 +9,7 @@ import {
   readExecutionContext,
   withExecutionContext,
 } from "../execution-context/read-execution-context.js";
+import { createToolDispatchStepId } from "../execution-context/tool-call-context.js";
 import type { GovernedToolOutcome } from "../side-effect/governed-outcome.js";
 import {
   createConfirmationInterruptId,
@@ -155,13 +156,27 @@ function toolMessage(
 
 function executionConfig(
   config: RunnableConfig,
-  call: AuthorizationGraphToolCall
+  call: AuthorizationGraphToolCall,
+  options: { dispatchStep?: boolean } = {}
 ): RunnableConfig {
   const context = readExecutionContext(undefined, config, "production");
   const compatibleConfig: Record<string, unknown> = { ...config };
+  // Only dispatch gets a step: the gate leaves it unset so the approval and its
+  // manifest never point at a step the dispatch has not created (design §6.16).
   const enriched = withExecutionContext(compatibleConfig, {
     ...context,
     toolCallId: call.toolCallId,
+    ...(options.dispatchStep
+      ? {
+          stepId: createToolDispatchStepId({
+            taskId: context.taskId,
+            nodeName: "physical_dispatch",
+            toolName: call.toolName,
+            toolCallId: call.toolCallId,
+            input: call.input,
+          }),
+        }
+      : {}),
   });
   if (
     enriched.configurable === null ||
@@ -384,7 +399,7 @@ export function createToolAuthorizationGraphNodes(
     }
     const outcome = await executor.executeAuthorizedTyped(
       call.input,
-      executionConfig(config, call),
+      executionConfig(config, call, { dispatchStep: true }),
       call.authorizationDecisionId === undefined
         ? undefined
         : { decisionId: call.authorizationDecisionId }

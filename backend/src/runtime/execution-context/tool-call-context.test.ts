@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createToolCallContext } from "./tool-call-context.js";
+import { createToolCallContext, createToolDispatchStepId } from "./tool-call-context.js";
 import { readCanonicalExecutionContext, readExecutionContext, withExecutionContext } from "./read-execution-context.js";
 
 const parent = readExecutionContext(null, { configurable: {
@@ -23,6 +23,16 @@ describe("canonical tool child context", () => {
     expect(next.toolCallId).not.toBe(first.toolCallId);
     const otherTask = createToolCallContext(withExecutionContext({}, { ...parent, taskId: "task-2" }), "search_web", "web_search", { query: "news" });
     expect(otherTask.toolCallId).not.toBe(first.toolCallId);
+  });
+
+  it("derives a stable dispatch step that separates tool calls with the same input", () => {
+    const call = { taskId: "task-1", nodeName: "physical_dispatch", toolName: "order_refund_request", toolCallId: "call-1", input: { orderId: "ORD-1001" } };
+    const step = createToolDispatchStepId(call);
+    expect(step).toMatch(/^step-[0-9a-f]{64}$/);
+    expect(createToolDispatchStepId({ ...call, input: { orderId: "ORD-1001" } })).toBe(step);
+    expect(createToolDispatchStepId({ ...call, toolCallId: "call-2" })).not.toBe(step);
+    expect(createToolDispatchStepId({ ...call, taskId: "task-2" })).not.toBe(step);
+    expect(createToolDispatchStepId({ ...call, input: { orderId: "ORD-1002" } })).not.toBe(step);
   });
 
   it("preserves UUID shape for bounded legacy callers without canonical context", () => {
