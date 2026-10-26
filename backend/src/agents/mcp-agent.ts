@@ -23,9 +23,12 @@ import {
   type AuthorizationGraphState,
 } from "../runtime/authorization/confirmation-graph.js";
 import {
+  readCanonicalExecutionContext,
   readDevelopmentExecutionContext,
   readExecutionContext,
 } from "../runtime/execution-context/read-execution-context.js";
+import { createGraphEntryContextResolver } from "../runtime/execution-context/graph-entry.js";
+import { PgGraphTaskAdmission } from "../runtime/execution-context/graph-task-admission.js";
 import { instrumentGraphWithExecutionContext } from "../runtime/execution-context/instrument-graph.js";
 import { getRuntimeIdentityStatusInstrumentation } from "../runtime/authorization/identity-status-composition.js";
 import { normalizeAiMessageForStream } from "./message-normalization.js";
@@ -63,6 +66,14 @@ const authorizationNodes = createToolAuthorizationGraphNodes({
 
 const McpAgentAnnotation = Annotation.Root({
   ...MessagesAnnotation.spec,
+  /**
+   * Task admitted at the graph entry; a resume reattaches to it (design §6.15).
+   * call_model overwrites any value a run input carries.
+   */
+  executionTaskId: Annotation<string | undefined>({
+    reducer: (_left, right) => right,
+    default: () => undefined,
+  }),
   toolQueue: Annotation<AuthorizationGraphState["toolQueue"]>({
     reducer: (_left, right) => right,
     default: () => [],
@@ -90,6 +101,7 @@ async function callModel(
   state: typeof McpAgentAnnotation.State,
   config: RunnableConfig
 ): Promise<typeof McpAgentAnnotation.Update> {
+  const executionTaskId = readCanonicalExecutionContext(config)?.taskId;
   try {
     const modelInput = isContextAssemblyEnabled("mcp")
       ? (await assembleMcpMessageContext({
@@ -107,10 +119,10 @@ async function callModel(
       throw new Error("The selected model does not support bindTools.");
     }
     const response = await llm.bindTools(tools).invoke(modelInput);
-    return { messages: [normalizeAiMessageForStream(response)] };
+    return { executionTaskId, messages: [normalizeAiMessageForStream(response)] };
   } catch (error) {
     if (!isContextHardLimitError(error)) throw error;
-    return { messages: [contextHardLimitErrorMessage(error, config)] };
+    return { executionTaskId, messages: [contextHardLimitErrorMessage(error, config)] };
   }
 }
 
@@ -162,11 +174,17 @@ function resolveMcpExecutionContext(input: unknown, config: unknown) {
     : readExecutionContext(input, config, "production");
 }
 
+const compiledMcpAgentGraph = builder.compile();
+
 export const mcpAgentGraph = instrumentGraphWithExecutionContext(
   applyInteractionGovernance(
-    instrumentGraphWithOpik(builder.compile(), "mcp_agent"),
+    instrumentGraphWithOpik(compiledMcpAgentGraph, "mcp_agent"),
     productionInteractionOrchestrator
   ),
-  resolveMcpExecutionContext,
+  createGraphEntryContextResolver(
+    compiledMcpAgentGraph,
+    new PgGraphTaskAdmission(),
+    resolveMcpExecutionContext,
+  ),
   getRuntimeIdentityStatusInstrumentation(),
 );
