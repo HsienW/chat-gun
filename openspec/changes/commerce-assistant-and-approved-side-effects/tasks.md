@@ -341,11 +341,13 @@ npm run test
 
 > 前置：T0、T6、TR、T9。對應 `order-operation-status-surface` 全部 Requirement。
 
-- [ ] agent 清單新增 `shopping_assistant`（`showActivityTimeline: true`，design §8.1、§11）；`OrderOperationState` Transport Enum 與 card payload 以 runtime validation 解析；卡片從既有事件處理路徑取得 payload，不另建傳輸。
-- [ ] `ProductResultCard`、`OperationApprovalCard`（核准／拒絕經 resume 並帶原 run 識別；取消申請經既有 `cancel` 輸入；顯示 server 提供的期限；送出期間防重複；resume 失敗顯示 typed 錯誤）、`OperationStatusCard`（全部狀態的繁中標籤與說明；標註 mock）。
-- [ ] 狀態 reducer 以 `(operationRef.toolCallId, stateVersion)` 單調前進；terminal 後忽略非 terminal；未知 card、未知 schema 版本、未知狀態值安全降級且不中斷串流。
-- [ ] 期限已過但未收到 server 逾期事件時只顯示提示，不改變狀態。
-- [ ] 測試：全部狀態可區分；requested／approved 不顯示為已確認；亂序與重複事件；連續點擊只送一次；重新載入後等待審批仍可操作；期限已過不自行改為逾期；confirmed 與 executing 卡片無撤銷、復原或取消控制項；未知 card 降級。
+- [x] agent 清單新增 `shopping_assistant`（`showActivityTimeline: true`，design §8.1、§11）；`OrderOperationState` Transport Enum 與 card payload 以 runtime validation 解析；卡片從既有事件處理路徑取得 payload，不另建傳輸。
+- [x] `ProductResultCard`、`OperationApprovalCard`（核准／拒絕經 resume 並帶原 run 識別；取消申請經既有 `cancel` 輸入；顯示 server 提供的期限；送出期間防重複；resume 失敗顯示 typed 錯誤）、`OperationStatusCard`（全部狀態的繁中標籤與說明；標註 mock）。
+- [x] 狀態 reducer 以 `(operationRef.toolCallId, stateVersion)` 單調前進；terminal 後忽略非 terminal；未知 card、未知 schema 版本、未知狀態值安全降級且不中斷串流。
+- [x] 期限已過但未收到 server 逾期事件時只顯示提示，不改變狀態。
+- [x] 測試：全部狀態可區分；requested／approved 不顯示為已確認；亂序與重複事件；連續點擊只送一次；重新載入後等待審批仍可操作；期限已過不自行改為逾期；confirmed 與 executing 卡片無撤銷、復原或取消控制項；未知 card 降級。
+
+> 2026-10-26 實作紀錄（`evidence/t10-summary.md`）：第 1、3、4 項完成並驗證（frontend lint／test／build 通過）。第 2 項依 Master 2026-10-26 裁定勾選：前端已知 active-run hint 時才帶、未知不帶，最終結果以服務端為更高優先的事實來源（審批綁定依 design §6.14 由伺服器端等待中 run 決定；卡片狀態只依後端事件與 thread state）；design §11 的文字待協調者同步。第 5 項依 Master 2026-10-26 裁定勾選：「重新載入後等待審批仍可操作」的驗收範圍為「同一 thread 從 server 狀態重建」（已測試）；瀏覽器重新整理回到原對話依賴待辦 A（server 端 thread 擁有者檢查）＋B（前端 `/chat/<threadId>` 路由），另行處理。
 
 驗證命令：
 
