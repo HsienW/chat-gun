@@ -8,10 +8,6 @@ import { auditLogger } from "../../platform/observability.js";
 import { instrumentGraphWithOpik } from "../../platform/tracing/opik/opik-graph.js";
 import { getRuntimeIdentityStatusInstrumentation } from "../../runtime/authorization/identity-status-composition.js";
 import { instrumentGraphWithExecutionContext } from "../../runtime/execution-context/instrument-graph.js";
-import {
-  readDevelopmentExecutionContext,
-  readExecutionContext,
-} from "../../runtime/execution-context/read-execution-context.js";
 import { getPool } from "../../runtime/persistence/connection.js";
 import { PgInterruptManifestRepository } from "../../runtime/recovery/interrupt-manifest-repository.js";
 import { MockOrderProvider } from "../../tools/orders/mock-order-provider.js";
@@ -19,6 +15,7 @@ import type { OrderOperationStatusReader } from "../../tools/orders/order-tools.
 import { loadSyntheticOrderFixture } from "../../tools/orders/synthetic-orders.js";
 import { loadShoppingAssistantToolRuntime } from "../../tools/registry.js";
 import { createDispatchReadinessCheck } from "./dispatch-readiness.js";
+import { createShoppingAssistantEntryResolver } from "./entry.js";
 import { createShoppingAssistantGraph, SHOPPING_ASSISTANT_GRAPH_ID } from "./graph.js";
 import { LlmShoppingIntentRouter } from "./intent-router.js";
 import { PgOrderOperationRequestStore, unavailableOrderOperationRequestStore } from "./operation-requests.js";
@@ -107,12 +104,6 @@ const graph = createShoppingAssistantGraph({
   audit: (eventName, payload, context) => auditLogger.record(eventName, payload, context),
 });
 
-function resolveShoppingExecutionContext(input: unknown, config: unknown) {
-  return getEnv("TOOL_AUTHORIZATION_PROFILE", "production") === "development"
-    ? readDevelopmentExecutionContext(input, config)
-    : readExecutionContext(input, config, "production");
-}
-
 const confirmationManifests = pool ? new PgInterruptManifestRepository(pool) : undefined;
 
 /**
@@ -134,6 +125,6 @@ export const shoppingAssistantGraph = instrumentGraphWithExecutionContext(
     instrumentGraphWithOpik(graph, SHOPPING_ASSISTANT_GRAPH_ID),
     interactionOrchestrator
   ),
-  resolveShoppingExecutionContext,
+  createShoppingAssistantEntryResolver(graph),
   getRuntimeIdentityStatusInstrumentation(),
 );

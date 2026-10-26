@@ -24,7 +24,10 @@ import { ToolRiskRegistry } from "../../runtime/authorization/tool-risk.js";
 import type { CompensationRegistry } from "../../runtime/compensation/compensation-registry.js";
 import type { SagaOrchestrator } from "../../runtime/compensation/saga-orchestrator.js";
 import { parseRuntimeEventEnvelope } from "../../runtime/event-envelope.js";
+import type { ExecutionContext } from "../../runtime/execution-context/execution-context.js";
+import { instrumentGraphWithExecutionContext } from "../../runtime/execution-context/instrument-graph.js";
 import { readCanonicalExecutionContext } from "../../runtime/execution-context/read-execution-context.js";
+import { createToolDispatchStepId } from "../../runtime/execution-context/tool-call-context.js";
 import { NoopStepLock } from "../../runtime/lock/step-lock.js";
 import type { DurableInterruptManifest } from "../../runtime/recovery/interrupt-manifest.js";
 import type { InterruptManifestRepository } from "../../runtime/recovery/interrupt-manifest-repository.js";
@@ -39,6 +42,7 @@ import { MockOrderProvider } from "../../tools/orders/mock-order-provider.js";
 import { createOrderToolRiskPolicies, createOrderToolSet } from "../../tools/orders/order-tools.js";
 import { loadSyntheticOrderFixture } from "../../tools/orders/synthetic-orders.js";
 import { createDispatchReadinessCheck } from "./dispatch-readiness.js";
+import { createShoppingAssistantEntryResolver } from "./entry.js";
 import { createShoppingAssistantGraph, type ShoppingAssistantGraphDependencies } from "./graph.js";
 import type { OrderOperationRequest } from "./operation-requests.js";
 import { readOrderToolResult, settleOperation, requestOperation } from "./order-operations.js";
@@ -1006,6 +1010,131 @@ describe("shopping order request golden cases", () => {
       for (const call of entry.expectedToolCalls) {
         expect(Object.keys(call.args).some((key) => /approv|principal|tenant|scope/iu.test(key))).toBe(false);
       }
+    }
+  });
+});
+
+describe("approved dispatch without a client step (S11)", () => {
+  function configWithoutStep(threadId: string, runId: string) {
+    const { stepId: _omitted, ...context } = contextFor(threadId, runId);
+    return { configurable: { thread_id: threadId, execution_context: context } };
+  }
+
+  it("derives the dispatch step from the task and the model's tool call", async () => {
+    const h = await harness({ toolCalls: [refund("call-1")] });
+    await h.graph.invoke({ messages: [new HumanMessage("退款")] }, configWithoutStep("thread-no-step", "run-1"));
+    const descriptor = (await waitingState(h.graph, "thread-no-step")).pendingAuthorization!;
+    expect(descriptor.stepId).toBeUndefined();
+    expect([...h.manifests.manifests.values()][0]?.stepId).toBeUndefined();
+
+    const state = await h.graph.invoke(resume(descriptor, "approve"), configWithoutStep("thread-no-step", "resume-run"));
+
+    expect(h.submitRefund).toHaveBeenCalledOnce();
+    expect(state.operations["call-1"]).toMatchObject({ state: "confirmed" });
+    const dispatched = h.runnerInputs[0]?.executionContext;
+    expect(dispatched?.toolCallId).toBe("call-1");
+    expect(dispatched?.stepId).toBe(createToolDispatchStepId({
+      taskId: dispatched?.taskId ?? "",
+      nodeName: "physical_dispatch",
+      toolName: "order_refund_request",
+      toolCallId: "call-1",
+      input: { orderId: "ORD-1001", reasonCode: "damaged" },
+    }));
+  });
+});
+
+describe("shopping graph entry task (S10)", () => {
+  const AUTHENTICATED_AT = "2026-10-25T00:00:00.000Z";
+
+  function headers(threadId: string, runId: string, principalId = SHOPPER) {
+    return {
+      configurable: {
+        thread_id: threadId, run_id: runId, "x-request-id": `request-${runId}`,
+        "x-bff-principal-id": principalId, "x-bff-principal-type": "user",
+        "x-bff-tenant-id": TENANT, "x-bff-roles": "shopper", "x-bff-scopes": "orders:write",
+        "x-bff-auth-source": "trusted_gateway", "x-bff-authenticated-at": AUTHENTICATED_AT,
+        "x-bff-scope-id": TENANT, "x-bff-scope-type": "tenant",
+      },
+    };
+  }
+
+  /** Mirrors PgGraphTaskAdmission: a resume must match the admitted task's binding. */
+  function memoryAdmission() {
+    const tasks = new Map<string, { threadId: string; principalId: string; tenantId: string; scopeId: string }>();
+    const admit = vi.fn(async (context: ExecutionContext, resumeTaskId?: string) => {
+      const binding = {
+        threadId: context.threadId, principalId: context.principal.principalId,
+        tenantId: context.principal.tenantId, scopeId: context.scope.scopeId,
+      };
+      if (resumeTaskId === undefined) {
+        tasks.set(context.taskId, binding);
+        return context.taskId;
+      }
+      const owner = tasks.get(resumeTaskId);
+      if (!owner) throw new Error("Graph resume task unavailable");
+      if (JSON.stringify(owner) !== JSON.stringify(binding)) throw new Error("Graph task admission binding mismatch");
+      return resumeTaskId;
+    });
+    return { admit, tasks };
+  }
+
+  async function enteredHarness() {
+    const h = await harness({ toolCalls: [refund("call-1")] });
+    const admission = memoryAdmission();
+    const entry = instrumentGraphWithExecutionContext(h.graph, createShoppingAssistantEntryResolver(h.graph, admission));
+    return { h, admission, entry };
+  }
+
+  it("admits a task for trusted headers without a task id and reattaches the resume to it", async () => {
+    const { h, admission, entry } = await enteredHarness();
+    await entry.invoke({ messages: [new HumanMessage("退款")] }, headers("thread-entry", "run-1"));
+    const waiting = await waitingState(h.graph, "thread-entry");
+    const taskId = waiting.executionTaskId!;
+    expect(admission.tasks.has(taskId)).toBe(true);
+    expect(waiting.pendingAuthorization).toMatchObject({ taskId, runId: "run-1" });
+
+    await entry.invoke(resume(waiting.pendingAuthorization!, "approve"), headers("thread-entry", "resume-run"));
+
+    expect(admission.admit).toHaveBeenLastCalledWith(expect.objectContaining({ runId: "resume-run" }), taskId);
+    expect(h.submitRefund).toHaveBeenCalledOnce();
+    expect(h.runnerInputs[0]?.executionContext).toMatchObject({ taskId, runId: "resume-run", toolCallId: "call-1" });
+    expect(h.runnerInputs[0]?.executionContext?.stepId).toMatch(/^step-[0-9a-f]{64}$/);
+  });
+
+  it("rejects a resume by another principal before the graph runs", async () => {
+    const { h, entry } = await enteredHarness();
+    await entry.invoke({ messages: [new HumanMessage("退款")] }, headers("thread-entry-principal", "run-1"));
+    const descriptor = (await waitingState(h.graph, "thread-entry-principal")).pendingAuthorization!;
+
+    await expect(entry.invoke(resume(descriptor, "approve"), headers("thread-entry-principal", "resume-run", "intruder")))
+      .rejects.toThrow("binding mismatch");
+    expect(h.submitRefund).not.toHaveBeenCalled();
+  });
+
+  it("keeps the admitted task when a run input carries one or a cancel arrives", async () => {
+    const { h, entry } = await enteredHarness();
+    await entry.invoke(
+      { messages: [new HumanMessage("退款")], executionTaskId: "forged" } as never,
+      headers("thread-entry-input", "run-1"),
+    );
+    const taskId = (await waitingState(h.graph, "thread-entry-input")).executionTaskId;
+    expect(taskId).toBeDefined();
+    expect(taskId).not.toBe("forged");
+
+    await entry.invoke({ kind: "cancel", targetRunId: "run-1" }, headers("thread-entry-input", "run-2"));
+    expect((await waitingState(h.graph, "thread-entry-input")).executionTaskId).toBe(taskId);
+  });
+
+  it("keeps the development profile reading the development identity", async () => {
+    vi.stubEnv("TOOL_AUTHORIZATION_PROFILE", "development");
+    try {
+      const admission = memoryAdmission();
+      const graph = { getState: vi.fn(async () => ({ values: {} })) };
+      const context = await createShoppingAssistantEntryResolver(graph, admission)({}, headers("thread-dev", "run-1"));
+      expect(context.principal.principalId).toBe("anonymous");
+      expect(admission.tasks.has(context.taskId)).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 });

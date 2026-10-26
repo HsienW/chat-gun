@@ -169,6 +169,11 @@ export const ShoppingAssistantStateAnnotation = Annotation.Root({
     reducer: (_left, right) => right,
     default: () => undefined,
   }),
+  /** Task admitted at the graph entry; a resume reattaches to it (design §6.15). */
+  executionTaskId: Annotation<string | undefined>({
+    reducer: (_left, right) => right,
+    default: () => undefined,
+  }),
   turn: Annotation<ShoppingTurn | null>({
     reducer: (_left, right) => right,
     default: () => null,

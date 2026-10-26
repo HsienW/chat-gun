@@ -211,7 +211,12 @@ export function createShoppingAssistantGraph(
       readCanonicalExecutionContext(config)
     ).catch(() => undefined);
     // Each turn starts without evidence so citations never leak across turns.
-    return { turn, turnEvidence: null, runtimeEvents: [] };
+    return {
+      executionTaskId: readCanonicalExecutionContext(config)?.taskId,
+      turn,
+      turnEvidence: null,
+      runtimeEvents: [],
+    };
   }
 
   function routeAfterIntent(
