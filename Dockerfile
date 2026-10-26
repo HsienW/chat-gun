@@ -8,6 +8,8 @@ COPY frontend/package-lock.json ./
 RUN npm install
 
 COPY frontend/ ./
+# Type-checked frontend tests import the shared contract fixtures.
+COPY contracts/ /app/contracts/
 RUN npm run build
 
 # Stage 2: LangGraph agent runtime.
@@ -22,7 +24,9 @@ WORKDIR /deps/backend
 
 RUN npm ci --include=dev && npm prune --omit=dev
 
-ENV LANGSERVE_GRAPHS='{"deep_researcher": "/deps/backend/src/agents/deep-researcher.ts:deepResearcherGraph", "chatbot": "/deps/backend/src/agents/chatbot.ts:chatbotGraph", "mcp_agent": "/deps/backend/src/agents/mcp-agent.ts:mcpAgentGraph", "math_agent": "/deps/backend/src/agents/math-agent.ts:mathAgentGraph"}'
+ENV LANGSERVE_GRAPHS='{"deep_researcher": "/deps/backend/src/agents/deep-researcher.ts:deepResearcherGraph", "chatbot": "/deps/backend/src/agents/chatbot.ts:chatbotGraph", "mcp_agent": "/deps/backend/src/agents/mcp-agent.ts:mcpAgentGraph", "math_agent": "/deps/backend/src/agents/math-agent.ts:mathAgentGraph", "shopping_assistant": "/deps/backend/src/agents/shopping-assistant/production.ts:shoppingAssistantGraph"}'
+# Mirrors backend/langgraph.json "http", as `langgraph build` would emit it.
+ENV LANGGRAPH_HTTP='{"app": "/deps/backend/src/operations/http-app.ts:operationsHttpApp", "configurable_headers": {"includes": ["x-request-id", "x-idempotency-key", "x-active-run-id", "x-active-run-generation", "x-bff-principal-id", "x-bff-principal-type", "x-bff-principal-kind", "x-bff-account-id", "x-bff-session-id", "x-bff-device-id", "x-bff-tenant-id", "x-bff-roles", "x-bff-scopes", "x-bff-auth-source", "x-bff-authenticated-at", "x-bff-scope-id", "x-bff-scope-type"]}}'
 
 ENV MCP_FILESYSTEM_ENABLED=true
 ENV MCP_FILESYSTEM_PATH=/app/workspace
