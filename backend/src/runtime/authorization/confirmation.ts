@@ -457,7 +457,7 @@ export class PgAuthorizationConfirmationStore
                    '{status}',
                    to_jsonb(CASE WHEN changed.outcome = 'expired' THEN 'expired' ELSE 'superseded' END)
                  ),
-                 '{updatedAt}', to_jsonb($3::text)
+                 '{updatedAt}', to_jsonb($9::text)
                ),
                updated_at = $3
            FROM changed
@@ -474,6 +474,7 @@ export class PgAuthorizationConfirmationStore
           descriptor.scope.scopeType,
           input.executionContext.principal.principalId,
           interruptId,
+          now,
         ]
       );
       const changed = result.rows[0];
