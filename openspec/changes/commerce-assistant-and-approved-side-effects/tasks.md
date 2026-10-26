@@ -285,14 +285,48 @@ npm run build
 SIDE_EFFECT_INTEGRATION_DATABASE_URL=<本機 Postgres> npx vitest run <TR 新增與受影響的 integration test>
 ```
 
+## TE Graph 入口登記 task、resume 接回原 task，核准後 dispatch 以確定性 stepId 執行（第 14 版 S10；第 15 版 S11）
+
+> 前置：TR。對應以下 Requirement：
+> - `durable-hitl-conversation-recovery`「resume 只回到預期 waiting Task 且最多消費一次」（MODIFIED，Scenario「resume 回到預期 Task」：MUST resume 到原 Task、MUST NOT 另建新 Task）
+> - `approved-order-operations`「訂單變更只在 durable 人工審批後執行」
+>
+> 依據 design §6.15 與 §6.16。沿用 `deep_researcher` 的 graph 入口機制（`createGraphEntryContextResolver`、`PgGraphTaskAdmission`），`shopping_assistant` 與 `mcp_agent` 都修正（Master 2026-10-26 決策：mcp_agent 納入，用相同做法）；共用 `physicalDispatch` 以 `createToolCallContext` 的確定性摘要產生 `stepId`，gate 不設定（第 15 版，Master 決策：方案 A，mcp_agent 一併適用）。不新增資料表或 migration，不改 BFF、harness、pipeline、task-step adapter 與 §6.14 的審批綁定。寫入範圍只需 `backend/src/`。
+>
+> 停止條件：外鍵（`interrupt_manifests.step_id` → `task_steps`）在真實入口路徑下不成立、需要 §6.16 以外的 step 建立點、需要 migration，或需要修改 `backend/src/` 以外的檔案時，停止並回報 Master，不得以預先插入資料、放寬外鍵或另造 task 登記方式處理。
+
+- [x] 實作前唯讀盤點並記入 evidence：(1) shopping 與 `mcp_agent` 審批路徑上 `stepId` 的來源，以及寫入 `interrupt_manifests` 前是否已有對應的 `task_steps`；(2) `createGraphEntryContextResolver` 與 `resolveShoppingExecutionContext`、`resolveMcpExecutionContext` 在開發路徑上的差異；(3) 兩個 graph 的既有測試中預先帶入 `taskId` 或預先插入 `agent_tasks`／`task_steps` 的位置。（2026-10-26，`evidence/te-inventory-and-stop.md`：審批 interrupt 前的寫入在 `stepId` 為空時可成立，外鍵不是問題；但核准後的 dispatch 要求 `stepId`，production 沒有任何地方提供，觸發停止條件，待 Master 決定）
+- [x] **先寫失敗測試**（記錄修改前的失敗證據）：不帶 `taskId` 的 trusted header 經 shopping 與 `mcp_agent` 入口時，修改前 MUST 以缺 `taskId` 失敗；修改後 MUST 登記一筆 `graph_execution` task 且 execution context 帶該 taskId。另寫 S11 的失敗測試：context 不帶 `stepId` 時，經 pipeline 核准的 shopping 訂單 tool 修改前 MUST 以 `TOOL_EXECUTION_CONTEXT_UNAVAILABLE` 被拒、訂單 provider 不被呼叫。（2026-10-26，`evidence/te-summary.md` §2：S10 的修改前證據為 live 實測〔shopping 與 `mcp_agent` 入口皆缺 `taskId`〕，新入口測試依賴新 API、在 HEAD 只會載入失敗；S11 以 HEAD 匯出加測試變體重現，核准後訂單 provider 呼叫 0 次）
+- [x] `createGraphEntryContextResolver` 新增選填的 context reader 參數，未提供時維持現行判斷；以測試證明 `deep_researcher` 的入口行為不變。（既有 7 項入口測試不變，新增 1 項）
+- [x] `shopping_assistant` 入口改用 `createGraphEntryContextResolver(已編譯的 graph, new PgGraphTaskAdmission())`，context reader 沿用 `TOOL_AUTHORIZATION_PROFILE` 的判斷；入口登記失敗時請求 fail-closed。
+- [x] shopping state 新增 `executionTaskId`（design §4.2）：由 `route_intent` 每輪開始寫入；不加入輸入 schema；cancel 輸入不覆寫。測試涵蓋：run 輸入夾帶 `executionTaskId` 不影響 state、cancel 不覆寫。
+- [x] resume 測試：由新 run 承載的 resume 取得與等待中相同的 taskId；thread、principal、tenant 或 scope 不一致時拒絕；checkpoint 缺 `executionTaskId` 時 fail-closed；`TOOL_AUTHORIZATION_PROFILE=development` 的行為與修改前相同。（2026-10-26：新 run 接回原 task、不同 principal 被拒、開發路徑以 shopping 與 `mcp_agent` 測試證明；thread 與 scope 不一致由既有 `graph-task-admission.test.ts` 涵蓋，thread 另在真實 Postgres 上觸發；tenant 不一致由 `PgGraphTaskAdmission` 的綁定比對處理，沒有獨立測試；缺 `executionTaskId` 由既有 `graph-entry.test.ts` 涵蓋，未另寫 graph 專屬案例；`evidence/te-summary.md` §3、§6）
+- [x] `mcp_agent`（design §6.15 第 6 點）：入口改用 `createGraphEntryContextResolver(已編譯的 graph, new PgGraphTaskAdmission())`，context reader 沿用 `resolveMcpExecutionContext` 的判斷；state 新增 `executionTaskId`，由 `call_model` 寫入。測試涵蓋：新輸入登記 task、run 輸入夾帶的 `executionTaskId` 在進入審批前被覆寫、由新 run 承載的 resume 接回原 task、跨 thread 或不同 principal 的 resume 被拒、開發路徑行為不變。
+- [x] 確定性 `stepId`（design §6.16）：`tool-call-context.ts` 新增輔助函式，以與 `createToolCallContext` 相同的 `createRawInputReference` 摘要 `{ taskId, nodeName: "physical_dispatch", toolName, toolCallId, input }` 產生 `step-<digest>`；`createToolCallContext` 本身不修改。共用 `physicalDispatch` 在 dispatch 前寫入此 `stepId`，`toolCallId` 維持 `call.toolCallId`；gate 不設定 `stepId`；context 缺 taskId 時 fail-closed，不產生隨機識別。測試涵蓋：同一 task／tool call／輸入得到相同 `stepId`；輸入相同但 `toolCallId` 不同得到不同 `stepId`；`toolCallId` 不被覆寫；審批紀錄與 manifest 的 `step_id` 為 null；`createToolCallContext` 與 `deep_researcher` 既有測試不變。
+- [x] 隔離的真實 Postgres 整合測試（使用獨立 schema，測試後清除）：以 `PgGraphTaskAdmission`、`PostgresSaver`、`PgAuthorizationConfirmationStore` 與 `PgInterruptManifestRepository` 跑「入口登記 → 審批 interrupt → 新 run 承載 resume → dispatch 一次」，`shopping_assistant` 與 `mcp_agent`（以 filesystem 的 `write_file` 代表）各一組，**不預先插入** `agent_tasks`／`task_steps`、context **不帶** `stepId`，同時驗證 manifest 外鍵與 taskId 一致。shopping 經真實 pipeline 與 task-step adapter：dispatch 時建立對應 `task_steps`、訂單 provider 只被呼叫一次、重放不再 dispatch。`mcp_agent` 在 `TOOL_DISPATCH_PIPELINE_MCP_ENABLED` 開啟與關閉兩種情況下，核准後都 dispatch 一次。（2026-10-26，`graph-entry.integration.test.ts` 3 passed；shopping 走 production `loadShoppingAssistantToolRuntime`；step lock 以 `REDIS_URI=""` 使用 `NoopStepLock`，Redis lock 未驗證；`evidence/te-summary.md` §3、§6）
+- [x] 回歸：TR 的測試與整合測試、既有 shopping、`mcp_agent`、confirmation、撤回、逾期、澄清 resume、dispatch pipeline、`createToolCallContext` 與 `deep_researcher` 入口測試全數通過；lint、test、build 通過。（2026-10-26：lint、build 通過；整合與回歸 38 files、359 passed、0 skipped；完整測試 2009 passed，只有 2 個既有環境失敗；並行執行時曾出現的計時逾時在單獨重跑時通過，`evidence/te-summary.md` §4）
+- [x] live 確認：重建 image 後，經 BFF 對 `mcp_agent` 送出一次請求，確認不再於入口失敗（對照 `evidence/s10-mcp-agent-probe.json`）；shopping 的 live 驗證由 T9 第 2 項執行。記錄為 live，與 deterministic 分開。（2026-10-26T12:15Z，live：`call_model` 執行、寫入 `executionTaskId`、無 error；`mcp_agent` 的審批路徑未 live 執行，因 filesystem MCP 在容器內未載入；`evidence/t9-live-summary.md` §2）
+
+驗證命令（整合測試需要 Docker 的 Postgres）：
+
+```bash
+cd backend
+npm run lint
+npm run test
+npm run build
+SIDE_EFFECT_INTEGRATION_DATABASE_URL=<本機 Postgres> npx vitest run <TE 新增與受影響的 integration test>
+```
+
 ## T9 BFF 透傳證明（先證明，再宣稱無變更）
 
-> 前置：T0、T1；第 2 項另需 TR。T6 的前端串接與 T10 依賴本 Task 結論。對應 design §12、§6.14。
+> 前置：T0、T1；第 2 項另需 TR 與 TE（第 14 版 S10、第 15 版 S11）。T6 的前端串接與 T10 依賴本 Task 結論。對應 design §12、§6.14、§6.15、§6.16。
 >
 > 停止條件：傳輸證明失敗，或需要 TS 以外的 bff 正式程式碼或 `package.json` 修改時，停止並回報 CCR，退回 PLAN_DRAFT 補 BFF delta，不得直接修改。審批綁定屬 backend，由 TR 處理（第 12 版，S9）。
 
 - [x] 在 bff 既有測試目錄新增測試檔（以既有 vitest／node test 入口執行；BFF 正式程式只有 TS 的變更），證明 BFF 的傳輸行為：tool 審批 resume 與 `cancel` 輸入的本文及 active-run header 原樣送到原 thread；`shopping_assistant` 串流透傳，含 backend 新增的 `card.emit` 事件原樣到達前端；client 注入的身分 header 被 strip；取消與斷線透傳不變。（2026-10-25，`bff/test/shopping-passthrough.test.mjs`，commit `9154377`；`evidence/t9-summary.md`）
-- [ ] TR 全部完成後（第 13 版，Master 指示：在隔離 Postgres integration 之後最後執行），經 BFF 與真實 Agent Server（含 Postgres 的審批儲存與 checkpointer）執行一次審批 resume smoke：核准由新 run 承載、通過綁定，且訂單系統只被呼叫一次；同時確認 update chunk 帶有 `runtimeEvents`（design §8.1）。記錄為 live／integration，與 deterministic 分開。需要 Docker。
+- [x] TR 全部完成後（第 13 版，Master 指示：在隔離 Postgres integration 之後最後執行），經 BFF 與真實 Agent Server（含 Postgres 的審批儲存與 checkpointer）執行一次審批 resume smoke：核准由新 run 承載、通過綁定，且訂單系統只被呼叫一次；同時確認 update chunk 帶有 `runtimeEvents`（design §8.1）。記錄為 live／integration，與 deterministic 分開。需要 Docker。（2026-10-26T12:16Z，live：resume run 與第一次的 run 不同、審批 `approved` 且綁定第一次的 run、business effect `committed` 對應 1 筆執行、`task_steps` 以確定性 `stepId` 為 `succeeded`、兩次 update 都帶 `card.emit`；audit 因 `AUDIT_BACKEND` 預設 `console` 寫在 console 而非資料庫；`evidence/t9-live-summary.md`）
+  - 前置（2026-10-26，Master 擴大 writeScope 至 `Dockerfile`）：手寫 Dockerfile 與 `backend/langgraph.json` 不一致，修正後才能執行 smoke：(1) `LANGSERVE_GRAPHS` 缺 `shopping_assistant`；(2) 缺 `LANGGRAPH_HTTP`，`configurable_headers` 未生效，BFF 的身分與 active-run header 不會進入 graph config；(3) frontend build stage 未複製 `contracts/`，型別檢查的測試檔找不到 fixture，image 無法 build。三者都依 `langgraph.json` 補齊，並以腳本比對一致；Master 重建 image 後已確認 `shopping_assistant` 載入、`LANGGRAPH_HTTP` 生效（2026-10-26）。graph 清單與 http 設定目前仍在 Dockerfile 與 `langgraph.json` 各寫一次，改為由 `langgraph.json` 產生列為後續建議。
+  - 第一次執行（2026-10-26T10:46Z）：未到審批即在 graph 入口以缺 `taskId` 失敗（S10，`evidence/t9-live-smoke-stop.md`），由 TE 修正後重新執行。
 - [x] 以 Git Diff 確認 bff 正式程式只有 TS 的變更，其餘為新增測試檔。
 
 驗證命令：
