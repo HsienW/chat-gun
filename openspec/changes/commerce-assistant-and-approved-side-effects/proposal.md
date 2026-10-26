@@ -20,7 +20,8 @@
 5. **前端沒有審批與操作狀態介面**：前端只對天氣澄清實作 interrupt resume；`agent.card.emit` 只以通用時間軸列呈現，沒有商品卡片、審批卡片與操作狀態卡片，無法呈現 v6 Invariant 9 與 v7 七種使用者可見狀態。
 6. **核准後的副作用無法執行，失敗後也無法重新申請**（apply-change T0 發現）：審批通過後 pipeline 交給 runner 的授權結果沒有決策識別，runner 在占用 ledger claim 後才失敗；而任何未提交即結束的執行都會讓 business effect 永遠停在 `prepared`，之後同一操作的申請一律被當成進行中重複。這是「孤兒鎖」：持有者已結束，claim 卻沒釋放。
 7. **客戶端可直接寫入 graph state**（第 9 版，apply-change 期間發現）：BFF 對 LangGraph API 為通用 proxy，客戶端可更新 thread state、建立 thread 時預寫 state、以 `command.update`／`command.goto` 改寫 state 或跳轉節點。審批與待執行的 tool call 都在 state 中，因此可換掉已核准呼叫的輸入，或跳過授權節點直接執行唯讀 tool（既有缺陷，影響所有使用 confirmation 節點的 graph）。
-8. **新 graph 的 tool 不一定經 X14 dispatch**：dispatch pipeline 依 graph 來源的 feature flag 啟用，未登錄的來源不會建立 pipeline；所有 local tool 也會載入到每個 graph。若直接沿用，退款 tool 可能繞過 X14 或出現在不該擁有它的 graph（違反 Invariant 1、2、5）。
+8. **經 Agent Server 的審批 resume 必定無法通過綁定**（第 12 版，apply-change T9 發現）：Agent Server 每次請求都建立新的 run，客戶端無法指定 run 識別；審批消費卻要求承載 resume 的 run 等於觸發審批的原 run，因此經 BFF 與前端的核准一律被拒，效果不會發生。`mcp_agent` 使用同一組授權節點，同樣受影響（既有缺陷）。既有測試讓 interrupt 與 resume 共用同一個 run 識別，因此沒有暴露。
+9. **新 graph 的 tool 不一定經 X14 dispatch**：dispatch pipeline 依 graph 來源的 feature flag 啟用，未登錄的來源不會建立 pipeline；所有 local tool 也會載入到每個 graph。若直接沿用，退款 tool 可能繞過 X14 或出現在不該擁有它的 graph（違反 Invariant 1、2、5）。
 
 ## 解決方案
 
@@ -35,7 +36,8 @@
 6. **未知結果與 reconciliation task**：提交後失去回應時，先依 tool 宣告的 reconciler 查詢模擬訂單系統；仍無法判定時進入 `outcome_unknown`，建立 durable reconciliation task（每個 business effect 至多一筆 open task），不盲目重試、不回報成功或失敗。reconciliation worker 屬 X31（Retrofit Debt）。
 7. **使用者可見狀態**：前端新增審批卡片、操作狀態卡片與商品卡片；所有生命週期狀態可區分，至少涵蓋 v7 七種（`awaiting_approval`、`executing`、`confirmed`、`deduplicated`、`failed`、`cancelled_before_effect`、`outcome_unknown`），並另以獨立 terminal state 呈現 `approval_denied`、`approval_expired`。**不提供任何 undo affordance**。
 8. **客戶端不得直接寫入 graph state**（第 9 版，Master 決策納入 SI-5）：BFF 轉送前拒絕更新 thread state、建立 thread 時預寫 state，以及 `command` 含 `resume` 以外欄位的請求；`shopping_assistant` 宣告只接受訊息與取消欄位的輸入 schema。已消費的決策識別以型別參數傳遞，並在 dispatch 前以 server 端紀錄驗證，客戶端無法偽造。
-9. **評測擴充**：在 X42 dataset 上新增約 15 題商品、政策、訂單與多輪案例（含審批拒絕、生效前取消、重複提交、回應遺失、注入聲稱已預先核准），以 `eval_case` 契約的 additive minor 版本表達；意圖路由準確率與誤分流逐題可追溯。
+9. **審批 resume 以伺服器端記錄的等待中 run 綁定**（第 12 版，Master 決策：方向 A）：resume 改以審批紀錄與 interrupt manifest 記錄的等待中 run、同一 thread 綁定；承載 resume 的 run 與客戶端提供的 run 識別都不作為依據，一次性消費、principal／tenant／scope 綁定與逾期判定不變；audit 同時記錄兩個 run。修改位於共用授權節點，`shopping_assistant` 與 `mcp_agent` 同時修正（Master 決策：`mcp_agent` 直接納入）。
+10. **評測擴充**：在 X42 dataset 上新增約 15 題商品、政策、訂單與多輪案例（含審批拒絕、生效前取消、重複提交、回應遺失、注入聲稱已預先核准），以 `eval_case` 契約的 additive minor 版本表達；意圖路由準確率與誤分流逐題可追溯。
 
 ## 受影響範圍
 
@@ -43,7 +45,7 @@
 
 - **backend**：新增 `shopping_assistant` graph 與 `langgraph.json` 註冊；意圖路由結構化輸出與 prompt；三個訂單 tool、SDK manifest adapter、X27 agent manifest；模擬訂單 provider（in-memory、合成 fixture、故障注入）；dispatch pipeline 去重可觀察性（additive）；confirmation 節點以 opt-in 選項區分拒絕／逾期／撤回（`mcp_agent` 不開啟，行為逐位元組不變）；等待審批時的取消由 shopping graph 承接並撤回審批（governance 啟用時以 opt-in 規則轉送取消輸入）與 server 判定逾期（唯讀查詢只計算不寫入）；訂單 tool 輸出只含效果事實，操作狀態由 graph 組成；審批決策傳到 dispatch、未提交即釋放 claim、加鎖順序一致；runtime migration（只新增：審批紀錄新增 `withdrawn_at`／`withdrawn_by_principal_id`、business effect 新增 `released_at`、tool execution 新增 `claim_disposition`、新增 reconciliation task 表；不修改任何既有 CHECK，新舊 instance 可並存）；backend `card.emit` producer（目前不存在）；`card.emit` 的兩種新 card payload；評測擴充。
 - **frontend**：新增 `shopping_assistant` agent 選項、商品卡片、審批卡片（approve／deny／生效前取消）、操作狀態卡片；未知 card 安全降級。
-- **bff**：第 9 版起有一項程式變更：轉送前拒絕客戶端直接寫入 graph state 的請求（更新 thread state、建立 thread 時預寫 state、`command` 含 `resume` 以外的欄位），唯讀請求、一般輸入與 `command.resume` 不受影響（Master 決策納入 SI-5，design §6.13）。其餘仍預期無程式變更，但這是未驗證的假設：tool 審批 resume 必須延續原 run 才能通過綁定，而這條經 BFF 的路徑從未被前端執行過。apply-change T9 必須先以整合測試證明；若需其他修改，退回本 Proposal 補 delta。
+- **bff**：第 9 版起有一項程式變更：轉送前拒絕客戶端直接寫入 graph state 的請求（更新 thread state、建立 thread 時預寫 state、`command` 含 `resume` 以外的欄位），唯讀請求、一般輸入與 `command.resume` 不受影響（Master 決策納入 SI-5，design §6.13）。其餘無程式變更：T9 已以整合測試證明 resume、`cancel`、`card.emit`、身分 header 與斷線的傳輸行為不變（2026-10-25）。審批綁定的問題在 backend（第 12 版，解決方案 9），BFF 不需修改；若之後發現需要其他修改，退回本 Proposal 補 delta。
 - **deployment**：無新服務。模擬訂單 provider 為 in-memory；reconciliation task 使用既有 runtime Postgres。
 - **harness（本 repo 以外）**：`@gun-ai/harness-contracts` 新增 `deduplicated` 結果類型並發布新版；backend 只升級 `@gun-ai/*` 版本。harness 修改在 harness repo 進行（本 repo 的寫入檢查不允許寫入 workspace 以外的路徑）。目前沒有對外服務與其他採用者，Master 決定不要求舊版 runtime 解析新類型。
 
@@ -55,7 +57,9 @@
 - 修改 `side-effect-tool-execution-runtime`（ADDED Requirement）：去重結果必須可觀察。
 - 修改 `retrieval-evaluation`（ADDED Requirement）：商品、訂單與多輪評測案例。
 - 新增 `client-graph-state-boundary`（第 9 版）：客戶端不得經 BFF 直接寫入 graph state；`shopping_assistant` 只接受宣告的輸入欄位。
-- 既有 `governed-knowledge-retrieval`、`agent-tool-manifest`、`unified-tool-dispatch-pipeline`、`trusted-tool-authorization`、`durable-hitl-conversation-recovery`、`runtime-event-contract`、`data-inventory`：**不修改其 Requirement**，本 Change 為 consumer。若 review 認定必須修改，退回本 Proposal 補 MODIFIED delta。
+- 修改 `trusted-tool-authorization`（第 12 版，MODIFIED Requirement「resume MUST 為一次性、scoped，且 Agent MUST NOT 自我批准」）：明確定義「等待中的 Run」以伺服器端 waiting state 為準，承載 resume 的 run 與客戶端 run 識別不作為比對對象。
+- 修改 `durable-hitl-conversation-recovery`（第 12 版，MODIFIED Requirement「resume 只回到預期 waiting Task 且最多消費一次」）：runId 驗證對象為伺服器端權威 correlation，承載 resume 的 run 不取代 manifest 的 Run／Task correlation。
+- 既有 `governed-knowledge-retrieval`、`agent-tool-manifest`、`unified-tool-dispatch-pipeline`、`runtime-event-contract`、`data-inventory`：**不修改其 Requirement**，本 Change 為 consumer。若 review 認定必須修改，退回本 Proposal 補 MODIFIED delta。
 
 ## 目標
 
@@ -88,6 +92,7 @@
 | 模擬 provider 為 in-memory，重啟後狀態遺失 | reconciliation 無法判定 | 判定不了即維持 `outcome_unknown`，不回報成功；記入 Retrofit Debt；demo 為單一 instance |
 | scope 粒度與去重涵蓋範圍 | ledger 唯一鍵含 scope；若 scope 比預期細，部分重複無法由 ledger 去重 | 現有證據顯示 scope 為 tenant 層級；T0 確認；模擬 provider 以訂單業務規則回傳 typed「已存在」作為防線（design §13 Q2） |
 | 合成資料或 mock tool 被誤解為真實能力 | 對外誤導 | 遵守 v7 External Description Boundary；介面與 README 標註 mock 與 synthetic |
+| 審批綁定改為伺服器端等待中 run 後被誤認為放寬授權 | 跨 thread 或重放的 resume 被接受 | thread 綁定、manifest 必須為 waiting、單列 CAS 一次性消費、principal／tenant／scope 綁定不變；interrupt 與 resume 使用不同 run 識別的測試涵蓋拒絕情境，`shopping_assistant` 與 `mcp_agent` 各一組（design §6.14） |
 | 檢索內容夾帶「已核准」等指令 | 未經審批的副作用 | 審批只能由 resume 記錄；input schema 拒絕審批欄位；對抗 Scenario 驗證 |
 
 ## 回滾策略

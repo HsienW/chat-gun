@@ -23,7 +23,7 @@
 | 等待審批時可取消 | **不成立**（第 6 版更正，見 S5）。resume schema（harness contract）只接受 `approve`／`deny`；等待審批時沒有 active run，既有 `cancel` 輸入不會轉移審批紀錄，該紀錄會維持 `pending` 直到逾期 | `harness-contracts` resume schema、`platform/interaction-runtime.ts` | 新增 additive 的審批「撤回」轉移，由 graph 處理取消輸入時呼叫（§6.2） |
 | 審批逾期可被觀察 | **部分成立**。逾期只在 `consume`（收到 resume）時才判定並轉為 `expired`，沒有背景掃描 | `confirmation.ts` | resume 與撤回時寫入逾期，狀態查詢只計算不寫入；介面不得自行推定狀態（§6.1、§11） |
 | 審批紀錄可新增狀態 | **不可**（第 7 版更正，見 S6）。`authorization_confirmations.status` 有 CHECK（`pending`、`approved`、`denied`、`expired`），放寬需要 `DROP CONSTRAINT`，違反 additive migration gate | migration 018；`persistence/migration-additive.ts` | 撤回改以既有 `denied` 加新增 nullable 欄位表達（§6.2、§6.11） |
-| resume 的 run 綁定 | `consume` 要求 execution context 的 runId 與審批描述一致；前端從未發出過 tool 審批 resume，經 BFF 的 run 綁定**未被驗證** | `confirmation.ts`、`frontend/src/App.tsx` | T9 先驗證再宣稱 BFF 無變更（§12） |
+| resume 的 run 綁定 | `consume` 要求 execution context 的 runId 與審批描述一致；前端從未發出過 tool 審批 resume，經 BFF 的 run 綁定**未被驗證**。第 12 版更正：經 Agent Server 的 resume 一定是新的 run，此綁定必定失敗（見 S9） | `confirmation.ts`、`frontend/src/App.tsx` | 第 12 版改以伺服器端記錄的等待中 run 綁定（§6.14） |
 | 審批前有操作識別 | **不成立**。businessEffectId 在審批後 dispatch 時才由 ledger 產生 | `side-effect/business-effect-ledger.ts` | 操作識別改為 tool call 參照 + approvalId（§6.7） |
 | 等待 tool 審批時的 `cancel` 分類 | `hasWaitingHitl` 只在天氣澄清 resume 時為 true；但等待審批時沒有 active run，取消在進到分類之前就會因 `NOTHING_TO_CANCEL` 結束（governance 啟用時） | `platform/interaction-runtime.ts`、`runtime/interaction/classify.ts` | 第 6 版改由 shopping 的 opt-in 轉送規則把取消送進 graph（§6.2） |
 | 未取得 claim 的執行紀錄 | `prepare` 在效果未提交且 claim 未取得時，以 `status: 'unknown'` 寫入 tool execution；同一 replay key 重播時，`resolveExistingExecution` 對非 committed 紀錄回傳 `SIDE_EFFECT_RECONCILIATION_REQUIRED` | `side-effect/business-effect-ledger.ts`、`side-effect/tool-execution-runner.ts` | 進行中重複不得被當作未知效果（§6.5） |
@@ -46,6 +46,7 @@
 | S7 | pipeline 的 dispatch 一律回傳外層 `succeeded` 包著 `StructuredToolResultEnvelope`；envelope 的 `outcome` 是 `@gun-ai/harness-contracts`（0.1.0-alpha.2）的封閉 strict union，7 個類型都不接受額外欄位，沒有去重類型。第 7 版 §6.5 要求的「governed outcome 保留去重資訊」不改 harness 契約就無法實作 | `tool-dispatch/pipeline.ts` 795、812、829、837；harness `src/tool.ts` 58–92、`src/side-effect.ts` 114–129 | Master 決策：方向 B，harness 契約新增去重結果類型（§6.12，第 8 版） |
 | S7-a | backend 沒有任何 `runtimeEvents` producer；前端從每個 update chunk 的頂層與各 node 值讀 `runtimeEvents` 陣列，只有 `showActivityTimeline` 為 true 的 agent 才處理，且丟棄 `context.runId` 不是 active run 的事件 | `frontend/src/lib/legacy-event-adapter.ts` 39–49；`frontend/src/App.tsx` 329–350；`frontend/src/types/agents.ts` | card 發送路徑定為 node 的 state update（§8.1，第 8 版） |
 | S8 | BFF 對 `/api/langgraph/*` 為通用 proxy，只以黑名單擋 config 保留欄位、只檢查 `input.kind`；客戶端可經 `POST /threads/{id}/state`、建立 thread 的 `supersteps`、run 的 `command.update`／`command.goto` 與 run input 寫入 graph state。可改寫已核准 tool call 的輸入；可以 `goto` 直達 dispatch，使唯讀 tool 略過授權（既有缺陷，影響所有使用 confirmation 節點的 graph） | `bff/src/server.ts` 69–77、1097–1143；`bff/src/execution-context-boundary.ts`；`@langchain/langgraph-api` 1.4.5 `dist/api/threads.mjs` 11–16、64，`dist/api/runs.mjs`；`frontend/src/App.tsx` 476–560 | Master 決策：納入 X43（§6.13，第 9 版） |
+| S9 | T9 發現（2026-10-25）：Agent Server 每建立一個 run（含 `command.resume`）都產生新的 `run_id` 並覆寫 `configurable.run_id`，客戶端無法指定；審批描述記錄的是觸發 interrupt 的原 run，resume 時以新 run 的 context 呼叫 `consume`，而 `consume` 要求兩者相同，因此經 Agent Server 的核准必定 `CONFIRMATION_BINDING_MISMATCH`。`x-active-run-*` header 只用於 governance 的 generation，不影響此綁定。天氣澄清的 resume 以 active run ownership 綁定，不受影響。既有測試讓 interrupt 與 resume 共用同一個 runId，因此未暴露。`mcp_agent` 使用同一組授權節點，同樣受影響（既有缺陷） | `@langchain/langgraph-api` 1.4.5 `dist/api/runs.mjs` 18、`dist/storage/ops.mjs` 993–1001；`runtime/authorization/confirmation-graph.ts` 219、296；`confirmation.ts` 187–200；`platform/interaction-runtime.ts` 346；`runtime/recovery/clarification-resume-authorization.ts` 59；`agents/mcp-agent.ts` 55–60；證據 `evidence/t9-stop-binding.md` | Master 決策：方向 A，`mcp_agent` 一併修正（§6.14，第 12 版） |
 | S5-b | interrupt manifest 狀態已有 `superseded`（`waiting`、`resumed`、`expired`、`superseded`、`rejected`）；repository 只有依 interruptId 查詢 | migration 019；`runtime/recovery/interrupt-manifest-repository.ts` | 撤回時 manifest 轉 `superseded`；governance 轉送需要 additive 的「依 thread 查等待中 confirmation manifest」查詢 |
 | tool 依 graph 授予 | **不成立**。所有 `LOCAL_PRODUCTION_TOOLS` 會載入到每個 graph | `tools/registry.ts` | 以 X27 agent manifest 限定（§5.4） |
 | 前端審批 UI | **不存在**。只有天氣澄清 resume；`card.emit` 以通用時間軸列呈現 | `frontend/src/App.tsx`、`lib/agent-runtime-events.ts` | 新增卡片元件（§11） |
@@ -226,7 +227,7 @@ tool 只知道「這次對模擬訂單系統做了什麼」，不知道 approval
 1. 模型產生訂單 tool call → 狀態 `requested`（以 toolCallId 參照，§6.7）。
 2. **dispatch 就緒預檢**：在建立審批前，`order_request` 之後的節點確認 dispatch pipeline、side-effect ledger 與 confirmation store 可用；不可用 → `failed`（`ORDER_DISPATCH_NOT_READY`），**不建立審批**，避免使用者核准後才失敗。dispatch 時仍由 ledger fail-closed 再檢查一次（預檢不取代 dispatch 的檢查）。
 3. `authorization_gate` 呼叫 `authorizeTyped` → risk policy 要求確認 → 持久化審批描述與 interrupt manifest → 狀態 `awaiting_approval`，`operationId = approvalId`。
-4. `authorization_confirmation` 以 LangGraph interrupt 等待；前端審批卡片以既有 resume schema（`tool_authorization_confirmation@1.0`，決定只有 `approve`／`deny`）透過 BFF resume，請求必須帶原 run 的 active run 識別以通過 run 綁定（§12）。
+4. `authorization_confirmation` 以 LangGraph interrupt 等待；前端審批卡片以既有 resume schema（`tool_authorization_confirmation@1.0`，決定只有 `approve`／`deny`）透過 BFF resume。resume 由 Agent Server 產生的新 run 承載，審批以伺服器端記錄的等待中 run 與同一 thread 綁定，不比對承載 resume 的 run，也不使用客戶端的 active run 識別（§6.14，第 12 版）。
 5. `consume` 一次性消費：`approved` → `approved` → `physical_dispatch`（帶著已消費的 decisionId，§6.10）；`denied` → `approval_denied`；逾時 → `approval_expired`；已撤回 → `cancelled_before_effect`；binding mismatch／replay → typed failure，不得執行。
 6. **逾期由 server 判定**：
    - 寫入路徑：既有 `consume`（resume）與新的撤回轉移，遇到已超過 `expiresAt` 的 `pending` 審批時轉為 `expired`（撤回本來就是寫入動作）。
@@ -442,6 +443,54 @@ tool 只知道「這次對模擬訂單系統做了什麼」，不知道 approval
 
 **相容性**：前端只使用 prompt／取消輸入與 `command.resume`（T0 §13），既有行為不變；任何依賴 state 寫入端點的工具（例如 LangGraph Studio 經 BFF 連線）會被拒絕，屬預期行為。
 
+### 6.14 審批 resume 以伺服器端記錄的等待中 run 綁定（S9，第 12 版，Master 決策：方向 A；第 13 版修訂第 1、3 點）
+
+**問題**：Agent Server 為每個請求建立新的 run 並覆寫 `configurable.run_id`（§2 S9）。tool 審批的 resume 一定由新 run 承載，而 `consume` 要求承載 resume 的 run 等於審批描述記錄的原 run，經 Agent Server 的核准因此必定失敗。主規格 `trusted-tool-authorization` 與 `durable-hitl-conversation-recovery` 要求「mismatched-Run 必須拒絕」，但沒有定義比對的是哪一個 run；第 12 版以 MODIFIED delta 明確定義（`specs/trusted-tool-authorization`、`specs/durable-hitl-conversation-recovery`）。
+
+**決策（方向 A，Master 2026-10-25）**：「等待中的 Run」以伺服器端保存的 waiting state 為準，承載 resume 的 run 不參與比對。作法與天氣澄清 resume 以伺服器端權威 correlation 綁定一致。
+
+1. **confirmation 節點（`authorization_confirmation`）**：沿用既有檢查，即依 checkpoint 中的 `pendingAuthorization` 推導 interruptId、取得 manifest，並比對 manifest 的 runId／taskId／stepId／scope／decisionRef 與審批描述一致、execution manifest 相容。兩者都是伺服器端紀錄，這就是「等待中 Run」的綁定。上述既有檢查不符時，維持拋出「manifest 不可用或不相容」錯誤（不變）。
+   第 13 版修訂（Master 2026-10-26 決策：方案 1，見 `evidence/tr-inventory-and-stop.md` §2）：新增的兩項檢查**不拋錯**，改為回傳 typed failure 並記 audit，且不 consume、不 dispatch：
+   - manifest `status` 不是 `waiting` → 結束該 tool call，tool message `errorCode: CONFIRMATION_REPLAYED_OR_EXPIRED`；
+   - 承載 resume 的 execution context 的 `threadId` 不等於審批描述（與 manifest）的 `threadId` → `errorCode: CONFIRMATION_BINDING_MISMATCH`。
+   - 兩者都記 `authorization.confirmation.rejected`（`decisionId`、`reasonCode`、`waitingRunId`、`resumeRunId`），與 `consume` 的拒絕使用同一事件名稱與欄位。
+   - 結束方式與 `consume` 回傳非核准結果相同：清除 `activeToolCall` 與 `pendingAuthorization`；有開啟 `confirmationOutcome` 的 graph 沿用 `resolveConfirmationOutcome`（非 `waiting` 時依 `findStatus` 判定 withdrawn／expired／denied，已核准的紀錄不寫 outcome），不另訂新的 outcome 值，也不轉移 manifest 狀態。
+   - 兩項檢查在呼叫 `interrupt()` 之前執行；第一次進入節點時 manifest 剛建立且為 `waiting`、thread 一致，因此只影響 resume 後的重跑。
+   **改為 typed failure 的理由**：核准、拒絕、逾期、撤回後 manifest 都已離開 `waiting`，依序重放必定落在這條路徑；若拋錯，重放會從既有的 typed failure（`CONFIRMATION_REPLAYED_OR_EXPIRED`）變成 run 失敗，且拋錯路徑沒有 audit，與 MODIFIED delta 的「MUST 拒絕並 audit」不一致。
+2. **`consume` 的綁定**：移除「execution context 的 runId 等於審批描述的 runId」，改為「execution context 的 threadId 等於審批描述的 threadId」。approvalId、decisionId、scope（scopeId、scopeType、tenant）、resource 的 tenant 與允許審批人的檢查不變。SQL 的單列 CAS 繼續以審批描述的 runId 比對資料表的 `run_id`（兩邊皆為伺服器端紀錄），一次性消費與逾期判定不變。這個比對就是「等待中 Run」的資料庫層綁定，**MUST NOT 移除或改為比對承載 resume 的 run**：只有應用層比對的是承載 resume 的 run，所以只移除應用層那一處。
+3. **audit**：`authorization.confirmation.consumed` 與 `authorization.confirmation.rejected` 新增 `waitingRunId`（審批描述的 runId）與 `resumeRunId`（承載 resume 的 runId）兩個欄位，使兩個 run 可互相追溯。只放 audit 與 trace attribute，不作 metric label（既有 Requirement）。不記 `approvalId`（一次性憑證）。
+   第 13 版補充（實作前核對發現的既有缺口）：production 組裝（`createRuntimeToolAuthorizationComposition`）建立 `PgAuthorizationConfirmationStore` 時沒有傳入 audit sink，預設為 no-op，因此 `authorization.confirmation.*` 在 production 從未落地，delta 的 MUST audit 實際不成立。TR 一併修正：
+   - production 的審批儲存與 confirmation 節點都注入同一個 audit sink，接到既有的 `auditLogger`（`PgAuditLogger.record` 會吞下寫入錯誤，只記 `audit_persistence_failed`）；
+   - `createToolAuthorizationGraphNodes` 新增選填的 confirmation audit sink 依賴，未提供時為 no-op（與 `PgAuthorizationConfirmationStore` 現行預設一致，既有測試替身不需修改）；`mcp_agent` 與 `shopping_assistant` 的 production 組裝 MUST 提供；
+   - 節點層 audit 失敗不得改變結果（拒絕仍是拒絕），以 `.catch` 隔離。
+   - 不新增資料表或 migration；audit 事件寫入既有 audit 儲存。
+4. **不變的部分**：
+   - 不新增資料欄位或 migration；不改 harness resume schema；不改 BFF。
+   - active-run hint 仍只供 governance 推進 generation，不參與審批綁定；客戶端提供的任何 run 識別都不影響核准結果。
+   - 撤回（§6.2）本來就不要求 runId 相同，不變。天氣澄清 resume 以 active run ownership 綁定，也不變。
+5. **dispatch 之後**：核准後的 dispatch 在承載 resume 的 run 中執行。`PgConsumedAuthorizationVerifier` 只綁 principal、tenant、scope、tool 與 toolCallId，不綁 runId（已核對，§6.10），不需修改。理由是兩者職責不同：verifier 確認 dispatch 拿到的 decisionId 是伺服器端真實、已核准且屬於這個 tool call 的決策；run 與 thread 的綁定已在 confirmation 節點與 `consume` 完成，dispatch 時不需要也不應重做。ledger 的 tool execution 記錄承載 resume 的 run，再經 decisionId 連到審批紀錄與原 run（§6.7 的既有連結），不新增對照表。
+6. **共用範圍**：綁定邏輯位於共用的授權節點與審批儲存，`shopping_assistant` 與 `mcp_agent` 同時修正（Master 決策：`mcp_agent` 直接納入），不另設 opt-in。`mcp_agent` 的 tool 只要 risk tier 為 `sensitive`／`communication` 或宣告 `requireConfirmation` 就會走到此路徑；目前實際設定了哪些 tool 未逐一盤點；TR 實作前先唯讀盤點並記入 evidence，再以回歸測試涵蓋整條路徑。
+
+**為什麼移除 run 相等不會放寬授權**：
+- 承載 resume 的 run 永遠是新的，「與原 run 相等」對真實請求沒有任何區分力，只會讓所有核准失敗。
+- resume 只能套用到該 thread checkpoint 中等待中的 interrupt；審批描述來自伺服器端 checkpoint，客戶端無法寫入（§6.13 的 BFF 檢查與 graph 輸入 schema）。
+- thread 綁定擋下跨 thread 的 resume。approvalId（256 bit）不能單獨授權，仍需 trusted principal 在允許清單內，且 tenant／scope 一致。
+- 單列 CAS 保證只消費一次：重放、撤回後核准、逾期後核准都維持既有 typed failure。
+
+**測試要求**：interrupt 與 resume MUST 使用不同的 run 識別，模擬 Agent Server 的實際行為（既有測試讓兩者共用同一個 runId，正是 S9 未被發現的原因）。必須涵蓋以下情境：
+- 由新 run 承載的核准只 dispatch 一次；
+- 不同 thread 的 resume 被拒；
+- 承載 resume 的 run 等於或不等於原 run 都不影響結果；
+- manifest 非 `waiting` 時回傳 typed failure、不呼叫 `consume`（第 13 版）；
+- 重放回傳 `CONFIRMATION_REPLAYED_OR_EXPIRED` typed failure（第 13 版：依序重放由節點的 `waiting` 檢查攔下，並發重放由 `consume` 的 CAS 攔下，兩者結果相同）；
+- 撤回後、由新 run 承載的核准被拒；
+- 逾期後、由新 run 承載的核准被拒；
+- principal 不在允許清單時被拒；
+- audit 帶兩個 run 識別，節點層拒絕也有 audit（第 13 版）；
+- production 組裝的審批儲存與 confirmation 節點使用真實 audit sink，而非 no-op（第 13 版）。
+
+以上在 `shopping_assistant` 與 `mcp_agent` 各做一次，並以真實 Postgres 執行，同時補上階段性 review m3 的 `mcp_agent` 審批路徑 Postgres 回歸。經 BFF 與真實 Agent Server 的審批 resume 至少執行一次 smoke（T9）。
+
 ## 7. 操作生命週期
 
 ```text
@@ -539,8 +588,8 @@ requested ─▶ awaiting_approval ─┬─▶ approved ─┬─▶ executing 
 
 - **第 9 版起 BFF 有一項正式程式變更**：§6.13 的客戶端 state 寫入檢查（`client-graph-state-boundary` delta，tasks TS）。除此之外，既有 LangGraph proxy 應可透傳 `shopping_assistant` 請求、trusted identity header、interrupt resume 與 `cancel` 輸入（前端以一般 run 輸入送出，§6.2），這仍是**未驗證的假設**。
 - 驗證方式：在 bff 既有測試目錄新增測試檔，以既有 `npm run test` 執行（`bff/package.json` 已有 vitest 與 node test 入口）。除 §6.13 以外，若需要修改 bff 的正式程式碼或 `package.json`，即停止並退回補 delta。
-- 風險點：審批 `consume` 要求 resume 的 runId 與審批描述一致，必須靠 active run 識別 header 延續原 run；前端至今只對天氣澄清發過 resume，tool 審批 resume 經 BFF 的完整路徑從未被執行過。
-- T9 必須**先**以整合測試證明：經 BFF 的 resume 與 `cancel` 能延續原 run 並通過綁定、client 注入的身分 header 被 strip、取消與斷線透傳不變。證明失敗即停止並退回 PLAN_DRAFT 補 BFF delta，不得直接修改。
+- 風險點（第 12 版更正）：原假設「審批 `consume` 必須靠 active run 識別 header 延續原 run」不成立。Agent Server 的 resume 一定是新的 run，綁定問題在 backend，不在 BFF（§2 S9），改由 §6.14 處理，BFF 不需修改。
+- T9 以整合測試證明 BFF 的傳輸行為：resume 與 `cancel` 的本文和 active-run header 原樣送到原 thread、`card.emit` 原樣透傳、client 注入的身分 header 被 strip、取消與斷線透傳不變（已由 `bff/test/shopping-passthrough.test.mjs` 證明，2026-10-25）。「核准通過審批綁定」改由 TR 的 backend 測試，以及 T9 經 BFF 與真實 Agent Server 的 smoke 證明。BFF 傳輸證明失敗，或需要 §6.13 以外的 bff 正式程式碼修改時，即停止並退回 PLAN_DRAFT 補 BFF delta，不得直接修改。
 - 限流、每日成本上限與 demo access code 屬 v7 D4 Lane C／D5，不在本 Change（§13 Q1）。
 
 ## 13. 規劃預設決策（Human 可於 review-plan 推翻）
@@ -557,6 +606,7 @@ requested ─▶ awaiting_approval ─┬─▶ approved ─┬─▶ executing 
 | Q8 | S2 修正方向 | **Master 決策：做法 A**（明確的已釋放狀態，§6.8；第 7 版起以 `released_at` 欄位表達，§6.11） | 狀態寫在資料裡、可稽核，判斷集中一處；替代方案見 §15 |
 | Q10 | S7 去重的表達方式 | **Master 決策：方向 B**，harness 契約新增 `deduplicated` 類型（§6.12）；harness 直接修改、不另開 change；不要求舊版 runtime 解析新類型（無對外服務）；既有 graph 以 opt-in 與 legacy 映射保持行為不變 | 去重是 dispatch 層的通用事實，之後的 side-effect tool 都會用到；放在 outcome 才不會出現「結果說成功、真相在 ledger」的兩個事實來源 |
 | Q11 | SI-5（客戶端可寫入 graph state）是否納入 X43 | **Master 決策：納入**，BFF 阻擋 state 寫入與 `command.update`／`goto`（§6.13）；另依 Master 指示「確保客戶端不會再有機會偽造 decisionId」，decisionId 以型別參數傳遞並以 server 端紀錄驗證（§6.10） | X43 的訂單操作依賴 state 中的審批資料；不關閉寫入路徑，人工審批可被繞過 |
+| Q12 | S9：審批 resume 的 run 綁定如何修正、是否涵蓋 `mcp_agent` | **Master 決策：方向 A**，以伺服器端記錄的等待中 run 與同一 thread 綁定，承載 resume 的 run 不參與比對（§6.14）；**`mcp_agent` 直接納入**修正範圍 | 與澄清 resume 以伺服器端權威 correlation 綁定一致；不需強制啟用 governance；修改位於共用授權節點，另做 opt-in 只會讓 `mcp_agent` 維持已知缺陷 |
 | Q9 | 審批前預檢（資格、擁有者、provider 可用性）是否放進 X43 | **不放進 X43**（CCR 依 Master 授權決定），記入 Retrofit Debt | 正確性由 §6.8 保證，預檢只改善體驗；需要新的唯讀 governed tool，會擴大 X43 範圍；「核准後才得知不符資格」是誠實狀態 |
 
 ## 14. Retrofit Debt（本 Change 新增或承接）
@@ -576,6 +626,7 @@ requested ─▶ awaiting_approval ─┬─▶ approved ─┬─▶ executing 
 | 撤回失敗後只支援重試取消，原審批的核准路徑不再可用（§6.2 步驟 5，fail-closed） | X30 |
 | BFF 的客戶端 state 寫入檢查依 LangGraph API 1.4.5 的路由與欄位；升級 LangGraph API 時須重新核對（§6.13） | 升級 LangGraph API 的 Change |
 | 既有 graph（`mcp_agent` 等）未宣告輸入 schema，內部 channel 仍可經 run 輸入賦值；目前由 gate 重新授權，風險有限 | 另開 Change |
+| 審批的等待中 run 與承載 resume 的 run 只在 audit 連結，canonical correlation 沒有正式的「resume run」關係欄位（§6.14） | X30 或 canonical-execution-context 的後續 Change |
 | X42 Minor：knowledge migration runner 未以交易包住單一 migration | 若本 Change 新增 knowledge migration 則於 T1 先修；預設設計不新增，維持承接 |
 
 ## 15. 替代方案
@@ -615,6 +666,10 @@ requested ─▶ awaiting_approval ─┬─▶ approved ─┬─▶ executing 
 | S7 方向 A：envelope 維持既有值，graph 在 dispatch 後讀 ledger 判定去重 | outcome 與 ledger 成為兩個事實來源；circuit、audit、評測看到的分類不準；每個新的 side-effect graph 都要重做同樣的補查 |
 | S7 方向 C：把去重資訊放進 `succeeded.result` | 進行中重複不是成功；既有消費者會把重複當成成功結果 |
 | S7：為去重另加 flag，等所有 instance 升級後才發出 | 目前沒有對外服務與其他採用者，Master 決定不需要（§6.12） |
+| S9 方向 B：`shopping_assistant` 一律啟用 interaction governance，以 active ownership 延續原 run | 需強制啟用目前預設關閉的 governance；`production.ts` 的 orchestrator 尚未在 governance 啟用環境實跑（§19 SI-2）；`mcp_agent` 也要一併改變部署設定 |
+| S9：讓客戶端在 resume 時指定 run 識別 | Agent Server 一律覆寫 `run_id`，客戶端無法指定；即使可行，客戶端提供的識別也不得作為授權依據 |
+| S9：只為 `shopping_assistant` 開 opt-in，`mcp_agent` 維持現狀 | 修改位於共用授權節點；opt-in 只會讓 `mcp_agent` 保留已知缺陷，Master 決定直接納入 |
+| S9：新增 additive 欄位記錄承載 resume 的 run | audit 已能連結兩個 run；新增欄位需要 migration，沒有讀取方 |
 | S2：交給訂單系統自行去重 | 把冪等責任推給外部系統；真實 provider 不一定支援（X40），違反 runtime 負責「冪等在效果之前」 |
 
 ## 16. 安全分析（Tool 變更）
@@ -623,7 +678,7 @@ requested ─▶ awaiting_approval ─┬─▶ approved ─┬─▶ executing 
 |---|---|
 | 身分 | tenant、scope、principal 只來自 server 端 execution context；input schema strict，夾帶身分或審批欄位即 schema error |
 | 授權 | 每個 tool 明示 authorization action；未授權 typed deny，不呼叫 provider |
-| 審批 | durable、一次性、綁定 approvalId／decisionId；模型與檢索內容無法記錄審批 |
+| 審批 | durable、一次性、綁定 approvalId／decisionId、伺服器端記錄的等待中 run 與同一 thread（§6.14）；承載 resume 的 run 與客戶端 run 識別不作為依據；模型與檢索內容無法記錄審批 |
 | 冪等 | 邏輯 business effect key（含申請者 principal，避免去重跨使用者洩漏）；ledger fail-closed；審批後 `maxAttempts = 1` |
 | egress | 訂單 tool 無外連；`kb_search` 沿用 X42 |
 | 憑證 | 訂單 tool 不需要憑證；不讀取 `process.env` |
@@ -636,7 +691,7 @@ requested ─▶ awaiting_approval ─┬─▶ approved ─┬─▶ executing 
 
 - trace：路由結果（intent、rationaleCode、routeStatus）、tool dispatch 證據、審批 decisionId、business effect id、去重原因、reconciliation task id。
 - metric：不得以 operationId 等高基數識別作 label（既有 Requirement）。
-- audit：審批、提交、去重、未知結果、task 建立。
+- audit：審批（含等待中 run 與承載 resume 的 run，§6.14）、提交、去重、未知結果、task 建立。
 - 評測：意圖路由準確率與混淆矩陣、操作 terminal 狀態正確率、引用與拒答指標（沿用 X42）。
 
 ## 18. 驗證 Gate 對應
