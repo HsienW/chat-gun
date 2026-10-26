@@ -25,6 +25,7 @@ import {
   type AuthorizationConfirmationStore,
   type AuthorizationConfirmationWithdrawalStore,
   type ConfirmationConsumeResult,
+  type ConfirmationAuditSink,
   type ConfirmationRequiredDescriptor,
 } from "./confirmation.js";
 
@@ -58,6 +59,7 @@ export interface AuthorizationGraphState {
 export interface CreateToolAuthorizationGraphNodesInput {
   tools: readonly StructuredToolInterface[];
   confirmationStore: AuthorizationConfirmationStore;
+  confirmationAudit?: ConfirmationAuditSink;
   interruptManifestRepository: InterruptManifestRepository;
   executionManifest: ExecutionManifestRef;
   /**
@@ -290,15 +292,35 @@ export function createToolAuthorizationGraphNodes(
       throw new Error("Confirmation interrupt manifest is unavailable or incompatible");
     }
 
-    const resume = parseConfirmationResume(
-      interrupt(toConfirmationInterruptPayload(descriptor))
-    );
     const context = readExecutionContext(undefined, config, "production");
-    const consumed = await input.confirmationStore.consume({
-      descriptor,
-      resume,
-      executionContext: { ...context, toolCallId: call.toolCallId },
-    });
+    const rejectionCode = manifest.status !== "waiting"
+      ? "CONFIRMATION_REPLAYED_OR_EXPIRED"
+      : context.threadId !== descriptor.threadId
+        ? "CONFIRMATION_BINDING_MISMATCH"
+        : undefined;
+    let consumed: ConfirmationConsumeResult;
+    if (rejectionCode !== undefined) {
+      // Isolate both synchronous and asynchronous sink failures from rejection.
+      await Promise.resolve().then(() => input.confirmationAudit?.record(
+        "authorization.confirmation.rejected",
+        {
+          decisionId: descriptor.decisionId,
+          reasonCode: rejectionCode,
+          waitingRunId: descriptor.runId,
+          resumeRunId: context.runId,
+        }
+      )).catch(() => undefined);
+      consumed = { ok: false, reasonCode: rejectionCode };
+    } else {
+      const resume = parseConfirmationResume(
+        interrupt(toConfirmationInterruptPayload(descriptor))
+      );
+      consumed = await input.confirmationStore.consume({
+        descriptor,
+        resume,
+        executionContext: { ...context, toolCallId: call.toolCallId },
+      });
+    }
     if (!consumed.ok || consumed.status !== "approved") {
       if (consumed.ok && consumed.status === "denied") {
         await input.interruptManifestRepository.transitionStatus({

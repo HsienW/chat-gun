@@ -189,7 +189,7 @@ function hasMatchingBinding(input: ConsumeConfirmationInput): boolean {
   return (
     resume.approvalId === descriptor.approvalId &&
     resume.decisionId === descriptor.decisionId &&
-    executionContext.runId === descriptor.runId &&
+    executionContext.threadId === descriptor.threadId &&
     executionContext.scope.scopeId === descriptor.scope.scopeId &&
     executionContext.scope.scopeType === descriptor.scope.scopeType &&
     executionContext.scope.tenantId === descriptor.scope.tenantId &&
@@ -272,10 +272,15 @@ export class PgAuthorizationConfirmationStore
     const descriptor = confirmationRequiredDescriptorSchema.parse(input.descriptor);
     const resume = confirmationResumeSchema.parse(input.resume);
     const validatedInput = { ...input, descriptor, resume };
+    const runCorrelation = {
+      waitingRunId: descriptor.runId,
+      resumeRunId: input.executionContext.runId,
+    };
     if (!hasMatchingBinding(validatedInput)) {
       await this.audit.record("authorization.confirmation.rejected", {
         decisionId: descriptor.decisionId,
         reasonCode: "CONFIRMATION_BINDING_MISMATCH",
+        ...runCorrelation,
       });
       return { ok: false, reasonCode: "CONFIRMATION_BINDING_MISMATCH" };
     }
@@ -327,6 +332,7 @@ export class PgAuthorizationConfirmationStore
       await this.audit.record("authorization.confirmation.rejected", {
         decisionId: descriptor.decisionId,
         reasonCode: "CONFIRMATION_TIMEOUT",
+        ...runCorrelation,
       });
       return { ok: false, reasonCode: "CONFIRMATION_TIMEOUT" };
     }
@@ -388,12 +394,14 @@ export class PgAuthorizationConfirmationStore
       await this.audit.record("authorization.confirmation.rejected", {
         decisionId: descriptor.decisionId,
         reasonCode: "CONFIRMATION_REPLAYED_OR_EXPIRED",
+        ...runCorrelation,
       });
       return { ok: false, reasonCode: "CONFIRMATION_REPLAYED_OR_EXPIRED" };
     }
     await this.audit.record("authorization.confirmation.consumed", {
       decisionId: descriptor.decisionId,
       status: consumed.status,
+      ...runCorrelation,
     });
     return { ok: true, status: consumed.status };
   }

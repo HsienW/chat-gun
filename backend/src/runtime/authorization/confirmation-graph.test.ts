@@ -12,8 +12,9 @@ import type {
   AuthorizationConfirmationStore,
   AuthorizationConfirmationWithdrawalStore,
 } from "./confirmation.js";
-import { createConfirmationRequiredDescriptor } from "./confirmation.js";
+import { createConfirmationRequiredDescriptor, PgAuthorizationConfirmationStore } from "./confirmation.js";
 import { ToolRiskRegistry } from "./tool-risk.js";
+import { createConfirmationInterruptManifest } from "../recovery/confirmation-manifest.js";
 import type { ExecutionProfileEnforcerPort } from "../tool-dispatch/execution-profile.js";
 import type { InterruptManifestRepository } from "../recovery/interrupt-manifest-repository.js";
 import {
@@ -50,6 +51,48 @@ const executionContext = {
 };
 
 describe("tool authorization confirmation graph adapter", () => {
+  it.each([
+    ["resumed", "thread-1", "CONFIRMATION_REPLAYED_OR_EXPIRED"],
+    ["rejected", "thread-1", "CONFIRMATION_REPLAYED_OR_EXPIRED"],
+    ["expired", "thread-1", "CONFIRMATION_REPLAYED_OR_EXPIRED"],
+    ["superseded", "thread-1", "CONFIRMATION_REPLAYED_OR_EXPIRED"],
+    ["waiting", "other-thread", "CONFIRMATION_BINDING_MISMATCH"],
+  ] as const)("rejects %s / %s before interrupt, consume or manifest mutation", async (status, threadId, reasonCode) => {
+    const descriptor = createConfirmationRequiredDescriptor({
+      decisionId: "decision-1", executionContext, action: "tool:write", toolName: "write_file",
+      resource: { resourceType: "mcp_tool", resourceId: "filesystem:write_file", tenantId: "tenant-1" },
+      policyVersion: "runtime-authorization-v1", timeoutMs: 60_000,
+    });
+    const executionManifest = {
+      manifestVersion: "1.0.0" as const, graphId: "mcp_agent", graphConfigHash: "a".repeat(64),
+      schemaVersions: { runtimeEventEnvelope: "1.0.0", toolDescriptor: "1.0", authorizationPolicy: "1.0", normalizedInput: "1.0" },
+    };
+    const manifest = { ...createConfirmationInterruptManifest({ descriptor, executionManifest }), status };
+    const consume = vi.fn();
+    const transitionStatus = vi.fn();
+    const record = vi.fn();
+    const nodes = createToolAuthorizationGraphNodes({
+      tools: [], confirmationStore: { upsertPending: vi.fn(), consume },
+      confirmationAudit: { record }, executionManifest,
+      interruptManifestRepository: { create: vi.fn(), findByInterruptId: async () => manifest, consume: vi.fn(), transitionStatus },
+    });
+    const state = { messages: [], toolQueue: [], pendingAuthorization: descriptor,
+      activeToolCall: { toolName: "write_file", toolCallId: "call-1", input: { path: "a.txt" } } };
+    const config = { configurable: { execution_context: { ...executionContext, threadId, runId: "resume-run" }, clientActiveRunHint: "untrusted-run" } };
+    const result = await nodes.authorizationConfirmation(state, config);
+    expect(result).toMatchObject({ activeToolCall: null, pendingAuthorization: null });
+    expect(result.messages).toEqual([expect.objectContaining({ content: JSON.stringify({ errorCode: reasonCode }) })]);
+    expect(consume).not.toHaveBeenCalled();
+    expect(transitionStatus).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledWith("authorization.confirmation.rejected", {
+      decisionId: "decision-1", reasonCode, waitingRunId: "run-1", resumeRunId: "resume-run",
+    });
+    record.mockRejectedValueOnce(new Error("audit unavailable"));
+    await expect(nodes.authorizationConfirmation(state, config)).resolves.toMatchObject({ activeToolCall: null });
+    record.mockImplementationOnce(() => { throw new Error("sync audit failure"); });
+    await expect(nodes.authorizationConfirmation(state, config)).resolves.toMatchObject({ activeToolCall: null });
+  });
+
   it("uses the shared enforcement primitive in physicalDispatch", async () => {
     const invoked = vi.fn(async () => "ok");
     const source = tool(invoked, {
@@ -117,7 +160,7 @@ describe("tool authorization confirmation graph adapter", () => {
     expect(enforcer.enforce).toHaveBeenCalledOnce();
     expect(invoked).toHaveBeenCalledOnce();
   });
-  it("interrupts and resumes on the same thread before one physical dispatch", async () => {
+  it.each(["run-1", "resume-run"])("interrupts and resumes on the same thread using %s before one physical dispatch", async (resumeRunId) => {
     const invoked = vi.fn(async ({ path }: { path: string }) => `wrote:${path}`);
     const source = tool(invoked, {
       name: "write_file",
@@ -158,9 +201,14 @@ describe("tool authorization confirmation graph adapter", () => {
         }),
     });
     const upsertPending = vi.fn(async () => undefined);
-    const consume = vi.fn<AuthorizationConfirmationStore["consume"]>(
-      async () => ({ ok: true, status: "approved" })
-    );
+    const audit = { record: vi.fn() };
+    const store = new PgAuthorizationConfirmationStore({
+      query: async <TResult extends Record<string, unknown>>(sql: string) => ({
+        rows: (sql.includes("WITH consumed") ? [{ status: "approved" }] : []) as unknown as TResult[],
+        rowCount: sql.includes("WITH consumed") ? 1 : 0,
+      }),
+    }, audit);
+    const consume = vi.fn<AuthorizationConfirmationStore["consume"]>((input) => store.consume(input));
     let persistedManifest: Awaited<
       ReturnType<InterruptManifestRepository["create"]>
     > | null = null;
@@ -266,7 +314,7 @@ describe("tool authorization confirmation graph adapter", () => {
       approvalId: payload.approvalId,
       decisionId: payload.decisionId,
       decision: "approve",
-    } }), config);
+    } }), { configurable: { ...config.configurable, execution_context: { ...executionContext, runId: resumeRunId } } });
     expect("__interrupt__" in resumed ? resumed.__interrupt__ : undefined).toBeUndefined();
     expect(upsertPending).toHaveBeenCalledOnce();
     expect(consume).toHaveBeenCalledOnce();
@@ -278,6 +326,9 @@ describe("tool authorization confirmation graph adapter", () => {
       })
     );
     expect(invoked).toHaveBeenCalledOnce();
+    expect(audit.record).toHaveBeenCalledWith("authorization.confirmation.consumed", {
+      decisionId: payload.decisionId, status: "approved", waitingRunId: "run-1", resumeRunId,
+    });
     // The consumed approval's decision travels to dispatch from server state.
     expect(dispatchSpy).toHaveBeenCalledOnce();
     expect(dispatchSpy.mock.calls[0]?.[2]).toEqual({

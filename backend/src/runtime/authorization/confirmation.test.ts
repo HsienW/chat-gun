@@ -95,6 +95,29 @@ describe("authorization confirmation contract", () => {
 });
 
 describe("PgAuthorizationConfirmationStore", () => {
+  it.each(["run-1", "resume-run"])("accepts %s while retaining the waiting run SQL binding and audit", async (runId) => {
+    const db: Queryable = { query: async <TResult extends Record<string, unknown>>(sql: string) => ({
+      rows: (sql.includes("WITH consumed") ? [{ status: "approved" }] : []) as unknown as TResult[],
+      rowCount: sql.includes("WITH consumed") ? 1 : 0,
+    }) };
+    const query = vi.spyOn(db, "query");
+    const audit = { record: vi.fn() };
+    const store = new PgAuthorizationConfirmationStore(db, audit);
+    const descriptor = createDescriptor();
+    const result = await store.consume({ descriptor, resume: parseConfirmationResume({
+      type: "tool_authorization_confirmation", schemaVersion: "1.0",
+      approvalId: descriptor.approvalId, decisionId: descriptor.decisionId, decision: "approve",
+    }), executionContext: { ...executionContext, runId } });
+    expect(result).toEqual({ ok: true, status: "approved" });
+    expect(query.mock.calls[0][0]).toContain("AND run_id = $7");
+    expect(query.mock.calls[0][1]?.[6]).toBe(descriptor.runId);
+    expect(query.mock.calls[1][0]).toContain("AND run_id = $8");
+    expect(query.mock.calls[1][1]?.[7]).toBe(descriptor.runId);
+    expect(audit.record).toHaveBeenCalledWith("authorization.confirmation.consumed", {
+      decisionId: descriptor.decisionId, status: "approved", waitingRunId: "run-1", resumeRunId: runId,
+    });
+  });
+
   it("idempotently persists pending state and atomically consumes it once", async () => {
     let consumed = false;
     const query = vi.fn(async <TResult extends Record<string, unknown>>(
@@ -200,7 +223,7 @@ describe("PgAuthorizationConfirmationStore", () => {
   it.each([
     ["principal", { principal: { ...executionContext.principal, principalId: "other" } }],
     ["scope", { scope: { ...executionContext.scope, scopeId: "other" } }],
-    ["run", { runId: "other-run" }],
+    ["thread", { threadId: "other-thread" }],
   ])("rejects a %s binding mismatch before atomic consume", async (_label, override) => {
     const query = vi.fn(async <TResult extends Record<string, unknown>>() => ({
       rows: [] as TResult[], rowCount: 0,
