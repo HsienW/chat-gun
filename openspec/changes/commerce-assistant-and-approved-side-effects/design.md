@@ -94,7 +94,7 @@ shopping_assistant（每輪）
 ### 4.1 註冊與身分
 
 - graphId `shopping_assistant`，加入 `langgraph.json`；execution manifest 以自己的 graphId 與節點清單建立，與 `mcp_agent` 不相容時 resume MUST fail-closed（沿用 confirmation 節點的相容性檢查）。
-- 以既有 `instrumentGraphWithExecutionContext`、interaction governance 與 Opik instrumentation 包裝；execution context 只來自 BFF trusted header。
+- 以既有 `instrumentGraphWithExecutionContext`、interaction governance 與 Opik instrumentation 包裝；身分與 scope 只來自 BFF trusted header，taskId 由 graph 入口登記產生，resume 時從 checkpoint 的 `executionTaskId` 接回原 task（第 14 版，§6.15）。
 
 ### 4.2 State 欄位（依 `backend/AGENTS.md` §3）
 
@@ -104,6 +104,7 @@ shopping_assistant（每輪）
 | `toolQueue`、`activeToolCall`、`pendingAuthorization` | 既有 gate／confirmation／dispatch | 同 `mcp_agent` | 同 `mcp_agent` | `[]`／`null` | 沿用既有型別 |
 | `kind`、`targetRunId` | 輸入（前端取消輸入 `{ kind, targetRunId }`） | 每次輸入 | START 分流、`cancel_pending_operation` | `null` | 取最後值；只用於分流與比對，不作為授權依據；沒有這兩個 channel 時取消輸入會觸發 `EmptyInputError` |
 | `turn` | `route_intent` | 每輪開始 | 全部 | `{ turnId, routedIntent: null, routeStatus: "pending" }` | 可序列化；新欄位，無舊 checkpoint |
+| `executionTaskId`（第 14 版，§6.15） | `route_intent` | 每輪開始，寫入入口登記的 taskId | graph 入口（resume 時接回原 task） | `undefined` | 只存 taskId 字串；不在輸入 schema；缺值時 resume fail-closed |
 | `turnEvidence` | `product_present`／`policy_answer` | 收到本輪 `kb_search` 結果時 | `policy_answer`、citation 驗證 | `null`，每輪開始重設 | 只存 citations 與 chunkId，不存完整 chunk 以外的 context |
 | `runtimeEvents` | 發出 card 的節點（`product_present`、訂單分支節點、`cancel_pending_operation`） | 該節點要發出 card 時 | 前端（經 update chunk，§8.1） | `[]` | 每次 update 取代、不累積；只含 envelope（識別碼與 Enum），不含 note 或自由文字 |
 | `runtimeEventCursor` | 同上 | 每次發出 envelope | 發出 card 的節點 | `null` | `{ runId, nextSequence }`；runId 不同時重設為 1（§8.1） |
@@ -491,6 +492,69 @@ tool 只知道「這次對模擬訂單系統做了什麼」，不知道 approval
 
 以上在 `shopping_assistant` 與 `mcp_agent` 各做一次，並以真實 Postgres 執行，同時補上階段性 review m3 的 `mcp_agent` 審批路徑 Postgres 回歸。經 BFF 與真實 Agent Server 的審批 resume 至少執行一次 smoke（T9）。
 
+### 6.15 Graph 入口登記 task，resume 接回原 task（S10，第 14 版，Master 決策：納入 X43）
+
+**問題**（T9 live smoke 發現，`evidence/t9-live-smoke-stop.md`）：`shopping_assistant` 的正式入口以 `readExecutionContext` 直接讀取 BFF trusted header 建立 execution context，但 `taskId` 不在 header 中，也沒有任何地方產生或登記；Agent Server 與 BFF 都不提供 `taskId`。經真實 Agent Server 的每次請求都在入口以 `ZodError`（`taskId` Required）失敗，意圖判斷、審批與 dispatch 都沒有執行（fail-closed，沒有副作用）。`mcp_agent` 已以 live 請求確認同樣失敗（`evidence/s10-mcp-agent-probe.json`）。
+
+既有測試沒有暴露的原因：測試直接在 `configurable.execution_context` 帶入完整 context，整合測試另外預先插入 `agent_tasks`／`task_steps`；D3 live gate 為主機單一程序直接呼叫 graph，沒有經過 BFF 與 Agent Server。
+
+**決策**（Master 2026-10-26，原話）：「S10 納入 X43：退回 PLAN_DRAFT，由 CCR 補 design 與 tasks（shopping 入口改用 graph-entry task admission、state 保存 executionTaskId）。mcp_agent 先用 live 請求確認是否受影響，再決定要不要納入。」
+
+**作法**：沿用 `deep_researcher` 已在使用的 graph 入口機制（`createGraphEntryContextResolver` 與 `PgGraphTaskAdmission`），不另造新的 task 登記方式。第 1～5 點以 `shopping_assistant` 說明，`mcp_agent` 採相同作法，差異見第 6 點。
+
+1. **入口登記 task**：`shopping_assistant` 的 `instrumentGraphWithExecutionContext` 改用 `createGraphEntryContextResolver(已編譯的 graph, new PgGraphTaskAdmission())`。
+   - 新的使用者輸入：入口產生候選 taskId，由 `PgGraphTaskAdmission.admit` 寫入 `agent_tasks`（`task_type = 'graph_execution'`，`metadata.graphEntry` 記錄 initial run、thread、principal、tenant、scope），之後所有節點讀到的 execution context 都帶這個 taskId。
+   - 同一個 run 重複進入入口時，以 `graphEntry.initialRunId` 找回同一筆 task，不重複登記（既有行為）。
+   - `createGraphEntryContextResolver` 目前固定以 `NODE_ENV`／`EXECUTION_CONTEXT_DEV_ENABLED` 判斷是否使用開發用 context；shopping 現在以 `TOOL_AUTHORIZATION_PROFILE` 判斷。為了不改變 shopping 的開發路徑，`createGraphEntryContextResolver` 新增**選填**的 context reader 參數，未提供時維持現行判斷（`deep_researcher` 行為不變），shopping 傳入與現行 `resolveShoppingExecutionContext` 相同的判斷。
+2. **State 保存 `executionTaskId`**：shopping state 新增 `executionTaskId`（§4.2），由 `route_intent` 在每輪開始時寫入入口登記的 taskId，與 `deep_researcher` 在新一輪重設時寫入的方式相同。
+   - 只能由節點寫入：不加入輸入 schema（§6.13），run 輸入夾帶時 MUST 不影響 state。
+   - cancel 輸入（`kind: "cancel"`）不經過 `route_intent`，不覆寫 `executionTaskId`；撤回以審批紀錄中的 task 為準（§6.2、`withdraw` 的 SQL 以審批紀錄的 `task_id` 更新），與 cancel run 登記的 task 無關。
+3. **resume 接回原 task**：resume（`Command` 或 null 輸入）時，入口從 checkpoint 讀取 `executionTaskId`，`PgGraphTaskAdmission` 以該 task 查詢並驗證 thread、principal、tenant、scope 與登記時一致，才回傳同一個 taskId；不一致或找不到時拋錯（既有行為）。
+   - 這與 §6.14 一致：登記時的 initial run 只作為 task 的建立紀錄，resume 的比對對象是伺服器端保存的 task，不比對承載 resume 的 run。
+   - checkpoint 沒有 `executionTaskId` 時（例如本變更前建立的 checkpoint），resume MUST fail-closed（`executionIdSchema` 驗證失敗），不另建新 task。本變更前的 production 入口一律失敗，因此不存在可正常 resume 的舊 checkpoint。
+4. **step 與外鍵**：`interrupt_manifests.task_id` 參照 `agent_tasks`（入口登記後成立）；`step_id` 參照 `task_steps`（可為空）。production 的 `stepId` 由 tool 呼叫路徑產生（`createToolCallContext`、dispatch pipeline 的 task-step adapter），是否在寫入 manifest 前已建立對應的 `task_steps` 尚未核對。實作前 MUST 先唯讀盤點；整合測試 MUST 走真實的入口登記，不預先插入 `agent_tasks`／`task_steps`。若發現外鍵不成立或需要新增 step 的建立點，停止並回報，不得以預先插入資料或放寬外鍵處理。（第 15 版：盤點已完成，審批前 `stepId` 為空、外鍵成立；核准後 dispatch 需要 `stepId`，由 §6.16 處理。）
+5. **不變的部分**：不新增資料表或 migration（`agent_tasks` 與 `graph_execution` task type 既有）；不改 BFF、harness、審批綁定（§6.14）與 task 狀態生命週期；入口登記失敗時整個請求 fail-closed，不退回無 taskId 的執行。
+6. **`mcp_agent`**（Master 2026-10-26 決策，原話：「mcp_agent 納入 TE，用相同的入口登記與 executionTaskId 做法。」）：已以 live 請求確認受影響（`evidence/s10-mcp-agent-probe.json`），作法與 shopping 相同：
+   - 入口改用 `createGraphEntryContextResolver(已編譯的 graph, new PgGraphTaskAdmission())`，context reader 沿用現行 `resolveMcpExecutionContext` 的 `TOOL_AUTHORIZATION_PROFILE` 判斷。
+   - `mcp_agent` state 新增 `executionTaskId`，由 `call_model` 寫入入口登記的 taskId。新的輸入一律從 `START` 進入 `call_model`，審批 interrupt 發生在其後的 `authorization_confirmation`，因此等待中的 checkpoint 一定保存伺服器端的值；resume run 中再次執行 `call_model` 時，入口已接回原 task，寫入的值不變。
+   - `mcp_agent` 沒有宣告輸入 schema（§14 既有 Retrofit Debt），run 輸入可能夾帶 `executionTaskId`；該值 MUST 在 `call_model` 被入口登記的 taskId 覆寫，以測試固定。即使被利用，resume 時 `PgGraphTaskAdmission` 仍會驗證 task 的 thread、principal、tenant、scope，無法接上其他 principal 或其他 thread 的 task。
+7. **部署對齊**（第 13 版 T9 前置，Master 擴大 writeScope 後已修改、尚未 commit）：手寫 Dockerfile 依 `backend/langgraph.json` 補上 `shopping_assistant` graph、`LANGGRAPH_HTTP`（operations http app 與 `configurable_headers`，否則 BFF 的身分與 active-run header 不會進入 graph config）與前端 build 需要的 `contracts/`。S10 的修正不需要再改 Dockerfile。
+
+**測試要求**：
+- 入口（兩個 graph）：新的使用者輸入會登記一筆 `graph_execution` task，execution context 帶該 taskId；同一 run 重複進入不重複登記；入口登記失敗時請求 fail-closed。
+- resume：由新 run 承載的 resume 取得與等待中相同的 taskId；thread、principal、tenant 或 scope 不一致時拒絕；checkpoint 缺 `executionTaskId` 時 fail-closed。
+- State：shopping 的 `executionTaskId` 由 `route_intent` 寫入，run 輸入夾帶時不影響 state，cancel 輸入不覆寫；`mcp_agent` 的 `executionTaskId` 由 `call_model` 寫入，run 輸入夾帶的值在進入審批前被覆寫。
+- 開發路徑：兩個 graph 在 `TOOL_AUTHORIZATION_PROFILE=development` 下的行為與修改前相同；`deep_researcher` 的入口行為不變。
+- 真實 Postgres 整合測試走 `PgGraphTaskAdmission` 與 `PostgresSaver`，**不預先插入** `agent_tasks`／`task_steps`，`shopping_assistant` 與 `mcp_agent` 各一組，涵蓋「入口登記 → 審批 interrupt → 新 run 承載 resume → dispatch 一次」，同時驗證 manifest 外鍵。
+- T9 live smoke 在本節完成後重新執行。
+
+### 6.16 核准後 dispatch 以確定性 stepId 執行（S11，第 15 版，Master 決策：方案 A）
+
+**問題**（TE 第 1 項盤點發現，`evidence/te-inventory-and-stop.md`）：shopping 的 tool 一律經 dispatch pipeline（§5.4），pipeline 在 dispatch 前要求 canonical context 帶 `stepId`，缺少時回 `TOOL_EXECUTION_CONTEXT_UNAVAILABLE`；task-step adapter 也依 `stepId` 建立與推進 `task_steps`。共用授權節點的 `physicalDispatch` 只在 context 加入 `toolCallId`，production 沒有任何地方產生 `stepId`。§6.15 修正入口後，核准仍會在 dispatch 前被拒，訂單系統不會被呼叫（fail-closed）。測試直接帶入 `stepId: "step-1"`，因此沒有暴露。
+
+**決策**（Master 2026-10-26，原話）：「S11 納入 X43，採方案 A：共用 physicalDispatch 用 createToolCallContext 的確定性做法產生 stepId，gate 不設定，mcp_agent 一併適用。請退回 PLAN_DRAFT 補 design 與 tasks。」
+
+**作法**：
+
+1. **`physicalDispatch` 產生 `stepId`**：呼叫 `executeAuthorizedTyped` 前，以 `createToolCallContext` 相同的確定性摘要（`createRawInputReference`：穩定序列化後的 SHA-256）產生 `stepId = step-<digest>`，摘要內容為 `{ taskId, nodeName: "physical_dispatch", toolName, toolCallId, input }`，寫入傳給 dispatch 的 execution context。
+2. **與 `createToolCallContext` 的兩點差異**（刻意，非偏離決策）：
+   - **不覆寫 `toolCallId`**：`createToolCallContext` 會以摘要產生新的 `toolCallId`，但 shopping 的 `operations`、審批紀錄、ledger 與 tool message 都以模型給的 `call.toolCallId` 為鍵，覆寫會讓核准結果對不上原本的操作。因此只產生 `stepId`，`toolCallId` 沿用 `call.toolCallId`。
+   - **摘要納入 `toolCallId`**：`createToolCallContext` 的摘要不含 tool call 識別；同一 task 內兩個輸入相同的 tool call（例如同一則模型訊息兩次相同退款）會得到相同 `stepId`，task-step adapter 會把第二次視為已完成的 step。納入 `toolCallId` 後，不同 tool call 一定得到不同 `stepId`。
+   - 摘要邏輯以新的輔助函式放在 `tool-call-context.ts`，與 `createToolCallContext` 共用同一個摘要方式；`createToolCallContext` 本身不修改，`deep_researcher` 的行為不變。
+3. **gate 不設定 `stepId`**：審批前不產生 `stepId`，審批紀錄與 manifest 的 `step_id` 維持 null。理由：`interrupt_manifests.step_id` 有外鍵參照 `task_steps`，而 step 要到 dispatch 時才由 task-step adapter 建立；若在 gate 設定，manifest 會指向尚未存在的 step。審批與 dispatch 之間仍以 `decisionId` 與 `toolCallId` 連結（§6.7、§6.10 既有）。
+4. **確定性與重放**：taskId 由 §6.15 的入口接回原 task，`toolCallId`、`toolName`、輸入都來自 checkpoint 中已核准的 tool call，因此同一個核准在 run 重試或重放時得到相同 `stepId`；task-step adapter 遇到已存在的 step 依既有規則略過或維持冪等，與 ledger 的單次 claim 一致。
+5. **context 不完整時 fail-closed**：`physicalDispatch` 取得的 canonical context 缺少 taskId 時，維持既有行為（`readExecutionContext` 拋錯或 pipeline 回 `TOOL_EXECUTION_CONTEXT_UNAVAILABLE`），**不得**退回 `createToolCallContext` 的隨機識別或以節點名稱當作 `stepId`。
+6. **`mcp_agent`**：使用同一個共用節點，一併適用。`mcp_agent` 是否經 pipeline 由 `TOOL_DISPATCH_PIPELINE_MCP_ENABLED` 決定（預設關閉，`registry.ts:75-80`）：關閉時 governed executor 只把 `stepId` 用於 audit 與 trace；開啟時與 shopping 相同，`stepId` 為 dispatch 的必要條件。
+7. **不變的部分**：不新增資料表或 migration；不改 BFF、harness、pipeline、task-step adapter、gate 的授權與 §6.14 的審批綁定。
+
+**測試要求**：
+- 同一個 task、tool call 與輸入得到相同 `stepId`；不同 `toolCallId`（輸入相同）得到不同 `stepId`；`toolCallId` 維持 `call.toolCallId`。
+- gate 階段不設定 `stepId`：審批紀錄與 manifest 的 `step_id` 為 null。
+- context 缺少 taskId 時 fail-closed，不產生隨機 `stepId`。
+- `createToolCallContext` 的既有行為與 `deep_researcher` 的測試不變。
+- 真實 Postgres 整合測試（與 §6.15 合併）：不預先插入 `agent_tasks`／`task_steps`、context 不帶 `stepId`，經 shopping 的 pipeline 核准後 dispatch 一次，task-step adapter 建立對應 `task_steps`，訂單 provider 只被呼叫一次；重放不再 dispatch。
+- `mcp_agent`：`TOOL_DISPATCH_PIPELINE_MCP_ENABLED` 開啟與關閉兩種情況，核准後都 dispatch 一次。
+
 ## 7. 操作生命週期
 
 ```text
@@ -627,6 +691,10 @@ requested ─▶ awaiting_approval ─┬─▶ approved ─┬─▶ executing 
 | BFF 的客戶端 state 寫入檢查依 LangGraph API 1.4.5 的路由與欄位；升級 LangGraph API 時須重新核對（§6.13） | 升級 LangGraph API 的 Change |
 | 既有 graph（`mcp_agent` 等）未宣告輸入 schema，內部 channel 仍可經 run 輸入賦值；目前由 gate 重新授權，風險有限 | 另開 Change |
 | 審批的等待中 run 與承載 resume 的 run 只在 audit 連結，canonical correlation 沒有正式的「resume run」關係欄位（§6.14） | X30 或 canonical-execution-context 的後續 Change |
+| Dockerfile 的 graph 清單與 http 設定和 `langgraph.json` 各寫一次，新增 graph 時容易漏改（§6.15 第 7 點） | 改由 `langgraph.json` 產生部署設定的後續 Change |
+| `math_agent` 在 dispatch pipeline 開啟時同樣以 `readExecutionContext` 建立 context，推測經 Agent Server 時也缺 taskId，未以 live 請求驗證（§6.15） | 另開 Change |
+| 整合測試曾預先插入 `agent_tasks`／`task_steps`，或在 context 直接帶入 `taskId`／`stepId`，掩蓋入口未登記 task（S10）與 dispatch 缺 `stepId`（S11）的問題；其他 graph 的整合測試未逐一檢查 | 另開 Change |
+| 審批紀錄與 manifest 的 `step_id` 為 null，審批與 dispatch step 只經 `decisionId`／`toolCallId` 連結，沒有直接的 step 關聯（§6.16 第 3 點） | X30 或 canonical-execution-context 的後續 Change |
 | X42 Minor：knowledge migration runner 未以交易包住單一 migration | 若本 Change 新增 knowledge migration 則於 T1 先修；預設設計不新增，維持承接 |
 
 ## 15. 替代方案
