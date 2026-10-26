@@ -2,6 +2,7 @@ import { RunnableConfig } from "@langchain/core/runnables";
 import { Annotation, END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph";
 
 import { getEnv } from "../platform/env.js";
+import { auditLogger } from "../platform/observability.js";
 import { isContextHardLimitError } from "../context/context-errors.js";
 import { llmGateway } from "../platform/llm-gateway.js";
 import {
@@ -55,6 +56,7 @@ const mcpAgentExecutionManifest = createExecutionManifestRef({
 const authorizationNodes = createToolAuthorizationGraphNodes({
   tools,
   confirmationStore,
+  confirmationAudit: auditLogger,
   interruptManifestRepository,
   executionManifest: mcpAgentExecutionManifest,
 });

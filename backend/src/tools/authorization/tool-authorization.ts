@@ -15,6 +15,7 @@ import type { Queryable } from "../../runtime/persistence/rows.js";
 import { getPool } from "../../runtime/persistence/connection.js";
 import type { ToolAuthorizationGovernanceConfig } from "../../platform/tool-governance.js";
 import { getBooleanEnv, getEnv } from "../../platform/env.js";
+import { auditLogger } from "../../platform/observability.js";
 import {
   createConfirmationRequiredDescriptor,
   PgAuthorizationConfirmationStore,
@@ -284,7 +285,8 @@ export function createRuntimeToolAuthorizationComposition(
   return {
     authorization,
     confirmationStore: new PgAuthorizationConfirmationStore(
-      configuredDatabase ?? unavailableDatabase
+      configuredDatabase ?? unavailableDatabase,
+      auditLogger
     ),
     interruptManifestRepository: configuredDatabase
       ? new PgInterruptManifestRepository(configuredDatabase)

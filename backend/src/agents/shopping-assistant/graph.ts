@@ -163,6 +163,7 @@ export function createShoppingAssistantGraph(
   const authorizationNodes = createToolAuthorizationGraphNodes({
     tools: dependencies.tools,
     confirmationStore: dependencies.confirmationStore,
+    confirmationAudit: { record: (eventName, payload) => dependencies.audit(eventName, payload) },
     interruptManifestRepository: dependencies.interruptManifestRepository,
     executionManifest,
     // Denied, expired and withdrawn approvals stay distinguishable (design §6.4).

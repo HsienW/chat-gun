@@ -105,7 +105,7 @@ class MemoryConfirmations implements AuthorizationConfirmationStore, Authorizati
     if (
       input.resume.approvalId !== input.descriptor.approvalId ||
       input.resume.decisionId !== input.descriptor.decisionId ||
-      input.executionContext.runId !== input.descriptor.runId
+      input.executionContext.threadId !== input.descriptor.threadId
     ) {
       return { ok: false as const, reasonCode: "CONFIRMATION_BINDING_MISMATCH" as const };
     }
@@ -560,6 +560,34 @@ describe("order branch approval", () => {
     expect(state.operations["call-1"]).toMatchObject({ state: "failed", reasonCode: "SIDE_EFFECT_LEDGER_UNAVAILABLE" });
   });
 
+  it.each(["run-1", "resume-run"])("approves on the same thread using %s", async (resumeRunId) => {
+    const h = await harness({ toolCalls: [refund("call-1")] });
+    const threadId = `thread-new-run-${resumeRunId}`;
+    await h.graph.invoke({ messages: [new HumanMessage("退款")] }, runConfig(threadId));
+    const descriptor = (await waitingState(h.graph, threadId)).pendingAuthorization!;
+    const state = await h.graph.invoke(resume(descriptor, "approve"), runConfig(threadId, resumeRunId));
+    expect(h.submitRefund).toHaveBeenCalledOnce();
+    expect(state.operations["call-1"]).toMatchObject({ state: "confirmed" });
+  });
+
+  it("rejects a different execution thread before consume", async () => {
+    const h = await harness({ toolCalls: [refund("call-1")] });
+    const threadId = "thread-binding";
+    await h.graph.invoke({ messages: [new HumanMessage("退款")] }, runConfig(threadId));
+    const descriptor = (await waitingState(h.graph, threadId)).pendingAuthorization!;
+    const consume = vi.spyOn(h.confirmations, "consume");
+    const state = await h.graph.invoke(resume(descriptor, "approve"), {
+      configurable: { thread_id: threadId, execution_context: contextFor("other-thread", "resume-run") },
+    });
+    expect(state.operations["call-1"]).toMatchObject({ state: "failed", reasonCode: "CONFIRMATION_BINDING_MISMATCH" });
+    expect(consume).not.toHaveBeenCalled();
+    expect(h.submitRefund).not.toHaveBeenCalled();
+    expect(h.audit).toHaveBeenCalledWith("authorization.confirmation.rejected", {
+      decisionId: descriptor.decisionId, reasonCode: "CONFIRMATION_BINDING_MISMATCH",
+      waitingRunId: descriptor.runId, resumeRunId: "resume-run",
+    });
+  });
+
   it("does not run a replayed approval again", async () => {
     const h = await harness({ toolCalls: [refund("call-1")] });
     const config = runConfig("thread-replay");
@@ -569,12 +597,18 @@ describe("order branch approval", () => {
     await h.graph.invoke(resume(descriptor, "approve"), config);
 
     // Resume the interrupt checkpoint a second time.
+    const consume = vi.spyOn(h.confirmations, "consume");
     const replay = await h.graph.invoke(resume(descriptor, "approve"), {
       configurable: { ...config.configurable, checkpoint_id: waiting.config.configurable?.checkpoint_id },
     });
 
     expect(h.submitRefund).toHaveBeenCalledOnce();
     expect(replay.operations["call-1"]).toMatchObject({ state: "failed", reasonCode: "CONFIRMATION_REPLAYED_OR_EXPIRED" });
+    expect(consume).not.toHaveBeenCalled();
+    expect(h.audit).toHaveBeenCalledWith("authorization.confirmation.rejected", {
+      decisionId: descriptor.decisionId, reasonCode: "CONFIRMATION_REPLAYED_OR_EXPIRED",
+      waitingRunId: descriptor.runId, resumeRunId: descriptor.runId,
+    });
   });
 
   it("keeps the approval and the operation identity across a restart while waiting", async () => {

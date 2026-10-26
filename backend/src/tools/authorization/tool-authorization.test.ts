@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Queryable } from "../../runtime/persistence/rows.js";
+import { auditLogger } from "../../platform/observability.js";
+import { executionContextSchema } from "../../runtime/execution-context/execution-context.js";
+import { createConfirmationRequiredDescriptor, parseConfirmationResume } from "../../runtime/authorization/confirmation.js";
 import {
   BUILT_IN_MCP_RISK_DESCRIPTORS,
   createLocalToolRiskPolicies,
@@ -28,6 +31,28 @@ function createDatabase(): Queryable {
 }
 
 describe("createToolAuthorizationConfig", () => {
+  it("connects the production confirmation store to the audit logger", async () => {
+    const audit = vi.spyOn(auditLogger, "record").mockResolvedValue(undefined);
+    try {
+      const context = executionContextSchema.parse(fixture.validContext);
+      const descriptor = createConfirmationRequiredDescriptor({
+        decisionId: "decision-audit", executionContext: context, action: "tool:write", toolName: "write_file",
+        resource: { resourceType: "mcp_tool", resourceId: "filesystem:write_file", tenantId: context.scope.tenantId },
+        policyVersion: "runtime-authorization-v1", timeoutMs: 60_000,
+      });
+      const composition = createRuntimeToolAuthorizationComposition({ profile: "production", db: createDatabase() });
+      const result = await composition.confirmationStore.consume({ descriptor,
+        resume: parseConfirmationResume({ type: "tool_authorization_confirmation", schemaVersion: "1.0", approvalId: descriptor.approvalId, decisionId: descriptor.decisionId, decision: "approve" }),
+        executionContext: { ...context, runId: "new-run", threadId: "different-thread" },
+      });
+      expect(result).toEqual({ ok: false, reasonCode: "CONFIRMATION_BINDING_MISMATCH" });
+      expect(audit).toHaveBeenCalledWith("authorization.confirmation.rejected", {
+        decisionId: descriptor.decisionId, reasonCode: "CONFIRMATION_BINDING_MISMATCH",
+        waitingRunId: context.runId, resumeRunId: "new-run",
+      });
+    } finally { audit.mockRestore(); }
+  });
+
   it("assembles production dependencies and reads the canonical execution context", async () => {
     const config = createToolAuthorizationConfig({
       profile: "production",
