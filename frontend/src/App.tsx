@@ -51,6 +51,24 @@ import {
   parseIdentityFailure,
   type IdentityFailure,
 } from '@/lib/identity-lifecycle';
+import { CommercePanel } from '@/components/commerce/CommercePanel';
+import {
+  createToolConfirmationResume,
+  parseCommerceCard,
+  parseOperationSnapshot,
+  parseToolConfirmationInterrupt,
+  type ToolConfirmationDecision,
+  type ToolConfirmationRequest,
+} from '@/lib/commerce-cards';
+import type {
+  ConfirmationSubmission,
+  ConfirmationSubmitError,
+} from '@/lib/commerce-labels';
+import {
+  commerceReducer,
+  createInitialCommerceState,
+  type TrackedOperation,
+} from '@/lib/commerce-state';
 
 const STREAM_ERROR_MESSAGE_ID = 'stream-error';
 const WEATHER_CLARIFICATION_AI_MESSAGE_ID = 'weather-clarification-interrupt-ai';
@@ -111,6 +129,16 @@ function findArchiveMessageId(
   })?.id;
 }
 
+function toConfirmationSubmitError(error: unknown): ConfirmationSubmitError {
+  const envelope =
+    parseErrorEnvelope(error) ||
+    parseErrorEnvelope(error instanceof Error ? error.message : String(error));
+  return {
+    kind: classifyStreamError(error),
+    ...(envelope ? { code: envelope.error.code } : {}),
+  };
+}
+
 function getCurrentFinalAssistantMessageId(messages: Message[]): string | undefined {
   const lastMessage = messages[messages.length - 1];
   return lastMessage?.type === 'ai' ? lastMessage.id : undefined;
@@ -157,6 +185,18 @@ export default function App() {
   const [weatherClarificationMessages, setWeatherClarificationMessages] =
     useState<Message[] | null>(null);
   const [isDispatching, setIsDispatching] = useState(false);
+  const [commerceState, dispatchCommerce] = useReducer(
+    commerceReducer,
+    undefined,
+    createInitialCommerceState
+  );
+  const [confirmationSubmission, setConfirmationSubmission] = useState<
+    ConfirmationSubmission | undefined
+  >();
+  const [lastConfirmationRequest, setLastConfirmationRequest] = useState<
+    ToolConfirmationRequest | undefined
+  >();
+  const confirmationSubmissionRef = useRef<ConfirmationSubmission | undefined>(undefined);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const selectedAgentIdRef = useRef(selectedAgentId);
   const messagesRef = useRef<Message[]>([]);
@@ -175,6 +215,14 @@ export default function App() {
     dispatchingRef.current = false;
     setIsDispatching(false);
   }, []);
+
+  const updateConfirmationSubmission = useCallback(
+    (submission: ConfirmationSubmission | undefined) => {
+      confirmationSubmissionRef.current = submission;
+      setConfirmationSubmission(submission);
+    },
+    []
+  );
 
   const beginDispatch = useCallback((): boolean => {
     if (dispatchingRef.current) return false;
@@ -230,9 +278,12 @@ export default function App() {
         releaseDispatch();
         activeRunHintRef.current = undefined;
         runtimeEventBufferRef.current = new BoundedRuntimeEventBuffer();
+        dispatchCommerce({ type: 'reset' });
+        updateConfirmationSubmission(undefined);
+        setLastConfirmationRequest(undefined);
       }
     },
-    [releaseDispatch, selectedAgentId, validateAgentId]
+    [releaseDispatch, selectedAgentId, updateConfirmationSubmission, validateAgentId]
   );
 
   const handleAgentChange = useCallback(
@@ -245,6 +296,15 @@ export default function App() {
 
   const handleStreamError = useCallback((error: unknown) => {
     releaseDispatch();
+    const submission = confirmationSubmissionRef.current;
+    if (submission?.status === 'submitting') {
+      // The decision is not assumed to have taken effect; the card stays open.
+      updateConfirmationSubmission({
+        approvalId: submission.approvalId,
+        status: 'failed',
+        error: toConfirmationSubmitError(error),
+      });
+    }
     if (clarificationResumePendingRef.current) {
       setWeatherClarificationMessages(null);
     }
@@ -277,11 +337,15 @@ export default function App() {
       archiveMessageId: STREAM_ERROR_MESSAGE_ID,
     });
     console.error('LangGraph stream error:', error);
-  }, [releaseDispatch]);
+  }, [releaseDispatch, updateConfirmationSubmission]);
 
   const handleStreamFinish = useCallback((event: unknown) => {
     void event;
     releaseDispatch();
+    // From here the server thread state decides what the operation shows.
+    if (confirmationSubmissionRef.current?.status === 'submitting') {
+      updateConfirmationSubmission(undefined);
+    }
     if (clarificationResumePendingRef.current) {
       setWeatherClarificationMessages(null);
     }
@@ -291,7 +355,7 @@ export default function App() {
       messagesLengthAtTerminal: messagesRef.current.length,
       archiveMessageId: getCurrentFinalAssistantMessageId(messagesRef.current),
     });
-  }, [releaseDispatch]);
+  }, [releaseDispatch, updateConfirmationSubmission]);
 
   const handleStreamUpdate = useCallback((event: Record<string, unknown>) => {
     releaseDispatch();
@@ -356,10 +420,21 @@ export default function App() {
         return buffered.events.map(runtimeEnvelopeToAgentRuntimeEvent);
       }
     );
-    const processedEvents = [
-      ...extractAgentRuntimeEvents(event),
-      ...versionedEvents,
-    ].map(runtimeEventToProcessedEvent);
+    const runtimeEvents = [...extractAgentRuntimeEvents(event), ...versionedEvents];
+    const cards = runtimeEvents.flatMap((runtimeEvent) =>
+      runtimeEvent.type === 'agent.card.emit'
+        ? [
+            {
+              card: parseCommerceCard(runtimeEvent.cardType, runtimeEvent.payload),
+              runId: runtimeEvent.correlation?.runId,
+            },
+          ]
+        : []
+    );
+    if (cards.length > 0) {
+      dispatchCommerce({ type: 'cardsReceived', cards });
+    }
+    const processedEvents = runtimeEvents.map(runtimeEventToProcessedEvent);
 
     if (processedEvents.length > 0) {
       dispatchStreamActivity({
@@ -390,6 +465,93 @@ export default function App() {
   useEffect(() => {
     messagesRef.current = thread.messages;
   }, [thread.messages]);
+
+  // The server thread state is authoritative, including after a reload.
+  const threadHeadValues = thread.history?.at(-1)?.values;
+  useEffect(() => {
+    const operations = parseOperationSnapshot(threadHeadValues);
+    if (operations.length > 0) {
+      dispatchCommerce({ type: 'snapshotReceived', operations });
+    }
+  }, [threadHeadValues]);
+
+  const serverConfirmationRequest = useMemo(
+    () => parseToolConfirmationInterrupt(thread.interrupt?.value),
+    [thread.interrupt]
+  );
+  useEffect(() => {
+    if (serverConfirmationRequest) setLastConfirmationRequest(serverConfirmationRequest);
+  }, [serverConfirmationRequest]);
+  // The interrupt is hidden while a run streams; keep the last one so the card
+  // stays in place. It only renders for an operation still awaiting approval.
+  const confirmationRequest = serverConfirmationRequest ?? lastConfirmationRequest;
+
+  const handleConfirmationDecision = useCallback(
+    (request: ToolConfirmationRequest, decision: ToolConfirmationDecision) => {
+      if (rateLimitRetryAfter !== null) return;
+      if (!beginDispatch()) return;
+      dispatchStreamActivity({ type: 'resetForAgentOrSubmit' });
+      dispatchStreamActivity({ type: 'streamStarted' });
+      setStreamErrorMessage(null);
+      setCancelledMessage(null);
+      updateConfirmationSubmission({ approvalId: request.approvalId, status: 'submitting' });
+
+      try {
+        thread.submit(
+          null,
+          withInteractionRequestMetadata(
+            { command: { resume: createToolConfirmationResume(request, decision) } },
+            createInteractionRequestMetadata(activeRunHintRef.current)
+          )
+        );
+      } catch (error) {
+        releaseDispatch();
+        updateConfirmationSubmission({
+          approvalId: request.approvalId,
+          status: 'failed',
+          error: toConfirmationSubmitError(error),
+        });
+      }
+    },
+    [beginDispatch, rateLimitRetryAfter, releaseDispatch, thread, updateConfirmationSubmission]
+  );
+
+  const handleConfirmationCancel = useCallback(
+    (operation: TrackedOperation) => {
+      if (rateLimitRetryAfter !== null) return;
+      const approvalId = operation.card.operationRef.operationId;
+      if (!approvalId || !beginDispatch()) return;
+      dispatchStreamActivity({ type: 'resetForAgentOrSubmit' });
+      dispatchStreamActivity({ type: 'streamStarted' });
+      setStreamErrorMessage(null);
+      setCancelledMessage(null);
+      updateConfirmationSubmission({ approvalId, status: 'submitting' });
+
+      try {
+        // The backend withdraws by its checkpoint; targetRunId is only compared (design §6.2).
+        thread.submit(
+          {
+            kind: 'cancel',
+            ...(operation.approvalRunId ? { targetRunId: operation.approvalRunId } : {}),
+          },
+          withInteractionRequestMetadata(
+            {},
+            createInteractionRequestMetadata(activeRunHintRef.current, undefined, {
+              inputKind: 'cancel',
+            })
+          )
+        );
+      } catch (error) {
+        releaseDispatch();
+        updateConfirmationSubmission({
+          approvalId,
+          status: 'failed',
+          error: toConfirmationSubmitError(error),
+        });
+      }
+    },
+    [beginDispatch, rateLimitRetryAfter, releaseDispatch, thread, updateConfirmationSubmission]
+  );
 
   useEffect(() => {
     const pendingArchive = streamActivityState.pendingArchive;
@@ -426,6 +588,7 @@ export default function App() {
       handleAgentSwitch(validAgentId);
       dispatchStreamActivity({ type: 'resetForAgentOrSubmit' });
       dispatchStreamActivity({ type: 'streamStarted' });
+      dispatchCommerce({ type: 'turnStarted' });
       setStreamErrorMessage(null);
       setRateLimitRetryAfter(null);
       setCancelledMessage(null);
@@ -653,6 +816,15 @@ export default function App() {
               selectedAgentId={selectedAgentId}
               onAgentChange={handleAgentChange}
               onClarificationResume={handleClarificationResume}
+              commercePanel={
+                <CommercePanel
+                  state={commerceState}
+                  confirmationRequest={confirmationRequest}
+                  submission={confirmationSubmission}
+                  onDecision={handleConfirmationDecision}
+                  onCancelRequest={handleConfirmationCancel}
+                />
+              }
             />
           )}
         </div>

@@ -3,6 +3,7 @@ export enum AgentId {
   CHATBOT = 'chatbot',
   MATH_AGENT = 'math_agent',
   MCP_AGENT = 'mcp_agent',
+  SHOPPING_ASSISTANT = 'shopping_assistant',
 }
 
 export interface Agent {
@@ -50,6 +51,15 @@ export const AVAILABLE_AGENTS: Agent[] = [
     icon: 'wrench',
     capabilities: ['Model Context Protocol (MCP)'],
     showActivityTimeline: false,
+  },
+  {
+    id: AgentId.SHOPPING_ASSISTANT,
+    name: 'Shopping Assistant',
+    description: '商品查詢、政策問答與需審批的模擬訂單操作',
+    icon: 'shopping-cart',
+    capabilities: ['Product Lookup', 'Policy Answers', 'Approved Order Operations'],
+    // Card events are only handled for agents with the activity timeline (design §8.1).
+    showActivityTimeline: true,
   },
 ];
 

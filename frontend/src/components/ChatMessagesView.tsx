@@ -529,6 +529,8 @@ interface ChatMessagesViewProps {
   selectedAgentId: string;
   onAgentChange: (agentId: string) => void;
   onClarificationResume?: (resumeValue: ClarificationResumeValue) => void;
+  /** Structured commerce cards and approvals, rendered after the messages. */
+  commercePanel?: React.ReactNode;
 }
 
 export function ChatMessagesView({
@@ -542,6 +544,7 @@ export function ChatMessagesView({
   selectedAgentId,
   onAgentChange,
   onClarificationResume,
+  commercePanel,
 }: ChatMessagesViewProps) {
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -621,6 +624,7 @@ export function ChatMessagesView({
               </div>
             );
           })}
+          {commercePanel}
           {isLoading &&
             (messageGroups.length === 0 ||
               messageGroups[messageGroups.length - 1].type === 'human') && (
