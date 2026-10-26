@@ -133,6 +133,15 @@ describePostgres("TE graph entry task and dispatch step", { timeout: 60_000 }, (
     expect(values.pendingAuthorization.taskId).toBe(taskId);
     await expectEntryTask(taskId, `run-1-${run}`);
 
+    // A resume from another tenant is refused at the entry: no task, no dispatch.
+    await expect(entry.invoke(
+      approve(values.pendingAuthorization),
+      headers(threadId, `tenant-run-${run}`, "synthetic-shopper-a", "other-tenant"),
+    )).rejects.toThrow("binding mismatch");
+    expect(await rows("SELECT count(*)::int AS count FROM agent_tasks WHERE metadata #>> '{graphEntry,threadId}' = $1", [threadId]))
+      .toEqual([{ count: 1 }]);
+    expect(submitRefund).not.toHaveBeenCalled();
+
     const resumed = await entry.invoke(approve(values.pendingAuthorization), shopper("resume-run"));
     expect(submitRefund).toHaveBeenCalledOnce();
     expect((resumed as { operations: Record<string, { state: string }> }).operations["call-1"]?.state).toBe("confirmed");

@@ -35,6 +35,16 @@ describe("graph Task admission", () => {
     await expect(store.admit({ ...context, principal: { ...context.principal, principalId: "other-principal" } }, "task-1")).rejects.toThrow();
   });
 
+  it("rejects a resume from another tenant or scope type without admitting a new task", async () => {
+    const { store, rows } = database();
+    await store.admit(context);
+    await expect(store.admit({ ...context, principal: { ...context.principal, tenantId: "other-tenant" } }, "task-1"))
+      .rejects.toThrow("binding mismatch");
+    await expect(store.admit({ ...context, scope: { ...context.scope, scopeType: "tenant" } }, "task-1"))
+      .rejects.toThrow("binding mismatch");
+    expect(rows).toHaveLength(1);
+  });
+
   it("rejects an unknown resume task and releases the transaction", async () => {
     const { store, query, release } = database();
     await expect(store.admit(context, "missing-task")).rejects.toThrow();
