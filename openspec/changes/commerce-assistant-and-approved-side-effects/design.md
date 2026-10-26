@@ -640,7 +640,7 @@ requested ─▶ awaiting_approval ─┬─▶ approved ─┬─▶ executing 
 
 - agent 清單新增 `shopping_assistant`（`AgentId` Enum 與 `AVAILABLE_AGENTS` 為單一來源），`showActivityTimeline: true`（既有事件處理只對此類 agent 執行，§8.1）。卡片元件由同一條事件處理路徑取得 payload，不另建傳輸。
 - `ProductResultCard`：顯示標題、片段與引用標記；引用可對應回答中的 citationId。
-- `OperationApprovalCard`：`awaiting_approval` 時顯示操作摘要（種類、訂單、明細）、server 提供的審批期限與「核准」「拒絕」「取消申請」。核准／拒絕以既有 resume 機制回傳（帶原 run 的 active run 識別）；取消申請送出既有 `cancel` 輸入（`targetRunId` 為審批所屬的 run），狀態以 graph 回傳的 card 為準。撤回失敗時顯示 typed 錯誤並允許重試取消。送出期間按鈕停用，避免重複送出。
+- `OperationApprovalCard`：`awaiting_approval` 時顯示操作摘要（種類、訂單、明細）、server 提供的審批期限與「核准」「拒絕」「取消申請」。核准／拒絕以既有 resume 機制回傳；前端已知 active run 識別時才帶上，未知不帶，審批綁定一律以服務端記錄的等待中 run 為準（§6.14），最終結果以服務端為事實來源（Master 2026-10-26 裁定，T10）；取消申請送出既有 `cancel` 輸入（`targetRunId` 為審批所屬的 run），狀態以 graph 回傳的 card 為準。撤回失敗時顯示 typed 錯誤並允許重試取消。送出期間按鈕停用，避免重複送出。
 - 期限已過但尚未收到 server 的逾期狀態時，卡片只顯示「已超過審批期限，系統確認中」的提示並保留按鈕；**不得**自行把狀態改為 `approval_expired`。使用者送出後，由 server 回傳逾期結果。
 - `OperationStatusCard`：依 `order_operation_status@1` 顯示所有生命週期狀態的繁中標籤與說明；`outcome_unknown` 顯示「結果待確認，已建立核對工作，請勿重複申請」；`deduplicated` 顯示「與既有申請相同，未重複執行」並連到原操作狀態。
 - **沒有 undo、撤銷、退款取消或「復原」按鈕**；`confirmed` 之後不提供任何操作按鈕。測試以查詢可操作元素驗證。
