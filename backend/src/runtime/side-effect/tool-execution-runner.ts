@@ -480,17 +480,18 @@ export class ToolExecutionRunner {
         nextStatus: "executing",
       });
     } catch {
-      await this.releaseOrFalse(
+      return this.releaseOrUncertain(
+        input,
         prepareResult.execution.toolExecutionId,
         prepareResult.businessEffect.businessEffectId,
         "prepared",
-        "rejected_before_dispatch"
+        "rejected_before_dispatch",
+        {
+          type: "deferred",
+          errorCode: "SIDE_EFFECT_LEDGER_UNAVAILABLE",
+          toolExecutionId: prepareResult.execution.toolExecutionId,
+        }
       );
-      return {
-        type: "deferred",
-        errorCode: "SIDE_EFFECT_LEDGER_UNAVAILABLE",
-        toolExecutionId: prepareResult.execution.toolExecutionId,
-      };
     }
     if (preauthorization.type === "authorized") {
       try {
@@ -499,17 +500,18 @@ export class ToolExecutionRunner {
           decisionId: preauthorization.decisionId,
         });
       } catch {
-        await this.releaseOrFalse(
+        return this.releaseOrUncertain(
+          input,
           prepareResult.execution.toolExecutionId,
           prepareResult.businessEffect.businessEffectId,
           "executing",
-          "rejected_before_dispatch"
+          "rejected_before_dispatch",
+          {
+            type: "deferred",
+            errorCode: "SIDE_EFFECT_LEDGER_UNAVAILABLE",
+            toolExecutionId: prepareResult.execution.toolExecutionId,
+          }
         );
-        return {
-          type: "deferred",
-          errorCode: "SIDE_EFFECT_LEDGER_UNAVAILABLE",
-          toolExecutionId: prepareResult.execution.toolExecutionId,
-        };
       }
     }
 
@@ -774,15 +776,8 @@ export class ToolExecutionRunner {
       result: ToolExecutionRunResult<TResult>,
       terminationCause: ToolExecutionTerminationCause,
       expectedStatus: ToolExecutionStatus = "executing"
-    ): Promise<ToolExecutionRunResult<TResult>> => {
-      await this.releaseOrFalse(
-        toolExecutionId,
-        businessEffectId,
-        expectedStatus,
-        terminationCause
-      );
-      return result;
-    };
+    ): Promise<ToolExecutionRunResult<TResult>> =>
+      this.releaseOrUncertain(input, toolExecutionId, businessEffectId, expectedStatus, terminationCause, result);
 
     while (true) {
       const executionConfig = this.createExecutionConfig(input, toolExecutionId);
@@ -1274,6 +1269,30 @@ export class ToolExecutionRunner {
       await this.openReconciliationTask(input, toolExecutionId, businessEffectId, PERSISTENCE_UNCERTAIN);
     }
     return persisted;
+  }
+
+  /**
+   * Releases a claim held by an execution that never committed. A release that
+   * cannot be written leaves the claim held, so the exit stays uncertain with a
+   * task instead of reporting it as closed (design §6.8).
+   */
+  private async releaseOrUncertain<TInput, TResult>(
+    input: ToolExecutionRunInput<TInput, TResult>,
+    toolExecutionId: string,
+    businessEffectId: string,
+    expectedExecutionStatus: ToolExecutionStatus,
+    terminationCause: ToolExecutionTerminationCause,
+    result: ToolExecutionRunResult<TResult>
+  ): Promise<ToolExecutionRunResult<TResult>> {
+    const released = await this.releaseOrFalse(
+      toolExecutionId,
+      businessEffectId,
+      expectedExecutionStatus,
+      terminationCause
+    );
+    if (released) return result;
+    await this.openReconciliationTask(input, toolExecutionId, businessEffectId, PERSISTENCE_UNCERTAIN);
+    return { type: "deferred", errorCode: PERSISTENCE_UNCERTAIN, toolExecutionId };
   }
 
   /** Releases a claim confirmed not committed; a release that cannot be written stays unknown with a task. */

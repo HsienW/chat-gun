@@ -1772,6 +1772,86 @@ describe("ToolExecutionRunner uncertain persistence after dispatch", () => {
     expect(second.tasks.open).toHaveBeenCalledWith(expect.objectContaining({ reasonCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN" }));
   });
 
+  it.each([
+    ["failed not committed", { type: "failed_not_committed" as const, errorCode: "ORDER_NOT_FOUND" }],
+    ["rejected before dispatch", { type: "rejected_before_dispatch" as const, errorCode: "TOOL_INPUT_INVALID" }],
+    ["cancelled before dispatch", { type: "cancelled" as const, dispatchState: "before" as const }],
+  ])("stays uncertain with a task when the release after %s cannot be written", async (_case, outcome) => {
+    const ledger = createLedger();
+    ledger.releaseClaim.mockRejectedValueOnce(new Error("ledger unavailable"));
+    const executor = createExecutor([outcome]);
+    const { runner, tasks } = runnerWith(ledger);
+
+    await expect(runner.execute(runInput(executor, createDescriptor())))
+      .resolves.toEqual({ type: "deferred", errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN", toolExecutionId: "execution-1" });
+    expect(ledger.releaseClaim).toHaveBeenCalledOnce();
+    expect(executor.executeTyped).toHaveBeenCalledOnce();
+    expect(tasks.open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      businessEffectId: "effect-1",
+      toolExecutionId: "execution-1",
+      reasonCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN",
+    }));
+  });
+
+  it("stays uncertain without a task when a failed release has no task opt-in", async () => {
+    const ledger = createLedger();
+    ledger.releaseClaim.mockRejectedValueOnce(new Error("ledger unavailable"));
+    const { runner, tasks } = runnerWith(ledger, false);
+
+    await expect(runner.execute(runInput(
+      createExecutor([{ type: "failed_not_committed", errorCode: "ORDER_NOT_FOUND" }]),
+      createDescriptor()
+    ))).resolves.toEqual({ type: "deferred", errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN", toolExecutionId: "execution-1" });
+    expect(tasks.open).not.toHaveBeenCalled();
+  });
+
+  it("keeps the ledger-unavailable deferral when the claim is released before dispatch", async () => {
+    const ledger = createLedger();
+    ledger.transitionExecution.mockRejectedValueOnce(new Error("ledger unavailable"));
+    const executor = createExecutor([]);
+    const { runner, tasks } = runnerWith(ledger);
+
+    await expect(runner.execute(runInput(executor, createDescriptor())))
+      .resolves.toEqual({ type: "deferred", errorCode: "SIDE_EFFECT_LEDGER_UNAVAILABLE", toolExecutionId: "execution-1" });
+    expect(ledger.releaseClaim).toHaveBeenCalledOnce();
+    expect(executor.executeTyped).not.toHaveBeenCalled();
+    expect(tasks.open).not.toHaveBeenCalled();
+  });
+
+  it("stays uncertain with a task when the pre-dispatch release after a failed start cannot be written", async () => {
+    const ledger = createLedger();
+    ledger.transitionExecution.mockRejectedValueOnce(new Error("ledger unavailable"));
+    ledger.releaseClaim.mockRejectedValueOnce(new Error("ledger unavailable"));
+    const executor = createExecutor([]);
+    const { runner, tasks } = runnerWith(ledger);
+
+    await expect(runner.execute(runInput(executor, createDescriptor())))
+      .resolves.toEqual({ type: "deferred", errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN", toolExecutionId: "execution-1" });
+    expect(executor.executeTyped).not.toHaveBeenCalled();
+    expect(tasks.open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      businessEffectId: "effect-1",
+      reasonCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN",
+    }));
+  });
+
+  it("stays uncertain with a task when the release after a failed decision link cannot be written", async () => {
+    const ledger = createLedger();
+    ledger.linkAuthorizationDecision.mockRejectedValueOnce(new Error("ledger unavailable"));
+    ledger.releaseClaim.mockRejectedValueOnce(new Error("ledger unavailable"));
+    const executor = createPreflightExecutor(
+      [{ type: "authorized", decisionId: "decision-approved" }],
+      [{ type: "succeeded", result: { operationId: "operation-1" } }]
+    );
+    const { runner, tasks } = runnerWith(ledger);
+
+    await expect(runner.execute(runInput(executor, createDescriptor())))
+      .resolves.toEqual({ type: "deferred", errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN", toolExecutionId: "execution-1" });
+    expect(executor.executeAuthorizedTyped).not.toHaveBeenCalled();
+    expect(tasks.open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      reasonCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN",
+    }));
+  });
+
   it("keeps the previous result and never reconciles without the opt-in", async () => {
     const ledger = createLedger();
     ledger.completeAttempt.mockRejectedValueOnce(new Error("ledger unavailable"));
