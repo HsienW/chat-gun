@@ -386,9 +386,9 @@ npm run build
 
 > 前置：design §20 第 17 版；決策點 1～5 已於 2026-10-27 由 Master 裁定（全部採建議）。對應 `retrieval-evaluation` ADDED Requirement。2026-10-26 第一次開工因 design 未定義而停止（`evidence/tb1-inventory-and-stop.md`）。
 
-- [x] 契約：新增 `eval_case@1.1`（design §20.2）。新載入器同時接受 `@1` 與 `@1.1`；不支援的版本回 `EVAL_CASE_UNSUPPORTED_SCHEMA_VERSION`；`@1` 既有錯誤碼語意不變。以固定測試鎖定：只支援 `@1` 的載入器遇到鏈路案例時回 `EVAL_CASE_UNKNOWN_EXPECTED_KIND` 並列入 rejected。 （2026-10-27：handoff 034 完成並驗證，`evidence/tb1-t11-summary.md`。待非 CCR 驗收）
-- [x] 鏈路案例結構（design §20.3）：`expected.kind: "chain"`，逐輪包含 `expectedIntent`、`answer?`、`operation?`；所有 enum 都引用 `SHOPPING_INTENTS`、`ORDER_OPERATION_STATES`，不另立副本。`input.turns` 與 `expected.turns` 長度不一致時回 typed failure。 （2026-10-27：handoff 034 完成並驗證，`evidence/tb1-t11-summary.md`。待非 CCR 驗收）
-- [x] 資料集 `backend/data/commerce-eval/chain-eval-v1.json`（design §20.4）由產生器腳本產出：約 15 題，涵蓋 spec 列出的每一種必要案例，dev 5 題／test 10 題，必要案例在 test 中各至少一題；每題帶合成 provenance 與資料分級。題型分布以測試檢查。 （2026-10-27：handoff 034 完成並驗證，`evidence/tb1-t11-summary.md`。待非 CCR 驗收）
+- [x] 契約：新增 `eval_case@1.1`（design §20.2）。新載入器同時接受 `@1` 與 `@1.1`；不支援的版本回 `EVAL_CASE_UNSUPPORTED_SCHEMA_VERSION`；`@1` 既有錯誤碼語意不變。以固定測試鎖定：只支援 `@1` 的載入器遇到鏈路案例時回 `EVAL_CASE_UNKNOWN_EXPECTED_KIND` 並列入 rejected。 （2026-10-27：handoff 034 完成並驗證，`evidence/tb1-t11-summary.md`。2026-10-27 由 Qwen 獨立驗收 APPROVE，Master 接受（模型身分比照 S9），`evidence/qwen-tb1-t11-review.md`）
+- [x] 鏈路案例結構（design §20.3）：`expected.kind: "chain"`，逐輪包含 `expectedIntent`、`answer?`、`operation?`；所有 enum 都引用 `SHOPPING_INTENTS`、`ORDER_OPERATION_STATES`，不另立副本。`input.turns` 與 `expected.turns` 長度不一致時回 typed failure。 （2026-10-27：handoff 034 完成並驗證，`evidence/tb1-t11-summary.md`。2026-10-27 由 Qwen 獨立驗收 APPROVE，Master 接受（模型身分比照 S9），`evidence/qwen-tb1-t11-review.md`）
+- [x] 資料集 `backend/data/commerce-eval/chain-eval-v1.json`（design §20.4）由產生器腳本產出：約 15 題，涵蓋 spec 列出的每一種必要案例，dev 5 題／test 10 題，必要案例在 test 中各至少一題；每題帶合成 provenance 與資料分級。題型分布以測試檢查。 （2026-10-27：handoff 034 完成並驗證，`evidence/tb1-t11-summary.md`。2026-10-27 由 Qwen 獨立驗收 APPROVE，Master 接受（模型身分比照 S9），`evidence/qwen-tb1-t11-review.md`）
 
 驗證：`cd backend && npm run lint && npm run test && npm run build`，加上產生器重跑後資料集內容不變（決定性）。
 
@@ -396,15 +396,15 @@ npm run build
 
 > 前置：T5、T7、T10、TB1。對應 `retrieval-evaluation` ADDED Requirement。
 
-- [x] 拒答可觀察性（design §20.6，依決策點 1）：新增 additive state 欄位 `turnEvidence.answerStatus` 與 audit `shopping.policy.abstained`；回覆文字與既有 audit 不變；舊 checkpoint 讀為 null。 （2026-10-27：handoff 034 完成並驗證，`evidence/tb1-t11-summary.md`。待非 CCR 驗收）
-- [x] 執行器 `backend/src/evaluation/commerce/`（design §20.5）：驅動真實 `createShoppingAssistantGraph`，每題獨立 thread，以測試 principal 建立 execution context。人工決定（approve、deny、expire、cancel_before_effect）由 harness 送出，不由受測模型產生。故障以每題獨立的 `MockOrderProvider` 注入；並行重複以 commit gate 搭配兩個實例共用 Postgres ledger。每輪只讀結構化結果。 （2026-10-27：handoff 034 完成並驗證，`evidence/t11-runner-summary.md`。待非 CCR 驗收）
-- [x] 計分與報表（design §20.7）： （2026-10-27：handoff 034 完成並驗證，`evidence/t11-runner-summary.md`。待非 CCR 驗收）
+- [x] 拒答可觀察性（design §20.6，依決策點 1）：新增 additive state 欄位 `turnEvidence.answerStatus` 與 audit `shopping.policy.abstained`；回覆文字與既有 audit 不變；舊 checkpoint 讀為 null。 （2026-10-27：handoff 034 完成並驗證，`evidence/tb1-t11-summary.md`。2026-10-27 由 Qwen 獨立驗收 APPROVE，Master 接受（模型身分比照 S9），`evidence/qwen-tb1-t11-review.md`）
+- [x] 執行器 `backend/src/evaluation/commerce/`（design §20.5）：驅動真實 `createShoppingAssistantGraph`，每題獨立 thread，以測試 principal 建立 execution context。人工決定（approve、deny、expire、cancel_before_effect）由 harness 送出，不由受測模型產生。故障以每題獨立的 `MockOrderProvider` 注入；並行重複以 commit gate 搭配兩個實例共用 Postgres ledger。每輪只讀結構化結果。 （2026-10-27：handoff 034 完成並驗證，`evidence/t11-runner-summary.md`。2026-10-27 由 Qwen 獨立驗收 APPROVE，Master 接受（模型身分比照 S9），`evidence/qwen-tb1-t11-review.md`）
+- [x] 計分與報表（design §20.7）： （2026-10-27：handoff 034 完成並驗證，`evidence/t11-runner-summary.md`。2026-10-27 由 Qwen 獨立驗收 APPROVE，Master 接受（模型身分比照 S9），`evidence/qwen-tb1-t11-review.md`）
   - 逐輪路由（誤分流與 route 失敗計為失敗）、引用與拒答、操作 terminal 狀態與 dedup 原因，以及兩個禁止結果。
   - 5×5 混淆矩陣只在 live 計算，deterministic 標為 `not_measured`。
   - provenance 含 `mode` 等欄位；deterministic 與 live 分開輸出。
   - 任一題未完成時，整次執行標為 incomplete，不發布分數。
-- [x] deterministic 執行（需要隔離的 Postgres）：全部 `chain-eval-v1` 通過，結果寫入 `backend/data/commerce-eval/results/`。 （2026-10-27：handoff 034 完成並驗證，`evidence/t11-runner-summary.md`。待非 CCR 驗收）
-- [ ] live 執行（需要 Master 提供模型與 knowledge DB）：在同一份鏈路設定上依序執行 `knowledge:evaluate`（`kb-eval-v1`，40 題）與鏈路評測，報表並列；記錄資料集版本、模型識別、prompt 版本、門檻版本、執行次數、日期與合成資料聲明。
+- [x] deterministic 執行（需要隔離的 Postgres）：全部 `chain-eval-v1` 通過，結果寫入 `backend/data/commerce-eval/results/`。 （2026-10-27：handoff 034 完成並驗證，`evidence/t11-runner-summary.md`。2026-10-27 由 Qwen 獨立驗收 APPROVE，Master 接受（模型身分比照 S9），`evidence/qwen-tb1-t11-review.md`）
+- [x] live 執行（需要 Master 提供模型與 knowledge DB）：在同一份鏈路設定上依序執行 `knowledge:evaluate`（`kb-eval-v1`，40 題）與鏈路評測，報表並列；記錄資料集版本、模型識別、prompt 版本、門檻版本、執行次數、日期與合成資料聲明。 （2026-10-27：handoff 035 完成，design §20.5 B1；knowledge:evaluate `kb-eval-v1-2026-10-27-r2` 兩策略 40／40，鏈路 live `chain-eval-v1-live-2026-10-27` completed、cleanup completed；F-L1 經 Master 記為已知限制，`evidence/t11-live-summary.md`。2026-10-28 由 Qwen 獨立驗收 COMMENT_ONLY（T11-5、T13 判 acceptable，2 項 Minor 記為後續建議），Master 接受（模型身分比照 S9），`evidence/qwen-t11-live-t13-review.md`）
 
 驗證命令（npm script 名稱依決策點 3；新增 script 需要授權範圍包含 `backend/package.json`）：
 
@@ -422,8 +422,8 @@ npm run commerce:evaluate -- --mode live
 
 > 前置：無。只有在本 Change 任一 Task 新增 knowledge store migration 時才執行；預設設計（design §10、§13 Q3）不新增 knowledge migration。
 
-- [ ] 若需要新增 knowledge migration：先將 knowledge migration runner 的每個 migration（up 內容與 ledger 寫入）包在同一交易中，並以測試證明 migration 中途失敗時不留下部分 schema 且 ledger 無紀錄。
-- [ ] 若未新增：在完成回報中註明「未觸發，X42 Minor 維持承接」。
+- [ ] 若需要新增 knowledge migration：先將 knowledge migration runner 的每個 migration（up 內容與 ledger 寫入）包在同一交易中，並以測試證明 migration 中途失敗時不留下部分 schema 且 ledger 無紀錄。 （不適用：本 Change 未新增 knowledge migration，2026-10-28）
+- [x] 若未新增：在完成回報中註明「未觸發，X42 Minor 維持承接」。 （2026-10-28：未觸發，X42 Minor 維持承接；`evidence/t13-summary.md` §6。2026-10-28 由 Qwen 獨立驗收 COMMENT_ONLY（T11-5、T13 判 acceptable，2 項 Minor 記為後續建議），Master 接受（模型身分比照 S9），`evidence/qwen-t11-live-t13-review.md`）
 
 驗證命令：
 
@@ -438,10 +438,10 @@ npm run build
 
 > 前置：TH、TS、TR、T1–T11（含 T2a、T2b）、TB1、T12（若觸發）。
 
-- [ ] backend、frontend 全部驗證命令通過；bff build 與 test 通過；以 Git Diff 確認無無關修改。
-- [ ] Non-Waivable Invariants 1、2、5、6、8、9、10、11 逐條附證據；repository-wide 檢查應用程式碼無模型名稱條件判斷。
-- [ ] README／對外描述遵守 v7 External Description Boundary（合成語料、mock 訂單 tool、無 OS sandbox、數字僅示範方法效果、未滿足 X41）。
-- [ ] 依 `AGENTS.md` §14 產出完成回報與 `artifacts/implementation-result.json`，列出未執行的 live 驗證與 Retrofit Debt（design §14）。
+- [x] backend、frontend 全部驗證命令通過；bff build 與 test 通過；以 Git Diff 確認無無關修改。 （2026-10-27：backend lint、build 通過，test 2185 passed、2 項既有失敗；frontend 243 passed；bff 189 passed；`evidence/t13-summary.md` §1–§2。2026-10-28 由 Qwen 獨立驗收 COMMENT_ONLY（T11-5、T13 判 acceptable，2 項 Minor 記為後續建議），Master 接受（模型身分比照 S9），`evidence/qwen-t11-live-t13-review.md`）
+- [x] Non-Waivable Invariants 1、2、5、6、8、9、10、11 逐條附證據；repository-wide 檢查應用程式碼無模型名稱條件判斷。 （2026-10-27：`evidence/t13-summary.md` §3–§4。2026-10-28 由 Qwen 獨立驗收 COMMENT_ONLY（T11-5、T13 判 acceptable，2 項 Minor 記為後續建議），Master 接受（模型身分比照 S9），`evidence/qwen-t11-live-t13-review.md`）
+- [x] README／對外描述遵守 v7 External Description Boundary（合成語料、mock 訂單 tool、無 OS sandbox、數字僅示範方法效果、未滿足 X41）。 （2026-10-27：README 三語沒有越界陳述，邊界聲明屬 D5 Lane C；`evidence/t13-summary.md` §5。2026-10-28 由 Qwen 獨立驗收 COMMENT_ONLY（T11-5、T13 判 acceptable，2 項 Minor 記為後續建議），Master 接受（模型身分比照 S9），`evidence/qwen-t11-live-t13-review.md`）
+- [x] 依 `AGENTS.md` §14 產出完成回報與 `artifacts/implementation-result.json`，列出未執行的 live 驗證與 Retrofit Debt（design §14）。 （2026-10-27：`artifacts/implementation-result.json`、`evidence/t13-summary.md` §7。2026-10-28 由 Qwen 獨立驗收 COMMENT_ONLY（T11-5、T13 判 acceptable，2 項 Minor 記為後續建議），Master 接受（模型身分比照 S9），`evidence/qwen-t11-live-t13-review.md`）
 
 驗證命令：
 
