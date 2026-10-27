@@ -17,6 +17,7 @@ export interface ChainEvaluationProvenance {
   embeddingSpaceId: string | null;
   rerankModel: string | null;
   generationModel: string | null;
+  generationTemperature: number | null;
   judgeModel: string | null;
   thresholdVersion: string | null;
   configVersion: string;
@@ -31,9 +32,12 @@ export function chainResultDirectoryName(datasetVersion: string, mode: ChainEval
   return `${datasetVersion}-${mode}-${date}`;
 }
 
-/** An incomplete run is reported but its figures are never published (`retrieval-evaluation`). */
+/**
+ * An incomplete run is reported but its figures are never published (`retrieval-evaluation`),
+ * nor is a run that left rows behind (design §20.5 B1).
+ */
 export function isChainRunPublishable(run: ChainEvaluationRun): boolean {
-  return run.status === "completed";
+  return run.status === "completed" && run.cleanup?.status !== "failed";
 }
 
 const figure = (value: number | null) => (value === null ? "—" : value.toFixed(3));
@@ -96,14 +100,29 @@ export function renderChainReportMarkdown(run: ChainEvaluationRun, provenance: C
     "",
     publishable
       ? `- 狀態：completed，可發布。`
-      : `- 狀態：incomplete，**不可發布**。未完成的題目：${run.failedCases.join(", ")}。以下數字只供除錯，不得當作分數。`,
+      : run.status === "completed"
+        ? `- 狀態：completed，但清除失敗，**不可發布**。`
+        : `- 狀態：incomplete，**不可發布**。未完成的題目：${run.failedCases.join(", ")}。以下數字只供除錯，不得當作分數。`,
     `- evaluationRunId：\`${run.evaluationRunId}\``,
   ];
+  if (run.knowledgeImport?.status === "failed") {
+    lines.push(`- kb-v1 匯入失敗（${run.knowledgeImport.errorCode}），沒有執行任何題目。`);
+  }
+  if (run.cleanup?.status === "failed") {
+    lines.push(`- 清除失敗（${run.cleanup.errorCode}）：評測 tenant 的 runtime 或 knowledge 資料可能殘留，需要人工清除。`);
+  }
   if (run.mode === "deterministic") {
     lines.push(
       "- deterministic 層：路由、商品模型與政策合成由腳本依案例預期決定，路由準確率與混淆矩陣為 `not_measured`。",
       "  引用與拒答只驗證結構化證據經真實 dispatch 與驗證後的保存，不代表模型品質。",
       "- 檢索內容注入只在 deterministic 層覆蓋（決策點 2 方案 B）；live 層以使用者訊息注入代替。"
+    );
+  } else {
+    lines.push(
+      "- live 層：路由、商品模型與政策合成使用真實模型，kb_search 走真實 embedding、rerank 與 knowledge DB。",
+      "- 資料隔離（design §20.5 B1）：kb-v1 匯入本次執行的專用評測 tenant，每題使用不同的合成 principal，結束後清除該 tenant 的 runtime 與 knowledge 資料。",
+      "- 並行重複的第一筆由 harness 腳本送出，第二筆走受測模型。",
+      "- live 層沒有覆蓋「檢索內容注入」（決策點 2 方案 B），只以使用者訊息注入涵蓋。"
     );
   }
   lines.push("", "## 彙總", "", ...summaryRows(run.summary), "");

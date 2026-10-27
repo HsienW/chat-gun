@@ -21,6 +21,7 @@ const provenance: ChainEvaluationProvenance = {
   embeddingSpaceId: null,
   rerankModel: null,
   generationModel: null,
+  generationTemperature: null,
   judgeModel: null,
   thresholdVersion: null,
   configVersion: "chain-eval-scripted-retrieval-v1",
@@ -87,5 +88,39 @@ describe("chain evaluation report", () => {
     expect(report).toContain("不可發布");
     expect(report).toContain("chain-eval-v1-x");
     expect(report).toContain("CHAIN_CASE_TIMEOUT");
+  });
+
+  it("never publishes a run whose cleanup failed and says what was left behind", () => {
+    const leftBehind: ChainEvaluationRun = { ...run([completedCase]), cleanup: { status: "failed", errorCode: "KB_STORE_UNAVAILABLE" } };
+
+    const report = renderChainReportMarkdown(leftBehind, provenance);
+
+    expect(isChainRunPublishable(leftBehind)).toBe(false);
+    expect(report).toContain("不可發布");
+    expect(report).toContain("KB_STORE_UNAVAILABLE");
+  });
+
+  it("states the live layer's isolation and that it does not cover injection through retrieved content", () => {
+    const routed: ChainCaseResult = {
+      ...completedCase,
+      turns: [{ ...completedCase.turns[0]!, answer: { ...completedCase.turns[0]!.answer!, answerStatus: "answered", correct: true }, passed: true }],
+      passed: true,
+    };
+    const live: ChainEvaluationRun = {
+      ...run([routed]),
+      mode: "live",
+      summary: summarizeChainRun([routed], "live"),
+      knowledgeImport: { status: "completed" },
+      cleanup: { status: "completed" },
+    };
+
+    const report = renderChainReportMarkdown(live, { ...provenance, mode: "live" });
+
+    expect(isChainRunPublishable(live)).toBe(true);
+    expect(report).toContain("live");
+    expect(report).not.toContain("not_measured");
+    expect(report).toContain("混淆矩陣");
+    expect(report).toContain("專用評測 tenant");
+    expect(report).toContain("live 層沒有覆蓋「檢索內容注入」");
   });
 });
