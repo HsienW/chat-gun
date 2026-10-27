@@ -29,7 +29,8 @@ export interface TurnObservation {
   citations: ShoppingTurnEvidence["citations"];
   /** The order change this turn requested, by its own tool call. */
   operation?: {
-    toolCallId: string;
+    /** The record the turn's order call created; null when the model under test requested none. */
+    toolCallId: string | null;
     state: OrderOperationState | null;
     dedupReason?: NonNullable<OrderOperationRecord["dedup"]>["reason"];
     reasonCode?: string;
@@ -130,6 +131,10 @@ export interface ChainEvaluationRun {
   failedCases: string[];
   results: ChainCaseResult[];
   summary: Record<"dev" | "test" | "all", ChainSplitSummary>;
+  /** Live only: importing kb-v1 into the run's dedicated tenant (design §20.5 B1). */
+  knowledgeImport?: { status: "completed" } | { status: "failed"; errorCode: string };
+  /** Removing the run's runtime and knowledge rows; a failed cleanup is never published. */
+  cleanup?: { status: "completed" } | { status: "failed"; errorCode: string };
 }
 
 export interface ConfusionMatrix {

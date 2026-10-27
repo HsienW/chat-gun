@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
-import { tool } from "@langchain/core/tools";
+import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { Command, MemorySaver } from "@langchain/langgraph";
 import type { Pool } from "pg";
 import { z } from "zod";
 
 import { createDispatchReadinessCheck } from "../../agents/shopping-assistant/dispatch-readiness.js";
-import { createShoppingAssistantGraph } from "../../agents/shopping-assistant/graph.js";
+import { createShoppingAssistantGraph, type ShoppingAssistantGraphDependencies } from "../../agents/shopping-assistant/graph.js";
 import { PgOrderOperationRequestStore } from "../../agents/shopping-assistant/operation-requests.js";
 import { PgOrderOperationStatusReader } from "../../agents/shopping-assistant/operation-status.js";
 import { PgOriginalOperationResolver } from "../../agents/shopping-assistant/original-operation.js";
@@ -29,33 +29,37 @@ import { PgBusinessEffectLedger, PgSideEffectDatabase } from "../../runtime/side
 import { PgReconciliationTaskStore } from "../../runtime/side-effect/reconciliation-task-store.js";
 import { PgResultReferenceStore } from "../../runtime/side-effect/result-reference-store.js";
 import { ToolExecutionRunner } from "../../runtime/side-effect/tool-execution-runner.js";
+import { ExecutionProfileEnforcer, ExecutionProfileRegistry } from "../../runtime/tool-dispatch/execution-profile.js";
 import { createRuntimeToolDispatchPipeline } from "../../runtime/tool-dispatch/pipeline.js";
 import { RuntimeToolDescriptorRegistry } from "../../runtime/tool-dispatch/runtime-tool-descriptor.js";
+import type { SecretBrokerPort } from "../../runtime/tool-dispatch/secret-broker.js";
 import { createRuntimeToolAuthorizationComposition } from "../../tools/authorization/tool-authorization.js";
-import { KB_SEARCH_TOOL_NAME, kbSearchInputSchema } from "../../tools/kb-search.js";
+import { KB_SEARCH_SECRET_REFERENCE, KB_SEARCH_TOOL_NAME, kbSearchInputSchema } from "../../tools/kb-search.js";
 import { MockOrderProvider, type MockOrderProviderOptions } from "../../tools/orders/mock-order-provider.js";
 import { ORDER_MUTATION_TOOL_NAMES, ORDER_TOOL_NAMES, createOrderToolRiskPolicies, createOrderToolSet } from "../../tools/orders/order-tools.js";
-import { parseSyntheticOrderFixture, type SyntheticOrderFixture } from "../../tools/orders/synthetic-orders.js";
+import type { SyntheticOrderFixture } from "../../tools/orders/synthetic-orders.js";
 import type { ChainEvalCase, ChainTurnExpectation } from "./chain-case.js";
+import { FIXTURE_SHOPPER_PRINCIPAL_ID, isolatedOrderFixture, liveCasePrincipalId, liveTenantId } from "./chain-isolation.js";
 import { CHAIN_SCRIPT_VERSION, scriptedOrderCall, scriptedPolicyAnswer, scriptedRetrieval, scriptedRoute, type ScriptedToolCall } from "./chain-script.js";
 import {
   scoreChainCase,
   summarizeChainRun,
   type ChainCaseResult,
+  type ChainEvaluationMode,
   type ChainEvaluationRun,
   type HumanDecision,
   type TurnObservation,
 } from "./chain-scoring.js";
 
-/** The synthetic shopper who owns every order of synthetic-orders-v1 that the cases act on. */
-const TEST_PRINCIPAL_ID = "synthetic-shopper-a";
 export const DEFAULT_EXPIRE_TIMEOUT_MS = 1_000;
 /** Real waiting: the Postgres approval path has no injectable clock (design §20.1). */
 const EXPIRY_MARGIN_MS = 300;
 const DEFAULT_CASE_TIMEOUT_MS = 60_000;
+/** Real models answer every turn of a case, so a live case gets more time. */
+export const DEFAULT_LIVE_CASE_TIMEOUT_MS = 300_000;
 const CONFIRMATION_TIMEOUT_ENV = "TOOL_AUTHORIZATION_CONFIRMATION_TIMEOUT_MS";
 
-export interface DeterministicChainEvaluationInput {
+interface ChainEvaluationInputBase {
   /** An isolated Postgres; every row the run writes is scoped to its own tenants and removed afterwards. */
   pool: Pool;
   cases: readonly ChainEvalCase[];
@@ -67,6 +71,32 @@ export interface DeterministicChainEvaluationInput {
   expireTimeoutMs?: number;
   caseTimeoutMs?: number;
   now?: () => number;
+}
+
+export type DeterministicChainEvaluationInput = ChainEvaluationInputBase;
+
+/** The models under test in the live layer (design §20.5). */
+export type LiveChainModels = Pick<
+  ShoppingAssistantGraphDependencies,
+  "intentRouter" | "createProductRequestModel" | "policyAnswerSynthesizer" | "createOrderRequestModel"
+>;
+
+/** The knowledge side of the live layer, bound to one knowledge database (design §20.5 B1). */
+export interface LiveChainKnowledge {
+  /** Imports kb-v1 into the run's dedicated tenant; anything but `completed` fails the run closed. */
+  ingest(tenantId: string): Promise<{ status: string; errorCode?: string }>;
+  /** The real kb_search over the same knowledge database. */
+  kbSearch: StructuredToolInterface;
+  /** Resolves kb_search's model credential into its call, as the production enforcer does. */
+  secretBroker: SecretBrokerPort;
+  /** Removes every knowledge row of the tenant. */
+  purge(tenantId: string): Promise<void>;
+}
+
+export interface LiveChainEvaluationInput extends ChainEvaluationInputBase {
+  models: LiveChainModels;
+  knowledge: LiveChainKnowledge;
+  audit?: ShoppingAssistantGraphDependencies["audit"];
 }
 
 export class ChainCaseTimeoutError extends Error {
@@ -81,6 +111,29 @@ interface ScriptCursor {
   orderCalls: ScriptedToolCall[];
 }
 
+/** The graph dependencies a backend instance runs with, and the kb_search it dispatches. */
+interface InstanceModels extends LiveChainModels {
+  kbSearch: StructuredToolInterface;
+  secretBroker?: SecretBrokerPort;
+}
+
+/** What differs between the deterministic and the live layer; the harness is shared. */
+interface ChainLayer {
+  mode: ChainEvaluationMode;
+  tenantOf(caseIndex: number): string;
+  principalOf(item: ChainEvalCase): string;
+  /** The models of the instance under test. */
+  modelsFor(cursor: () => ScriptCursor): InstanceModels;
+  /** Deterministic scripts every order call; in live the request model writes it. */
+  scriptsOrderCalls: boolean;
+  caseTimeoutMs: number;
+  audit: ShoppingAssistantGraphDependencies["audit"];
+  /** Runs before any case; a failure fails every case closed. */
+  prepare?: () => Promise<{ status: "completed" } | { status: "failed"; errorCode: string }>;
+  /** Runs after the runtime cleanup, whatever happened before. */
+  release?: () => Promise<void>;
+}
+
 function queryable(pool: Pool): Queryable {
   return {
     query: async (text, values = []) => {
@@ -92,14 +145,59 @@ function queryable(pool: Pool): Queryable {
 
 const noop = async () => undefined;
 
-function errorCodeOf(error: unknown): string {
-  return error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : "CHAIN_CASE_FAILED";
+function errorCodeOf(error: unknown, fallback = "CHAIN_CASE_FAILED"): string {
+  return error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : fallback;
 }
 
 function expectationAt(cursor: ScriptCursor): ChainTurnExpectation {
   const expectation = cursor.item.expected.turns[cursor.turnIndex];
   if (expectation === undefined) throw new Error(`No expectation for turn ${cursor.turnIndex} of ${cursor.item.caseId}`);
   return expectation;
+}
+
+/** Scripts that stand in for the models: the deterministic layer, and the harness's own submissions in live. */
+function scriptedModels(cursor: () => ScriptCursor, corpus: readonly SourceDocument[]): InstanceModels {
+  const unbound = async (): Promise<never> => {
+    throw new Error("The scripted request model is only used through bindTools");
+  };
+  const scriptedModel = (calls: () => ScriptedToolCall[]): ChatModelInvoker => ({
+    invoke: unbound,
+    bindTools: () => ({ invoke: async () => new AIMessage({ content: "", tool_calls: calls() }) }),
+  });
+  const kbCall = (): ScriptedToolCall[] => {
+    const { item, turnIndex } = cursor();
+    const intent = expectationAt(cursor()).expectedIntent;
+    return [
+      {
+        name: KB_SEARCH_TOOL_NAME,
+        id: `kb-${item.caseId}-t${turnIndex}`,
+        args: {
+          query: item.input.turns[turnIndex]!.message,
+          sourceTypes: intent === "product_lookup" ? ["product"] : ["policy", "faq"],
+        },
+      },
+    ];
+  };
+  return {
+    intentRouter: { promptVersion: CHAIN_SCRIPT_VERSION, route: async () => scriptedRoute(expectationAt(cursor())) },
+    createProductRequestModel: () => scriptedModel(kbCall),
+    policyAnswerSynthesizer: {
+      promptVersion: CHAIN_SCRIPT_VERSION,
+      synthesize: async (_question, evidence) => scriptedPolicyAnswer(expectationAt(cursor()), evidence),
+    },
+    createOrderRequestModel: () => scriptedModel(() => cursor().orderCalls),
+    // kb_search returns the case's scripted retrieval but goes through the same governance and dispatch as the order tools.
+    kbSearch: tool(async () => JSON.stringify(scriptedRetrieval(cursor().item, cursor().turnIndex, corpus)), {
+      name: KB_SEARCH_TOOL_NAME,
+      description: "Deterministic kb_search for the chain evaluation.",
+      schema: kbSearchInputSchema,
+    }),
+  };
+}
+
+/** The operation a model-written order call created this turn: the newest record the turn added. */
+function newOperationKey(state: ShoppingAssistantState, before: ReadonlySet<string>): string | null {
+  return Object.keys(state.operations ?? {}).filter((key) => !before.has(key)).at(-1) ?? null;
 }
 
 /**
@@ -109,8 +207,49 @@ function expectationAt(cursor: ScriptCursor): ChainTurnExpectation {
  * Only the router, the request models and the policy synthesizer are scripts.
  */
 export async function runDeterministicChainEvaluation(input: DeterministicChainEvaluationInput): Promise<ChainEvaluationRun> {
-  const now = input.now ?? (() => Date.now());
   const evaluationRunId = input.evaluationRunId ?? `chain-eval-${randomUUID().slice(0, 8)}`;
+  return runChainEvaluation(input, evaluationRunId, {
+    mode: "deterministic",
+    tenantOf: (caseIndex) => `${evaluationRunId}-${caseIndex}`,
+    principalOf: () => FIXTURE_SHOPPER_PRINCIPAL_ID,
+    modelsFor: (cursor) => scriptedModels(cursor, input.corpus),
+    scriptsOrderCalls: true,
+    caseTimeoutMs: input.caseTimeoutMs ?? DEFAULT_CASE_TIMEOUT_MS,
+    audit: noop,
+  });
+}
+
+/**
+ * The live layer (design §20.5 B1): real models and the real kb_search over one
+ * dedicated tenant that kb-v1 is imported into at the start and purged from at
+ * the end, a synthetic principal per case, and the harness's own script for the
+ * first of two concurrent duplicates.
+ */
+export async function runLiveChainEvaluation(input: LiveChainEvaluationInput): Promise<ChainEvaluationRun> {
+  const evaluationRunId = input.evaluationRunId ?? `chain-eval-${randomUUID().slice(0, 8)}`;
+  const tenantId = liveTenantId(evaluationRunId);
+  return runChainEvaluation(input, evaluationRunId, {
+    mode: "live",
+    tenantOf: () => tenantId,
+    principalOf: (item) => liveCasePrincipalId(evaluationRunId, item.caseId),
+    modelsFor: () => ({ ...input.models, kbSearch: input.knowledge.kbSearch, secretBroker: input.knowledge.secretBroker }),
+    scriptsOrderCalls: false,
+    caseTimeoutMs: input.caseTimeoutMs ?? DEFAULT_LIVE_CASE_TIMEOUT_MS,
+    audit: input.audit ?? noop,
+    prepare: async () => {
+      try {
+        const imported = await input.knowledge.ingest(tenantId);
+        return imported.status === "completed" ? { status: "completed" } : { status: "failed", errorCode: imported.errorCode ?? imported.status };
+      } catch (error) {
+        return { status: "failed", errorCode: errorCodeOf(error, "KB_INGESTION_FAILED") };
+      }
+    },
+    release: () => input.knowledge.purge(tenantId),
+  });
+}
+
+async function runChainEvaluation(input: ChainEvaluationInputBase, evaluationRunId: string, layer: ChainLayer): Promise<ChainEvaluationRun> {
+  const now = input.now ?? (() => Date.now());
   const tenantPrefix = `${evaluationRunId}-`;
   const runPrefix = `run-${evaluationRunId}-`;
   const pool = input.pool;
@@ -119,7 +258,7 @@ export async function runDeterministicChainEvaluation(input: DeterministicChainE
   await runMigrations("up", db);
 
   /** One backend instance: its own pipeline, governance and graph over the shared database and order system. */
-  function createInstance(provider: MockOrderProvider, cursor: () => ScriptCursor) {
+  function createInstance(provider: MockOrderProvider, models: InstanceModels) {
     const composition = createRuntimeToolAuthorizationComposition({ profile: "production", db, additionalPolicies: createOrderToolRiskPolicies() });
     const originalOperationResolver = new PgOriginalOperationResolver(db);
     const statusReader = new PgOrderOperationStatusReader(db, { originalOperationResolver });
@@ -138,11 +277,22 @@ export async function runDeterministicChainEvaluation(input: DeterministicChainE
         riskTier: "read",
         isReadOnly: true,
         isConcurrencySafe: () => true,
-        timeoutPolicy: { timeoutMs: 5_000 },
-        retryPolicy: { maxAttempts: 1, maxElapsedMs: 5_000, retryableCategories: [], backoffStrategy: "fixed", jitter: false },
+        timeoutPolicy: { timeoutMs: models.secretBroker ? 30_000 : 5_000 },
+        retryPolicy: { maxAttempts: 1, maxElapsedMs: 30_000, retryableCategories: [], backoffStrategy: "fixed", jitter: false },
         interruptBehavior: "cancel_safe",
+        ...(models.secretBroker ? { secretRequirements: [KB_SEARCH_SECRET_REFERENCE] } : {}),
       }
     );
+    // Profile enforcement stays off as in the deterministic layer, so no profile is consulted;
+    // the enforcer only resolves kb_search's credential.
+    const executionProfileEnforcer = models.secretBroker
+      ? new ExecutionProfileEnforcer({
+          descriptorRegistry: registry,
+          profileRegistry: new ExecutionProfileRegistry(),
+          secretBroker: models.secretBroker,
+          isEnabled: () => false,
+        })
+      : undefined;
     const runner = new ToolExecutionRunner(
       new PgBusinessEffectLedger(new PgSideEffectDatabase(pool)),
       new PgResultReferenceStore(db),
@@ -169,54 +319,26 @@ export async function runDeterministicChainEvaluation(input: DeterministicChainE
       stepLockTtlMs: 30_000,
       emitDeduplicatedOutcome: true,
       consumedAuthorizationVerifier: new PgConsumedAuthorizationVerifier(db),
+      ...(executionProfileEnforcer ? { executionProfileEnforcer } : {}),
     });
-    // kb_search returns the case's scripted retrieval but goes through the same governance and dispatch as the order tools.
-    const kbSearch = tool(async () => JSON.stringify(scriptedRetrieval(cursor().item, cursor().turnIndex, input.corpus)), {
-      name: KB_SEARCH_TOOL_NAME,
-      description: "Deterministic kb_search for the chain evaluation.",
-      schema: kbSearchInputSchema,
-    });
-    const tools = applyToolGovernance([kbSearch, ...orderTools.tools], composition.authorization, {
+    const tools = applyToolGovernance([models.kbSearch, ...orderTools.tools], composition.authorization, {
       createExecutor: (source, defaultExecutor) => pipeline.createExecutor(source.name, defaultExecutor),
+      ...(executionProfileEnforcer ? { executionProfileEnforcer } : {}),
     });
-    const unbound = async (): Promise<never> => {
-      throw new Error("The scripted request model is only used through bindTools");
-    };
-    const scriptedModel = (calls: () => ScriptedToolCall[]): ChatModelInvoker => ({
-      invoke: unbound,
-      bindTools: () => ({ invoke: async () => new AIMessage({ content: "", tool_calls: calls() }) }),
-    });
-    const kbCall = (): ScriptedToolCall[] => {
-      const { item, turnIndex } = cursor();
-      const intent = expectationAt(cursor()).expectedIntent;
-      return [
-        {
-          name: KB_SEARCH_TOOL_NAME,
-          id: `kb-${item.caseId}-t${turnIndex}`,
-          args: {
-            query: item.input.turns[turnIndex]!.message,
-            sourceTypes: intent === "product_lookup" ? ["product"] : ["policy", "faq"],
-          },
-        },
-      ];
-    };
     const graph = createShoppingAssistantGraph(
       {
         tools,
         confirmationStore: composition.confirmationStore,
         interruptManifestRepository: composition.interruptManifestRepository,
-        intentRouter: { promptVersion: CHAIN_SCRIPT_VERSION, route: async () => scriptedRoute(expectationAt(cursor())) },
-        createProductRequestModel: () => scriptedModel(kbCall),
-        policyAnswerSynthesizer: {
-          promptVersion: CHAIN_SCRIPT_VERSION,
-          synthesize: async (_question, evidence) => scriptedPolicyAnswer(expectationAt(cursor()), evidence),
-        },
-        createOrderRequestModel: () => scriptedModel(() => cursor().orderCalls),
+        intentRouter: models.intentRouter,
+        createProductRequestModel: models.createProductRequestModel,
+        policyAnswerSynthesizer: models.policyAnswerSynthesizer,
+        createOrderRequestModel: models.createOrderRequestModel,
         checkDispatchReadiness: createDispatchReadinessCheck(db),
         confirmationWithdrawal: composition.confirmationStore,
         originalOperationResolver,
         operationRequests: new PgOrderOperationRequestStore(db),
-        audit: noop,
+        audit: layer.audit,
       },
       { checkpointer: new MemorySaver() }
     );
@@ -225,7 +347,10 @@ export async function runDeterministicChainEvaluation(input: DeterministicChainE
 
   type Graph = ReturnType<typeof createInstance>["graph"];
 
+  const grantedTenants = new Set<string>();
   async function grantTools(tenantId: string) {
+    if (grantedTenants.has(tenantId)) return;
+    grantedTenants.add(tenantId);
     const grants = new PgGrantStore(db);
     for (const toolName of [...ORDER_TOOL_NAMES, KB_SEARCH_TOOL_NAME]) {
       await grants.create({
@@ -244,7 +369,7 @@ export async function runDeterministicChainEvaluation(input: DeterministicChainE
   }
 
   /** A run of its own, with the runtime task and step rows the ledger refers to. */
-  async function startRun(tenantId: string, threadId: string, runId: string) {
+  async function startRun(tenantId: string, principalId: string, threadId: string, runId: string) {
     const context = {
       requestId: `request-${runId}`,
       threadId,
@@ -253,7 +378,7 @@ export async function runDeterministicChainEvaluation(input: DeterministicChainE
       stepId: `step-${runId}`,
       attempt: 1,
       principal: {
-        principalId: TEST_PRINCIPAL_ID,
+        principalId,
         principalType: "user" as const,
         tenantId,
         roles: [],
@@ -321,13 +446,11 @@ export async function runDeterministicChainEvaluation(input: DeterministicChainE
   }
 
   async function runCase(item: ChainEvalCase, caseIndex: number): Promise<TurnObservation[]> {
-    const tenantId = `${tenantPrefix}${caseIndex}`;
-    const threadId = `thread-${tenantId}`;
+    const tenantId = layer.tenantOf(caseIndex);
+    const principalId = layer.principalOf(item);
+    const threadId = `thread-${tenantPrefix}${caseIndex}`;
     await grantTools(tenantId);
-    const fixture = parseSyntheticOrderFixture({
-      ...input.orderFixture,
-      orders: input.orderFixture.orders.map((order) => ({ ...order, tenantId })),
-    });
+    const fixture = isolatedOrderFixture(input.orderFixture, tenantId, principalId);
     const faults = item.expected.turns.flatMap((turn) => (turn.operation?.fault ? [turn.operation.fault] : []));
     const gate = faults.includes("concurrent_duplicate") ? commitGate() : undefined;
     const providerOptions: Partial<MockOrderProviderOptions> = {
@@ -336,9 +459,13 @@ export async function runDeterministicChainEvaluation(input: DeterministicChainE
       ...(gate ? { beforeCommit: gate.beforeCommit } : {}),
     };
     let externalOperations = 0;
-    const provider = new MockOrderProvider({ fixture, createExternalOperationId: () => `ext-${tenantId}-${++externalOperations}`, ...providerOptions });
+    const provider = new MockOrderProvider({
+      fixture,
+      createExternalOperationId: () => `ext-${tenantPrefix}${caseIndex}-${++externalOperations}`,
+      ...providerOptions,
+    });
     const cursor: ScriptCursor = { item, turnIndex: 0, orderCalls: [] };
-    const main = createInstance(provider, () => cursor);
+    const main = createInstance(provider, layer.modelsFor(() => cursor));
     const observations: TurnObservation[] = [];
 
     for (let turnIndex = 0; turnIndex < item.expected.turns.length; turnIndex += 1) {
@@ -348,26 +475,28 @@ export async function runDeterministicChainEvaluation(input: DeterministicChainE
       const toolCallId = `call-${caseIndex}-t${turnIndex}`;
       const operation = expectation.operation;
       cursor.turnIndex = turnIndex;
-      cursor.orderCalls = operation ? [scriptedOrderCall(item, turnIndex, toolCallId)] : [];
+      cursor.orderCalls = operation && layer.scriptsOrderCalls ? [scriptedOrderCall(item, turnIndex, toolCallId)] : [];
       const submissionsAtStart = provider.submissions;
       const cardTypes: string[] = [];
       let humanDecisionSent: HumanDecision = "none";
       const auxiliary: NonNullable<TurnObservation["auxiliary"]> = [];
 
-      const config = await startRun(tenantId, threadId, runId);
+      const config = await startRun(tenantId, principalId, threadId, runId);
+      const operationsBefore = new Set(Object.keys(((await main.graph.getState(config)).values as Partial<ShoppingAssistantState>).operations ?? {}));
       const request = () => drive(main.graph, { messages: [new HumanMessage(message)] }, config, cardTypes);
 
       let state: ShoppingAssistantState;
       let approvalRequested = false;
       let submissionsBeforeDecision = 0;
       if (operation?.fault === "concurrent_duplicate") {
-        // The first of two identical submissions comes from another instance and thread; this turn's is the duplicate.
-        const other = createInstance(provider, () => cursor);
+        // The first of two identical submissions is the harness's own script on another instance and thread
+        // (B1: a real model may fill in different line items); this turn's is the duplicate.
+        const other = createInstance(provider, scriptedModels(() => cursor, input.corpus));
         const auxCallId = `${toolCallId}-first`;
-        const auxConfig = await startRun(tenantId, `${threadId}-first-t${turnIndex}`, `${runId}-first`);
+        const auxConfig = await startRun(tenantId, principalId, `${threadId}-first-t${turnIndex}`, `${runId}-first`);
         cursor.orderCalls = [scriptedOrderCall(item, turnIndex, auxCallId)];
         const firstWaiting = await drive(other.graph, { messages: [new HumanMessage(message)] }, auxConfig, []);
-        cursor.orderCalls = [scriptedOrderCall(item, turnIndex, toolCallId)];
+        cursor.orderCalls = layer.scriptsOrderCalls ? [scriptedOrderCall(item, turnIndex, toolCallId)] : [];
         state = await request();
         const firstDescriptor = firstWaiting.pendingAuthorization as ConfirmationRequiredDescriptor | null | undefined;
         const descriptor = state.pendingAuthorization as ConfirmationRequiredDescriptor | null | undefined;
@@ -382,6 +511,8 @@ export async function runDeterministicChainEvaluation(input: DeterministicChainE
           gate.release();
           const first = await firstRun;
           auxiliary.push({ toolCallId: auxCallId, state: first.operations[auxCallId]?.state ?? null });
+        } else {
+          gate?.release();
         }
       } else {
         const decision = operation?.humanDecision ?? "none";
@@ -409,13 +540,14 @@ export async function runDeterministicChainEvaluation(input: DeterministicChainE
             state = await drive(main.graph, resume(descriptor, "approve"), config, cardTypes);
           } else if (decision === "cancel_before_effect") {
             humanDecisionSent = "cancel_before_effect";
-            const cancelConfig = await startRun(tenantId, threadId, `${runId}-cancel`);
+            const cancelConfig = await startRun(tenantId, principalId, threadId, `${runId}-cancel`);
             state = await drive(main.graph, { kind: "cancel", targetRunId: runId }, cancelConfig, cardTypes);
           }
         }
       }
 
-      const record = state.operations[toolCallId];
+      const operationKey = layer.scriptsOrderCalls ? toolCallId : newOperationKey(state, operationsBefore);
+      const record = operationKey === null ? undefined : state.operations[operationKey];
       observations.push({
         turnIndex,
         routedIntent: state.turn?.routedIntent ?? null,
@@ -425,7 +557,7 @@ export async function runDeterministicChainEvaluation(input: DeterministicChainE
         ...(operation
           ? {
               operation: {
-                toolCallId,
+                toolCallId: operationKey,
                 state: record?.state ?? null,
                 ...(record?.dedup ? { dedupReason: record.dedup.reason } : {}),
                 ...(record?.reasonCode ? { reasonCode: record.reasonCode } : {}),
@@ -458,34 +590,58 @@ export async function runDeterministicChainEvaluation(input: DeterministicChainE
   }
 
   const results: ChainCaseResult[] = [];
+  let knowledgeImport: ChainEvaluationRun["knowledgeImport"];
+  let cleanup: NonNullable<ChainEvaluationRun["cleanup"]> = { status: "completed" };
   try {
-    for (const [caseIndex, item] of input.cases.entries()) {
-      const startedAt = now();
-      try {
-        const observations = await withTimeout(runCase(item, caseIndex), input.caseTimeoutMs ?? DEFAULT_CASE_TIMEOUT_MS);
-        results.push(scoreChainCase(item, observations, now() - startedAt));
-      } catch (error) {
-        results.push({ caseId: item.caseId, split: item.split, status: "failed", errorCode: errorCodeOf(error), latencyMs: now() - startedAt });
+    const prepared = layer.prepare ? await layer.prepare() : undefined;
+    knowledgeImport = prepared;
+    if (prepared?.status === "failed") {
+      for (const item of input.cases) {
+        results.push({ caseId: item.caseId, split: item.split, status: "failed", errorCode: "CHAIN_LIVE_KNOWLEDGE_IMPORT_FAILED", latencyMs: 0 });
+      }
+    } else {
+      for (const [caseIndex, item] of input.cases.entries()) {
+        const startedAt = now();
+        try {
+          const observations = await withTimeout(runCase(item, caseIndex), layer.caseTimeoutMs);
+          results.push(scoreChainCase(item, observations, now() - startedAt));
+        } catch (error) {
+          results.push({ caseId: item.caseId, split: item.split, status: "failed", errorCode: errorCodeOf(error), latencyMs: now() - startedAt });
+        }
       }
     }
   } finally {
-    await cleanup(pool, tenantPrefix, runPrefix);
+    // Both steps run whatever happened; the first failure is reported, never passed over.
+    try {
+      await cleanupRuntime(pool, tenantPrefix, runPrefix);
+    } catch (error) {
+      cleanup = { status: "failed", errorCode: errorCodeOf(error, "CHAIN_RUNTIME_CLEANUP_FAILED") };
+    }
+    if (layer.release) {
+      try {
+        await layer.release();
+      } catch (error) {
+        if (cleanup.status === "completed") cleanup = { status: "failed", errorCode: errorCodeOf(error, "CHAIN_KNOWLEDGE_CLEANUP_FAILED") };
+      }
+    }
   }
 
   const failedCases = results.filter((result) => result.status === "failed").map((result) => result.caseId);
   return {
-    mode: "deterministic",
+    mode: layer.mode,
     evaluationRunId,
     datasetVersion: input.datasetVersion,
     status: failedCases.length === 0 ? "completed" : "incomplete",
     failedCases,
     results,
-    summary: summarizeChainRun(results, "deterministic"),
+    summary: summarizeChainRun(results, layer.mode),
+    ...(knowledgeImport ? { knowledgeImport } : {}),
+    cleanup,
   };
 }
 
 /** Removes every runtime row of this evaluation run, scoped by its tenant and run prefixes. */
-async function cleanup(pool: Pool, tenantPrefix: string, runPrefix: string): Promise<void> {
+async function cleanupRuntime(pool: Pool, tenantPrefix: string, runPrefix: string): Promise<void> {
   const tenants = `${tenantPrefix}%`;
   const runs = `${runPrefix}%`;
   const executions = "SELECT tool_execution_id FROM tool_executions WHERE run_id LIKE $1";
