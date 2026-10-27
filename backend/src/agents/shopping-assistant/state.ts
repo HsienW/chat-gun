@@ -122,8 +122,24 @@ export interface ShoppingTurn {
   failureCode?: ShoppingRouteFailureCode;
 }
 
+/** How a product or policy turn ended; recorded so evaluation never infers it from reply text (design §20.6). */
+export const SHOPPING_ANSWER_STATUSES = [
+  "answered",
+  "abstained",
+  "unverified",
+  "synthesis_failed",
+  "lookup_failed",
+] as const;
+export type ShoppingAnswerStatus = (typeof SHOPPING_ANSWER_STATUSES)[number];
+
+/**
+ * Owner: the product and policy nodes, which write it with their reply.
+ * Readers: evaluation only. Cleared to null at the start of every turn.
+ * Checkpoints written before `answerStatus` existed read it as undefined.
+ */
 export interface ShoppingTurnEvidence {
   citations: readonly { citationId: string; chunkId: string; sourceId: string }[];
+  answerStatus?: ShoppingAnswerStatus;
 }
 
 export interface RuntimeEventCursor {

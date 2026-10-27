@@ -41,8 +41,10 @@ import type { PolicyAnswerSynthesizer } from "./policy-answer.js";
 import { buildProductCards, readKbSearchOutcome, toCardEmissions } from "./product-results.js";
 import {
   createShoppingAssistantStateGraph,
+  type ShoppingAnswerStatus,
   type ShoppingAssistantState,
   type ShoppingTurn,
+  type ShoppingTurnEvidence,
 } from "./state.js";
 
 export const SHOPPING_ASSISTANT_GRAPH_ID = "shopping_assistant";
@@ -149,6 +151,13 @@ function currentTurn(messages: readonly BaseMessage[]): { human: BaseMessage | u
     }
   }
   return { human: undefined, after: [] };
+}
+
+/** Identifiers only, never chunk content: the evidence a turn's reply may cite. */
+function evidenceCitations(result: {
+  citations: readonly { citationId: string; chunkId: string; sourceId: string }[];
+}): ShoppingTurnEvidence["citations"] {
+  return result.citations.map(({ citationId, chunkId, sourceId }) => ({ citationId, chunkId, sourceId }));
 }
 
 function reply(content: string): AIMessage {
@@ -362,11 +371,20 @@ export function createShoppingAssistantGraph(
         { graphId: SHOPPING_ASSISTANT_GRAPH_ID, errorCode: outcome.errorCode },
         readCanonicalExecutionContext(config)
       ).catch(() => undefined);
-      return { messages: [reply(REPLIES.productUnavailable)], runtimeEvents: [] };
+      return {
+        messages: [reply(REPLIES.productUnavailable)],
+        turnEvidence: { citations: [], answerStatus: "lookup_failed" },
+        runtimeEvents: [],
+      };
     }
     const cards = outcome.kind === "evidence_found" ? buildProductCards(outcome.result) : [];
+    const citations = outcome.kind === "evidence_found" ? evidenceCitations(outcome.result) : [];
     if (cards.length === 0) {
-      return { messages: [reply(REPLIES.productNotFound)], runtimeEvents: [] };
+      return {
+        messages: [reply(REPLIES.productNotFound)],
+        turnEvidence: { citations, answerStatus: "abstained" },
+        runtimeEvents: [],
+      };
     }
     const executionContext = readCanonicalExecutionContext(config);
     const emitted = executionContext
@@ -380,6 +398,7 @@ export function createShoppingAssistantGraph(
     const titles = cards.map((card) => `${card.title} [${card.citationId}]`).join("、");
     return {
       messages: [reply(`找到 ${cards.length} 項相關商品：${titles}。`)],
+      turnEvidence: { citations, answerStatus: "answered" },
       runtimeEvents: emitted.runtimeEvents,
       runtimeEventCursor: emitted.runtimeEventCursor,
     };
@@ -395,17 +414,26 @@ export function createShoppingAssistantGraph(
         .audit(eventName, { graphId: SHOPPING_ASSISTANT_GRAPH_ID, ...payload }, executionContext)
         .catch(() => undefined);
     const { human, outcome } = currentKbSearchOutcome(state);
+    const promptVersion = dependencies.policyAnswerSynthesizer.promptVersion;
     if (outcome.kind === "failed") {
       await audit("shopping.policy.lookup_failed", { errorCode: outcome.errorCode });
-      return { messages: [reply(REPLIES.policyUnavailable)], runtimeEvents: [] };
+      return {
+        messages: [reply(REPLIES.policyUnavailable)],
+        turnEvidence: { citations: [], answerStatus: "lookup_failed" },
+        runtimeEvents: [],
+      };
     }
     if (outcome.kind === "no_source_found") {
-      return { messages: [reply(REPLIES.policyNotCovered)], runtimeEvents: [] };
+      await audit("shopping.policy.abstained", { promptVersion, reason: "no_source_found" });
+      return {
+        messages: [reply(REPLIES.policyNotCovered)],
+        turnEvidence: { citations: [], answerStatus: "abstained" },
+        runtimeEvents: [],
+      };
     }
     // Only this turn's citations count as evidence (design §4.2).
-    const turnEvidence = {
-      citations: outcome.result.citations.map(({ citationId, chunkId, sourceId }) => ({ citationId, chunkId, sourceId })),
-    };
+    const citations = evidenceCitations(outcome.result);
+    const ended = (answerStatus: ShoppingAnswerStatus) => ({ citations, answerStatus });
     let answer;
     try {
       answer = await dependencies.policyAnswerSynthesizer.synthesize(
@@ -415,27 +443,28 @@ export function createShoppingAssistantGraph(
       );
     } catch {
       await audit("shopping.policy.synthesis_failed", {
-        promptVersion: dependencies.policyAnswerSynthesizer.promptVersion,
+        promptVersion,
         errorCode: config.signal?.aborted ? "POLICY_ANSWER_CANCELLED" : "POLICY_ANSWER_UNAVAILABLE",
       });
-      return { messages: [reply(REPLIES.policyUnavailable)], turnEvidence, runtimeEvents: [] };
+      return { messages: [reply(REPLIES.policyUnavailable)], turnEvidence: ended("synthesis_failed"), runtimeEvents: [] };
     }
     if (answer.abstained) {
-      return { messages: [reply(REPLIES.policyNotCovered)], turnEvidence, runtimeEvents: [] };
+      await audit("shopping.policy.abstained", { promptVersion, reason: "synthesizer_abstained" });
+      return { messages: [reply(REPLIES.policyNotCovered)], turnEvidence: ended("abstained"), runtimeEvents: [] };
     }
     // An answer without a citation is an unverified policy statement as well.
     const verification = verifyAnswerCitations(answer.answer, [outcome.result]);
     if (verification.status !== "verified") {
       await reportCitationVerification(verification, executionContext).catch(() => undefined);
       await audit("shopping.policy.answer_unverified", {
-        promptVersion: dependencies.policyAnswerSynthesizer.promptVersion,
+        promptVersion,
         verificationStatus: verification.status,
         citedCount: verification.cited.length,
         unresolvedCount: verification.unresolved.length,
       });
-      return { messages: [reply(REPLIES.policyUnverified)], turnEvidence, runtimeEvents: [] };
+      return { messages: [reply(REPLIES.policyUnverified)], turnEvidence: ended("unverified"), runtimeEvents: [] };
     }
-    return { messages: [reply(answer.answer)], turnEvidence, runtimeEvents: [] };
+    return { messages: [reply(answer.answer)], turnEvidence: ended("answered"), runtimeEvents: [] };
   }
 
   async function respondScope(state: ShoppingAssistantState): Promise<Partial<ShoppingAssistantState>> {

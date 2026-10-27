@@ -435,6 +435,7 @@ describe("shopping assistant policy answers", () => {
         { citationId: "c1", chunkId: "policy-return-window#c1", sourceId: "policy-return-window" },
         { citationId: "c2", chunkId: "faq-where-is-my-refund#c2", sourceId: "faq-where-is-my-refund" },
       ],
+      answerStatus: "answered",
     });
     expect(state.runtimeEvents).toEqual([]);
   });
@@ -563,6 +564,66 @@ describe("shopping assistant policy answers", () => {
       .invoke({ messages: [new HumanMessage("那個呢？")] }, runConfig("thread-restore", "run-2"));
 
     expect(restored.turnEvidence).toBeNull();
+  });
+
+  describe("answer status (design §20.6)", () => {
+    const noSource = () => JSON.stringify({ schemaVersion: "kb_search_result@1", outcome: "no_source_found", retrieval });
+    const kbFailure = () => JSON.stringify({ schemaVersion: "kb_search_result@1", outcome: "error", errorCode: "KB_TIMEOUT", retryable: true });
+
+    it.each([
+      ["a verified answer", { kbOutput: policyKb, synthesize: async () => ({ abstained: false, answer: "可在 30 天內退貨 [c1]。" }) }, "answered", 2],
+      ["no source found", { kbOutput: noSource }, "abstained", 0],
+      ["a synthesizer abstention", { kbOutput: policyKb, synthesize: async () => ({ abstained: true, answer: "" }) }, "abstained", 2],
+      ["an unverified answer", { kbOutput: policyKb, synthesize: async () => ({ abstained: false, answer: "退貨免運費。" }) }, "unverified", 2],
+      ["a failed synthesis", { kbOutput: policyKb, synthesize: async () => { throw new Error("upstream 503"); } }, "synthesis_failed", 2],
+      ["a failed lookup", { kbOutput: kbFailure }, "lookup_failed", 0],
+    ] as const)("records %s on a policy turn", async (_case, options, answerStatus, citationCount) => {
+      const { graph } = setup(policyRoute, { ...options, toolCalls: policyCall });
+
+      const state = await graph.invoke({ messages: [new HumanMessage("x")] }, runConfig(`thread-status-${answerStatus}-${citationCount}`));
+
+      expect(state.turnEvidence?.answerStatus).toBe(answerStatus);
+      expect(state.turnEvidence?.citations).toHaveLength(citationCount);
+    });
+
+    it.each([
+      ["no source found", noSource(), "no_source_found"],
+      ["a synthesizer abstention", policyKb(), "synthesizer_abstained"],
+    ])("audits an abstention after %s without the question or answer", async (_case, kbOutput, reason) => {
+      const { graph, audit } = setup(policyRoute, {
+        kbOutput: () => kbOutput,
+        toolCalls: policyCall,
+        synthesize: async () => ({ abstained: true, answer: "" }),
+      });
+
+      await graph.invoke({ messages: [new HumanMessage("Do you price match?")] }, runConfig(`thread-abstain-audit-${reason}`));
+
+      expect(audit).toHaveBeenCalledWith(
+        "shopping.policy.abstained",
+        { graphId: "shopping_assistant", promptVersion: "shopping-policy-answer-v1", reason },
+        expect.anything()
+      );
+    });
+
+    it.each([
+      ["product cards", () => JSON.stringify(evidenceFound), "answered"],
+      ["no source found", noSource, "abstained"],
+      ["a failed lookup", kbFailure, "lookup_failed"],
+    ])("records %s on a product turn", async (_case, kbOutput, answerStatus) => {
+      const { graph } = setup(routed({ status: "routed", intent: "product_lookup", rationaleCode: "asks_product_info", attempts: 1 }), { kbOutput });
+
+      const state = await graph.invoke({ messages: [new HumanMessage("耳機？")] }, runConfig(`thread-product-status-${answerStatus}`));
+
+      expect(state.turnEvidence?.answerStatus).toBe(answerStatus);
+    });
+
+    it("leaves turn evidence empty on a turn that answers nothing", async () => {
+      const { graph } = setup(routed({ status: "routed", intent: "clarify", rationaleCode: "ambiguous", attempts: 1 }));
+
+      const state = await graph.invoke({ messages: [new HumanMessage("嗯")] }, runConfig("thread-status-clarify"));
+
+      expect(state.turnEvidence).toBeNull();
+    });
   });
 
   it("treats injected instructions in evidence as data and never runs an order tool", async () => {
