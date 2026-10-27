@@ -18,6 +18,7 @@
     "knowledge:ingest": "tsx src/knowledge/ingest.cli.ts",
     "knowledge:eval-dataset": "tsx scripts/knowledge/build-eval-dataset.ts",
     "knowledge:evaluate": "tsx src/knowledge/evaluation/evaluate.cli.ts",
+    "commerce:eval-dataset": "tsx scripts/commerce/build-chain-eval-dataset.ts",
     "operations:release-gate": "tsx src/operations/release-gate.cli.ts",
     "operations:feedback-loop": "tsx src/operations/feedback-loop.cli.ts",
     "operations:rolling-deploy": "tsx src/operations/rolling-deploy.cli.ts"
