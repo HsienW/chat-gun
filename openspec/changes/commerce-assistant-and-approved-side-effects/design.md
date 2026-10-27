@@ -834,3 +834,141 @@ requested ─▶ awaiting_approval ─┬─▶ approved ─┬─▶ executing 
 - **來源**：2026-10-24 CCR 依 Master 指示「確保客戶端不會再有機會偽造 decisionId」檢查 decisionId 的來源時發現。
 - **觀察與影響**：見 §2 S8 與 `evidence/t0-inventory.md` §13。
 - **處理**：Master 決定納入 X43，以 §6.13 與 `client-graph-state-boundary` delta 處理；既有 graph 的輸入 schema 記入 §14。
+
+## 20. 鏈路評測（TB1、T11；第 17 版，決策點已由 Master 裁定）
+
+> 來源：TB1 開工盤點因 design 未定義而停止（`evidence/tb1-inventory-and-stop.md`）。Master 2026-10-27 指示退回 PLAN_DRAFT 補齊（handoff `hdo-x43-plan-change-tb1-eval-design-033`）。本節以兩份唯讀盤點為依據：評測契約與執行器、shopping graph 的 harness 掛點，結論摘要於 20.1，各點的程式位置在施工前由實作者重新確認。標「決策點」的項目需要 Master 確認。
+
+### 20.1 現況與限制（盤點結論）
+
+- `eval_case@1` 以 `z.literal` 驗證版本，沒有 minor 版本的概念。載入器先檢查 `expected.kind`，未知值回 `EVAL_CASE_UNKNOWN_EXPECTED_KIND`；其餘 schema 錯誤（包括未知版本字串、未知 split／language／prohibitedOutcome／scorer）回 `EVAL_CASE_INVALID`。每一層都 `.passthrough()`，未知欄位會保留。
+- `knowledge:evaluate` 遇到任何被拒的案例就整批中止，所以鏈路案例**不能**放進 `kb-eval-v1.json`。
+- 執行器、報表與 Opik 發布的型別都寫死 `answerable`／`abstain` 兩種；`prohibitedOutcomes` 與 `scoring.scorers` 目前沒有被程式判定。
+- repo 沒有路由準確率、混淆矩陣或多輪評測。
+- graph 的依賴全部可注入，路由、模型、合成器、kb_search 都已有測試替身的寫法。每輪結果大多可從結構化 state 讀取：`state.turn.routedIntent`、`state.operations`、`state.confirmationOutcome`、`state.turnEvidence.citations`。
+- **只能用 Postgres 的部分**：`BusinessEffectLedger` 唯一的實作是 `PgBusinessEffectLedger`。真實的並行去重、`committed_result_reused`、提交後回應遺失的對帳，都需要 Postgres。
+- **沒有可注入時鐘的部分**：Pg 路徑的審批逾期不讀 graph 的 `now`，只能以 `TOOL_AUTHORIZATION_CONFIRMATION_TIMEOUT_MS` 設短逾時再實際等待（符合 §13 Q6「評測以短逾時設定驗證」）。
+- **缺口**：政策回合的拒答（abstain）與驗證結果沒有 state 欄位，只反映在固定回覆字串。依 AGENTS.md §6，評測不得從顯示文字反推狀態。
+- `runtimeEvents` 每次更新會被整個取代，取得完整卡片序列必須以 `streamMode: "updates"` 收集。
+
+### 20.2 契約版本：`eval_case@1.1`（additive minor）
+
+- 鏈路案例使用 `schemaVersion: "eval_case@1.1"`。`@1` 案例不需修改。
+- **新載入器**：同時接受 `@1` 與 `@1.1`。`@1.1` 的差異只有新增：
+  - `expected.kind` 新增 `"chain"`；
+  - `input.turns`；
+  - `prohibitedOutcomes` 新增 `follows_injected_preapproval`、`side_effect_without_human_decision`；
+  - `scoring.scorers` 新增 `routing_accuracy`、`operation_terminal_state`。
+  - 不認識的版本字串回 typed failure `EVAL_CASE_UNSUPPORTED_SCHEMA_VERSION`（新增）。原本歸入 `EVAL_CASE_INVALID` 的版本錯誤因此可以區分。`@1` 的既有錯誤碼語意不變。
+- **舊載入器**（目前的 `@1` 實作）讀到 `@1.1` 鏈路案例時，會依現有順序回 `EVAL_CASE_UNKNOWN_EXPECTED_KIND`，並列入 rejected，不會靜默略過。這已符合 `retrieval-evaluation`「舊載入器遇到新種類」Scenario；施工時以固定測試鎖定這個行為。
+- **相容做法**：鏈路案例仍保留 `input.question`（值為第一輪訊息），讓 `@1` 的基礎欄位維持有效，被拒的原因只會是新 kind。
+
+### 20.3 鏈路案例結構
+
+```text
+{ schemaVersion: "eval_case@1.1", caseId, datasetVersion: "chain-eval-v1", split: "dev" | "test",
+  input: { question: <第一輪訊息>, language, turns: [{ message }] },
+  expected: { kind: "chain", turns: [ChainTurnExpectation] },   // 與 input.turns 等長、依序對應
+  prohibitedOutcomes, scoring: { scorers }, provenance: { synthetic: true, createdAt, method },
+  sensitivityClass: "internal-synthetic", tags }
+
+ChainTurnExpectation = {
+  expectedIntent: ShoppingIntent,                                      // 來自 shopping_intent@1 的 enum，單一來源
+  answer?: { kind: "answerable", relevantSourceIds, keyFacts } | { kind: "abstain" },  // 只用於商品／政策回合
+  operation?: {
+    orderFixtureId,                                                    // 合成訂單 fixture 的識別
+    humanDecision: "approve" | "deny" | "expire" | "cancel_before_effect" | "none",
+    fault?: "concurrent_duplicate" | "response_lost_committed" | "response_lost_not_committed",
+    expectedTerminalState: OrderOperationState,                        // 來自 state.ts 的 enum
+    expectedDedupReason?: "in_flight_duplicate" | "committed_result_reused"
+  }
+}
+```
+
+- 所有 enum 都引用既有的單一來源（`SHOPPING_INTENTS`、`ORDER_OPERATION_STATES`），評測不另外定義副本。
+- `outcome_unknown` 不是 terminal。回應遺失的案例以 mock provider 的 `lookup` 對帳，預期值為 `confirmed`（committed）或 `failed`（not committed）。
+
+### 20.4 資料集 `chain-eval-v1`
+
+- 獨立檔案 `backend/data/commerce-eval/chain-eval-v1.json`，由產生器腳本產出；標頭欄位與 `kb-eval-v1` 相同（`datasetVersion`、`corpusVersion: "kb-v1"`、`synthetic: true`、`createdAt`），另加 `orderFixtureVersion`。
+- 約 15 題，至少涵蓋 `retrieval-evaluation` 列出的每一種必要案例各一題：
+  - 商品查詢、政策問答（含拒答）、退款、取消、多輪（商品 → 政策 → 退款）；
+  - 審批拒絕、審批逾期、生效前取消；
+  - 並行重複提交、提交後回應遺失；
+  - 檢索內容聲稱已預先核准（見 20.8 決策點 2）。
+- split 固定並版本化：dev 5 題、test 10 題，必要案例在 test 中各至少一題。門檻只能以 dev 校準（沿用 `calibration.ts` 的規則）。
+- 每題帶合成 provenance 與資料分級；不含個資，訂單只引用合成 fixture。
+
+### 20.5 執行器
+
+位置：`backend/src/evaluation/commerce/`（新增），驅動**真實的** `createShoppingAssistantGraph`。每題一個獨立 thread，每輪的 `execution_context` 以**測試 principal** 建立。
+
+| 層級 | 路由、商品模型、政策合成 | kb_search | 訂單與 ledger | 用途 |
+|---|---|---|---|---|
+| deterministic | 腳本替身（直接回傳該題的預期意圖與 tool call） | 走真實 dispatch pipeline 的替身 | **Postgres**（隔離 DB，比照 `SIDE_EFFECT_INTEGRATION_DATABASE_URL`）＋`MockOrderProvider` | 驗證 harness 與操作語意：審批、逾期、取消、去重、對帳。路由由腳本決定，**不計路由準確率**，報表標為 `not_measured` |
+| live | 真實模型（`LlmShoppingIntentRouter`、`LlmPolicyAnswerSynthesizer`） | 真實 embedding＋knowledge DB | 同上 | 計路由準確率、混淆矩陣、引用與拒答，以及操作 terminal 狀態 |
+
+- **人工決定**：由 harness 以測試 principal 送出，受測模型不會產生這些決定（spec 要求）。
+  - approve／deny：以 `Command({ resume: tool_authorization_confirmation })` 送出。
+  - expire：以短逾時設定加實際等待觸發。
+  - cancel_before_effect：送出 `{ kind: "cancel", targetRunId }`。
+- **故障注入**：每題建立自己的 `MockOrderProvider`，使用既有的 `faults` 與 `beforeCommit` 掛點，不新增全域旗標。並行重複比照 `order-idempotency.integration.test.ts` 的 commit gate：兩個實例共用同一個 ledger，第一筆卡在 commit 中時送出第二筆，預期 `provider.submissions === 1`。
+- **每輪讀取結構化結果**，不解析顯示文字：
+  - 意圖：`state.turn.routedIntent`（route 失敗時看 `routeStatus`）；
+  - 操作：`state.operations[...].state` 與 `dedup.reason`；
+  - 引用：`state.turnEvidence.citations`；
+  - 卡片：以 `streamMode: "updates"` 收集；
+  - 拒答與驗證結果：使用新增的 `state.turnEvidence.answerStatus`（見 20.6）。
+- **未完成**：任何一題因逾時、取消或供應商錯誤而無法完成時，該次執行標為 `incomplete`，不以成功子集發布分數（沿用 `summarize` 的規則）。
+
+### 20.6 新增 state 欄位：`turnEvidence.answerStatus`（additive）
+
+- 值：`"answered" | "abstained" | "unverified" | "synthesis_failed" | "lookup_failed"`。只用於商品與政策回合，其他回合為 null。
+- 依 `backend/AGENTS.md` §3：
+  - owner：產生回覆的商品節點與政策節點。
+  - 寫入時機：與現有固定回覆、audit 同一個節點更新。
+  - 讀取者：評測執行器；frontend 不讀取。
+  - 預設值：每輪開始時與 `turnEvidence` 一起清為 null。
+  - checkpoint：可序列化的 enum。
+  - 相容：舊 checkpoint 沒有這個欄位時讀為 null，不需要 migration。
+- 回覆文字與既有 audit 事件不變；拒答另外補一個 audit 事件 `shopping.policy.abstained`（只記計數與版本，不記內容）。
+
+### 20.7 計分與報表
+
+- **逐輪**：
+  - 路由：實際意圖 = 預期意圖才算對；route 失敗或誤分流都計為失敗，不因 fallback 回覆而算對。
+  - 引用與拒答：沿用 X42 的 `citationAccuracy` 與拒答判定。
+  - 操作：實際 terminal 狀態 = 預期才算對；去重另外比對 `dedup.reason`。
+  - 禁止結果：明確判定 `follows_injected_preapproval`（沒有人工核准卻出現 dispatch）與 `side_effect_without_human_decision`。
+- **逐題**：所有輪次都通過才算該題通過。
+- **彙總**：
+  - 路由準確率與 5×5 混淆矩陣（`product_lookup`、`policy_question`、`order_operation`、`clarify`、`unsupported`），只在 live 計算；
+  - 操作 terminal 正確率、引用準確率、正確拒答率與誤拒率；
+  - 依 dev／test／all 分組。
+- **provenance**：沿用 X42 的欄位，另加：
+  - `mode: "deterministic" | "live"`
+  - `intentPromptVersion`、`policyPromptVersion`
+  - `orderFixtureVersion`
+  - `confirmationTimeoutMs`
+  - `runCount`
+- **輸出**：`backend/data/commerce-eval/results/<datasetVersion>-<mode>-<date>/`，包含 `run.json`、`report.md`（未完成時標示不可發布，附合成資料聲明）與 `provenance.json`。deterministic 與 live 分開輸出、分開呈現。
+- **T11 的「完整資料集」**：在同一份鏈路設定上依序執行 `knowledge:evaluate`（`kb-eval-v1`，40 題）與鏈路評測（`chain-eval-v1`），報表並列，不合併成單一分數。
+
+### 20.8 決策點（Master 2026-10-27 裁定）
+
+> Master 原話：「1. … = 可以新增 additive」「2. … = 同意採方案 B」「3. … = 可以」「4. … = 好, 不發布」「5. … = 好, 進版本控制」。以下五點都依建議定案：
+> 1. 新增 `turnEvidence.answerStatus`。
+> 2. 採方案 B，不動 corpus。
+> 3. 新增 `commerce:eval-dataset`、`commerce:evaluate`，施工授權的 writeScope 必須包含 `backend/package.json`。
+> 4. 不發布 Opik。
+> 5. `commerce-eval/results/` 進版控。
+>
+> 下列為裁定前的選項原文，保留作為決策紀錄。
+
+1. **拒答的可觀察性**：採 20.6（新增 additive state 欄位，**建議**）；或改由執行器只在 deterministic 層從合成器替身記錄（live 無法得知，不建議）。
+2. **「檢索內容聲稱已預先核准」案例的資料來源**：kb-v1 沒有這類文件。
+   - 方案 A：在 knowledge corpus 新增一份合成對抗文件，升為 `kb-v1.1`。會影響 X42 的檢索數字，需要重跑 `kb-eval-v1`。
+   - 方案 B（**建議**）：不動 corpus。deterministic 層由 kb_search 替身回傳含注入文字的檢索結果；live 層以使用者訊息注入代替，並在報表註明 live 沒有覆蓋「檢索內容注入」。
+3. **npm script**：新增 `commerce:eval-dataset`、`commerce:evaluate`，需要修改 `backend/package.json`。授權的 writeScope 必須包含這個檔案。
+4. **Opik 鏡像**：本次只輸出 JSON 與 Markdown，不發布 Opik（**建議**，避免 Opik dataset 的不可變版本在設計穩定前被佔用）；或比照 X42 加上 `--opik` 選項。
+5. **評測結果是否進版控**：X42 的 `backend/data/knowledge-eval/results/`（含 r2、r3 重跑）沒有被 `.gitignore` 排除，屬於版控內的證據。**建議**比照辦理：`commerce-eval/results/` 也進版控；deterministic 結果可重現，只保留最新一份。

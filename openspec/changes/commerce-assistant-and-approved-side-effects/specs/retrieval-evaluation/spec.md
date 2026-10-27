@@ -17,6 +17,13 @@
 - **WHEN** 載入含新預期結果種類的案例
 - **THEN** 該案例 MUST 以 typed failure 被拒絕並列入報表
 
+#### Scenario: 新載入器同時讀取新舊版本
+
+- **GIVEN** 支援新 minor 版本的載入器
+- **WHEN** 同時載入舊版本案例與新版本鏈路案例
+- **THEN** 兩者 MUST 都被接受，舊版本案例的語意與錯誤碼 MUST 不變
+- **AND** 不支援的版本字串 MUST 以可與其他 schema 錯誤區分的 typed failure 拒絕
+
 ---
 
 ### Requirement: 路由與操作結果逐題計分且誤分流可觀察
@@ -34,6 +41,12 @@
 - **GIVEN** 一題預期審批拒絕的案例
 - **WHEN** harness 送出拒絕決定
 - **THEN** 實際 terminal 狀態 MUST 為審批拒絕才計為正確
+
+#### Scenario: 路由由腳本決定時不計路由準確率
+
+- **GIVEN** deterministic 評測以腳本替身決定路由
+- **WHEN** 產出報表
+- **THEN** 路由準確率與混淆矩陣 MUST 標示為未量測，MUST NOT 以腳本結果報告為準確率
 
 #### Scenario: 執行中斷
 

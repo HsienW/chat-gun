@@ -45,13 +45,15 @@ npm run build
 
 > 前置：無，可與 T2a 並行。對應 `side-effect-tool-execution-runtime`「去重結果 MUST 在 governed outcome 中可觀察」；design §6.12、§19 SI-4。Master 授權直接修改 harness、不另開 change。本 repo 的 CCR 寫入檢查不允許寫入 workspace 以外的路徑，因此本 Task MUST 由以 harness repo 為工作目錄的 session 執行，依該 repo 的規則與 Master 在該處的授權；本 repo 只記錄結果。
 
-- [ ] 在 `@gun-ai/harness-contracts` 新增 `deduplicated` 類型（`reason`、`original`、`result?`，design §6.12），三處定義同步（`tool.ts` 的 zod schema 與 `GovernedOutcome`、`side-effect.ts` 的 `GovernedToolOutcome`）；`ToolExecutionTerminationCause` 新增 `deduplicated`。不加入任何業務語意。
-- [ ] 測試：三種 reason 皆可通過 envelope 驗證；`committed_result_reused` 缺 `result` 被拒絕；其他 reason 帶 `result` 被拒絕；`original` 多出欄位被拒絕；既有 7 個類型的驗證結果不變。
-- [ ] 更新 `api-surface.json`、CHANGELOG；harness 自身的 build 與 test 通過。
-- [ ] Master 發布新版（預設 `0.1.0-alpha.3`；其他 `@gun-ai/*` 是否同步發版依 harness repo 的版本規則）。發版是對外動作，由 Master 執行或明確授權。
-- [ ] 在本 repo 的 evidence 記錄 harness 的 commit、發布版本與驗證結果（`evidence/th-harness.md`）。
+- [x] 在 `@gun-ai/harness-contracts` 新增 `deduplicated` 類型（`reason`、`original`、`result?`，design §6.12），三處定義同步（`tool.ts` 的 zod schema 與 `GovernedOutcome`、`side-effect.ts` 的 `GovernedToolOutcome`）；`ToolExecutionTerminationCause` 新增 `deduplicated`。不加入任何業務語意。
+- [x] 測試：三種 reason 皆可通過 envelope 驗證；`committed_result_reused` 缺 `result` 被拒絕；其他 reason 帶 `result` 被拒絕；`original` 多出欄位被拒絕；既有 7 個類型的驗證結果不變。
+- [x] 更新 `api-surface.json`、CHANGELOG；harness 自身的 build 與 test 通過。
+- [x] Master 發布新版（預設 `0.1.0-alpha.3`；其他 `@gun-ai/*` 是否同步發版依 harness repo 的版本規則）。發版是對外動作，由 Master 執行或明確授權。
+- [x] 在本 repo 的 evidence 記錄 harness 的 commit、發布版本與驗證結果（`evidence/th-harness.md`）。
 
 驗證：依 harness repo 的 build 與 test 命令；結果記錄於 `evidence/th-harness.md`。
+
+> 2026-10-27 勾選依據：harness repo session 的唯讀核對（`evidence/th-harness-alpha3-verification.md`）。功能 commit 為 `a519ea6`，release commit 為 `1674fa2`；四個套件的 `gitHead` 都指向 release commit，本機打包的 shasum 與 registry 完全一致。suite `deduplicated governed outcomes` 共 14 個測試，涵蓋本段要求；`npm run check` 以 exit 0 結束（48 passed）。已發布套件的內容另見 `evidence/th-harness.md`。這五項由 Master 在 harness repo 完成，CCR 只依證據勾選。未確認：PR #3 是否已合併到 main；沒有 git tag。
 
 ## T2a Side-effect runtime：審批決策傳遞、claim 釋放與加鎖順序（additive）
 
@@ -324,7 +326,7 @@ SIDE_EFFECT_INTEGRATION_DATABASE_URL=<本機 Postgres> npx vitest run <TE 新增
 - [x] F2：governance 的 run context 有 canonical context 時，以其 scope 為準；只有沒有 canonical context 時才用 legacy alias，最後才退回 threadId（design §6.2、§6.15）。先寫失敗測試：沒有 `scope_id` alias、canonical scope 與 threadId 不同時，有等待審批的取消 MUST 進入 graph 撤回。並移除既有 governance 取消測試中遮蔽問題的 alias。同一修正也讓 `deep_researcher` 的澄清 resume 授權以 canonical scope 比對 manifest。（2026-10-27：修正前失敗、修正後通過；backend lint／build 通過，test 只剩 2 項既有失敗；PG integration 190 passed；`evidence/tf-summary.md`。2026-10-27 由 Qwen 獨立驗收 APPROVE，Master 接受（模型身分比照 S9），`evidence/qwen-tf-review.md`）
 - [x] F1：BFF 拒絕頂層含 `lg_name` 的 run `input`（單筆、批次、crons），回傳 `CLIENT_STATE_WRITE_FORBIDDEN`。共用 graph 入口拒絕含 `lg_name` 的一般物件輸入，以及含 `resume` 以外欄位的 `Command`；只含 `resume` 的 `Command` 照常執行（design §6.13 第 16 版）。重現 Codex 的攻擊本文：BFF 拒絕且不轉送；graph 入口的 gate 與 dispatch 都 MUST NOT 被呼叫，state 不變。既有 resume（審批、澄清）回歸 MUST 通過。（2026-10-27：真實 `StateGraph` 重現攻擊；修正前 graph 入口與 BFF 的新案例皆失敗，修正後通過；mcp_agent production 組裝以攻擊本文驗證被拒且 state 不變；backend、bff 驗證通過；`evidence/tf-summary.md`。未經真實 BFF＋Agent Server 傳輸驗證。2026-10-27 由 Qwen 獨立驗收 APPROVE，Master 接受（模型身分比照 S9），`evidence/qwen-tf-review.md`）
 - [x] F3：runner 集中釋放出口的釋放寫入失敗時，回傳 `deferred`／`SIDE_EFFECT_PERSISTENCE_UNCERTAIN`，opt-in 來源建立 reconciliation task（design §6.8 第 16 版）。故障注入：tool 回報 `ORDER_NOT_FOUND` 或 dispatch 前取消，接著 `releaseClaim` 拋錯；結果 MUST 不是一般 failed／cancelled，task MUST 建立一次，dispatch MUST NOT 重來。（2026-10-27：修正前 4 failed、修正後通過；backend 驗證通過、PG integration 272 passed；`evidence/tf-summary.md`。2026-10-27 由 Qwen 獨立驗收 APPROVE，Master 接受（模型身分比照 S9），`evidence/qwen-tf-review.md`）
-- [ ] F4：取得 harness repo 的精確 commit、版本對應與 build／test 原始紀錄（由 Master 提供）後，補 TH 的核對；CCR 不自行推定。
+- [x] F4：取得 harness repo 的精確 commit、版本對應與 build／test 原始紀錄（由 Master 提供）後，補 TH 的核對；CCR 不自行推定。（2026-10-27：取自 harness repo session 的唯讀核對，`evidence/th-harness-alpha3-verification.md`；TH 已依此勾選。Blocker S7 是否標 resolved 由 Master 確認）
 
 驗證命令：
 
@@ -382,31 +384,38 @@ npm run build
 
 ## TB1 鏈路評測案例（D3，Lane B）
 
-> 前置：T0 的 evaluation case 契約 minor 版本欄位定案。對應 `retrieval-evaluation` ADDED Requirement。
+> 前置：design §20 第 17 版；決策點 1～5 已於 2026-10-27 由 Master 裁定（全部採建議）。對應 `retrieval-evaluation` ADDED Requirement。2026-10-26 第一次開工因 design 未定義而停止（`evidence/tb1-inventory-and-stop.md`）。
 
-- [ ] 約 15 題：商品查詢、政策問答（含拒答）、退款與取消、多輪（商品 → 政策 → 退款）、審批拒絕、審批逾期、生效前取消、並行重複提交、提交後回應遺失、注入聲稱已預先核准。
-- [ ] 新預期結果種類（每輪預期意圖、預期操作 terminal 狀態）以 evaluation case 契約的 additive minor 版本表達；舊載入器 typed failure 拒絕。
-- [ ] 每題帶合成 provenance 與資料分級；dev／test split 固定並版本化。
+- [x] 契約：新增 `eval_case@1.1`（design §20.2）。新載入器同時接受 `@1` 與 `@1.1`；不支援的版本回 `EVAL_CASE_UNSUPPORTED_SCHEMA_VERSION`；`@1` 既有錯誤碼語意不變。以固定測試鎖定：只支援 `@1` 的載入器遇到鏈路案例時回 `EVAL_CASE_UNKNOWN_EXPECTED_KIND` 並列入 rejected。 （2026-10-27：handoff 034 完成並驗證，`evidence/tb1-t11-summary.md`。待非 CCR 驗收）
+- [x] 鏈路案例結構（design §20.3）：`expected.kind: "chain"`，逐輪包含 `expectedIntent`、`answer?`、`operation?`；所有 enum 都引用 `SHOPPING_INTENTS`、`ORDER_OPERATION_STATES`，不另立副本。`input.turns` 與 `expected.turns` 長度不一致時回 typed failure。 （2026-10-27：handoff 034 完成並驗證，`evidence/tb1-t11-summary.md`。待非 CCR 驗收）
+- [x] 資料集 `backend/data/commerce-eval/chain-eval-v1.json`（design §20.4）由產生器腳本產出：約 15 題，涵蓋 spec 列出的每一種必要案例，dev 5 題／test 10 題，必要案例在 test 中各至少一題；每題帶合成 provenance 與資料分級。題型分布以測試檢查。 （2026-10-27：handoff 034 完成並驗證，`evidence/tb1-t11-summary.md`。待非 CCR 驗收）
 
-驗證：由 T11 的 schema 驗證與題型分布檢查覆蓋。
+驗證：`cd backend && npm run lint && npm run test && npm run build`，加上產生器重跑後資料集內容不變（決定性）。
 
 ## T11 鏈路評測執行（D4，Lane B）
 
 > 前置：T5、T7、T10、TB1。對應 `retrieval-evaluation` ADDED Requirement。
 
-- [ ] 評測 harness 以測試 principal 經 resume 送出人工審批決定，不由受測模型產生。
-- [ ] 輸出路由準確率與混淆矩陣、操作 terminal 狀態正確率、引用與拒答指標；誤分流計為失敗。
-- [ ] 在鏈路設定上執行完整資料集（X42 40 題 + 鏈路案例），記錄 dataset 版本、模型識別、prompt 版本、門檻版本、執行次數、日期與合成資料聲明。
-- [ ] deterministic 與 live 分開回報；未完成的執行標記 incomplete。
+- [x] 拒答可觀察性（design §20.6，依決策點 1）：新增 additive state 欄位 `turnEvidence.answerStatus` 與 audit `shopping.policy.abstained`；回覆文字與既有 audit 不變；舊 checkpoint 讀為 null。 （2026-10-27：handoff 034 完成並驗證，`evidence/tb1-t11-summary.md`。待非 CCR 驗收）
+- [ ] 執行器 `backend/src/evaluation/commerce/`（design §20.5）：驅動真實 `createShoppingAssistantGraph`，每題獨立 thread，以測試 principal 建立 execution context。人工決定（approve、deny、expire、cancel_before_effect）由 harness 送出，不由受測模型產生。故障以每題獨立的 `MockOrderProvider` 注入；並行重複以 commit gate 搭配兩個實例共用 Postgres ledger。每輪只讀結構化結果。
+- [ ] 計分與報表（design §20.7）：
+  - 逐輪路由（誤分流與 route 失敗計為失敗）、引用與拒答、操作 terminal 狀態與 dedup 原因，以及兩個禁止結果。
+  - 5×5 混淆矩陣只在 live 計算，deterministic 標為 `not_measured`。
+  - provenance 含 `mode` 等欄位；deterministic 與 live 分開輸出。
+  - 任一題未完成時，整次執行標為 incomplete，不發布分數。
+- [ ] deterministic 執行（需要隔離的 Postgres）：全部 `chain-eval-v1` 通過，結果寫入 `backend/data/commerce-eval/results/`。
+- [ ] live 執行（需要 Master 提供模型與 knowledge DB）：在同一份鏈路設定上依序執行 `knowledge:evaluate`（`kb-eval-v1`，40 題）與鏈路評測，報表並列；記錄資料集版本、模型識別、prompt 版本、門檻版本、執行次數、日期與合成資料聲明。
 
-驗證命令：
+驗證命令（npm script 名稱依決策點 3；新增 script 需要授權範圍包含 `backend/package.json`）：
 
 ```bash
 cd backend
 npm run lint
 npm run test
 npm run build
-npm run eval:opik
+npm run commerce:eval-dataset
+SIDE_EFFECT_INTEGRATION_DATABASE_URL=<隔離 DB> npm run commerce:evaluate -- --mode deterministic
+npm run commerce:evaluate -- --mode live
 ```
 
 ## T12 條件任務：knowledge migration 交易化（承接 X42 Minor）
