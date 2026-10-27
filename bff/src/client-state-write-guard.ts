@@ -22,7 +22,8 @@ export function toLangGraphPath(pathname: string): string {
 export type ClientStateWriteReason =
   | "thread_state_update"
   | "thread_create_supersteps"
-  | "command_not_resume_only";
+  | "command_not_resume_only"
+  | "input_command_representation";
 
 export interface ClientStateWriteViolation {
   reason: ClientStateWriteReason;
@@ -45,6 +46,12 @@ const STATE_WRITE_SURFACES = {
     route: "/threads",
   },
 } as const;
+
+/**
+ * LangGraph runs any input object carrying this serialization marker as a
+ * Command, whatever its value, so run input must never carry it.
+ */
+const LANGGRAPH_SERIALIZATION_MARKER = "lg_name";
 
 /** The only command field a client may send: resuming an interrupt. */
 const CLIENT_COMMAND_FIELDS: ReadonlySet<string> = new Set(["resume"]);
@@ -115,6 +122,19 @@ export function findClientStateWrite(
   if (requests.some((request) => isRecord(request) && !isResumeOnlyCommand(request.command))) {
     return {
       reason: "command_not_resume_only",
+      route: `${normalizedMethod} ${toRoutePattern(langGraphPath)}`,
+    };
+  }
+  if (
+    requests.some(
+      (request) =>
+        isRecord(request) &&
+        isRecord(request.input) &&
+        LANGGRAPH_SERIALIZATION_MARKER in request.input
+    )
+  ) {
+    return {
+      reason: "input_command_representation",
       route: `${normalizedMethod} ${toRoutePattern(langGraphPath)}`,
     };
   }
