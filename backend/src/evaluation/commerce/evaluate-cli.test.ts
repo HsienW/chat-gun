@@ -23,11 +23,17 @@ describe("npm run commerce:evaluate", () => {
     expect(manifest.scripts["commerce:evaluate"]).toBe("tsx src/evaluation/commerce/evaluate.cli.ts");
   });
 
-  it("fails live mode with a typed error and writes nothing", () => {
-    const result = runCli(["--mode", "live"], { ...process.env, SIDE_EFFECT_INTEGRATION_DATABASE_URL: "postgres://unused" });
+  it("fails live mode closed without its environment and writes nothing", () => {
+    // Empty values win over backend/.env, which dotenv never overrides.
+    const result = runCli(["--mode", "live"], {
+      ...process.env,
+      SIDE_EFFECT_INTEGRATION_DATABASE_URL: "postgres://unused",
+      KNOWLEDGE_DATABASE_URL: "",
+      SHOPPING_ASSISTANT_MODEL: "",
+    });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("CHAIN_EVAL_LIVE_NOT_IMPLEMENTED");
+    expect(result.stderr).toContain("CHAIN_EVAL_LIVE_ENV_INCOMPLETE");
     expect(result.stdout).toBe("");
   }, 60_000);
 

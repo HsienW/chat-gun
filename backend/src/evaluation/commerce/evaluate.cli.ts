@@ -1,13 +1,15 @@
 /**
- * Runs the X43 commerce chain evaluation and writes a versioned result set (design §20.7).
+ * Runs the X43 commerce chain evaluation and writes a versioned result set (design §20.5, §20.7).
  *
  * Usage (from backend/):
- *   npm run commerce:evaluate -- --mode deterministic [--date YYYY-MM-DD]
+ *   npm run commerce:evaluate -- --mode deterministic|live [--date YYYY-MM-DD]
  *
- * deterministic drives the real shopping_assistant graph over an isolated Postgres
- * (SIDE_EFFECT_INTEGRATION_DATABASE_URL) with scripted routing, request models and
- * policy synthesis. live is refused until the Master provides a model and a knowledge
- * database. Results go to data/commerce-eval/results/<datasetVersion>-<mode>-<date>/.
+ * Both modes drive the real shopping_assistant graph over an isolated Postgres
+ * (SIDE_EFFECT_INTEGRATION_DATABASE_URL). deterministic scripts routing, request
+ * models and policy synthesis. live uses the real models (SHOPPING_ASSISTANT_MODEL)
+ * and kb_search over KNOWLEDGE_DATABASE_URL, importing kb-v1 into a dedicated tenant
+ * and purging it afterwards (B1); without that environment it fails closed.
+ * Results go to data/commerce-eval/results/<datasetVersion>-<mode>-<date>/.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -21,7 +23,7 @@ import { getEnv } from "../../platform/env.js";
 import { loadSyntheticOrderFixture } from "../../tools/orders/synthetic-orders.js";
 import { isChainCase, parseVersionedEvalDataset } from "./chain-case.js";
 import { chainResultDirectoryName, isChainRunPublishable, renderChainReportMarkdown, type ChainEvaluationProvenance } from "./chain-report.js";
-import { DEFAULT_EXPIRE_TIMEOUT_MS, runDeterministicChainEvaluation } from "./chain-runner.js";
+import { DEFAULT_EXPIRE_TIMEOUT_MS, runDeterministicChainEvaluation, runLiveChainEvaluation } from "./chain-runner.js";
 import { CHAIN_SCRIPT_VERSION, SCRIPTED_RETRIEVAL_CONFIG_VERSION } from "./chain-script.js";
 import { resolveChainEvaluationPlan } from "./evaluate-options.js";
 
@@ -38,17 +40,10 @@ async function main(): Promise<void> {
     throw new Error(`Dataset has rejected cases: ${dataset.rejected.map((item) => `${item.caseId ?? item.index}:${item.code}`).join(", ")}`);
   }
   const cases = dataset.cases.filter(isChainCase);
-  const corpus = prepareCorpus(await loadRawCorpus(CORPUS_DIRECTORY)).documents;
+  const corpus = prepareCorpus(await loadRawCorpus(CORPUS_DIRECTORY));
   const orderFixture = await loadSyntheticOrderFixture();
   const orderFixtureVersion = typeof raw.orderFixtureVersion === "string" ? raw.orderFixtureVersion : "unknown";
-
-  const pool = new Pool({ connectionString: plan.databaseUrl });
-  let run;
-  try {
-    run = await runDeterministicChainEvaluation({ pool, cases, corpus, orderFixture, datasetVersion: dataset.datasetVersion });
-  } finally {
-    await pool.end();
-  }
+  const base = { cases, corpus: corpus.documents, orderFixture, datasetVersion: dataset.datasetVersion };
 
   const provenance: ChainEvaluationProvenance = {
     datasetVersion: dataset.datasetVersion,
@@ -63,6 +58,7 @@ async function main(): Promise<void> {
     embeddingSpaceId: null,
     rerankModel: null,
     generationModel: null,
+    generationTemperature: null,
     judgeModel: null,
     thresholdVersion: null,
     configVersion: SCRIPTED_RETRIEVAL_CONFIG_VERSION,
@@ -74,6 +70,39 @@ async function main(): Promise<void> {
     date: plan.date,
     synthetic: true,
   };
+
+  let run;
+  if (plan.mode === "live") {
+    // Loaded only here, so a deterministic run never touches a model or the knowledge database.
+    const { prepareLiveChainEvaluation } = await import("./chain-live-dependencies.js");
+    const live = await prepareLiveChainEvaluation(plan.model, corpus);
+    const pool = new Pool({ connectionString: plan.databaseUrl });
+    try {
+      run = await runLiveChainEvaluation({ pool, ...base, models: live.models, knowledge: live.knowledge });
+    } finally {
+      await pool.end();
+      await live.close();
+    }
+    Object.assign(provenance, {
+      intentPromptVersion: live.provenance.intentPromptVersion,
+      policyPromptVersion: live.provenance.policyPromptVersion,
+      embeddingModel: live.provenance.embeddingModel,
+      embeddingSpaceId: live.provenance.embeddingSpaceId,
+      rerankModel: live.provenance.rerankModel,
+      generationModel: live.provenance.generationModel,
+      generationTemperature: live.provenance.temperature,
+      thresholdVersion: live.provenance.thresholdVersion,
+      configVersion: live.provenance.configVersion,
+    });
+  } else {
+    const pool = new Pool({ connectionString: plan.databaseUrl });
+    try {
+      run = await runDeterministicChainEvaluation({ pool, ...base });
+    } finally {
+      await pool.end();
+    }
+  }
+
   const outDirectory = join(DATA_ROOT, "commerce-eval", "results", chainResultDirectoryName(dataset.datasetVersion, plan.mode, plan.date));
   await mkdir(outDirectory, { recursive: true });
   await writeFile(join(outDirectory, "run.json"), `${JSON.stringify(run, null, 2)}\n`);
@@ -87,6 +116,7 @@ async function main(): Promise<void> {
         outDirectory,
         status: run.status,
         publishable,
+        cleanup: run.cleanup,
         failedCases: run.failedCases,
         notPassed: run.results.filter((result) => result.status === "completed" && !result.passed).map((result) => result.caseId),
         test: run.summary.test,
