@@ -1,4 +1,3 @@
-import { getEnv } from "../../platform/env.js";
 import {
   applyInteractionGovernance,
   createProductionInteractionOrchestrator,
@@ -18,34 +17,13 @@ import { createDispatchReadinessCheck } from "./dispatch-readiness.js";
 import { createShoppingAssistantEntryResolver } from "./entry.js";
 import { createShoppingAssistantGraph, SHOPPING_ASSISTANT_GRAPH_ID } from "./graph.js";
 import { LlmShoppingIntentRouter } from "./intent-router.js";
+import { readShoppingAssistantModelSettings } from "./model-settings.js";
 import { PgOrderOperationRequestStore, unavailableOrderOperationRequestStore } from "./operation-requests.js";
 import { PgOrderOperationStatusReader } from "./operation-status.js";
 import { PgOriginalOperationResolver, unresolvableOriginalOperation } from "./original-operation.js";
 import { LlmPolicyAnswerSynthesizer } from "./policy-answer.js";
 
-const DEFAULT_INTENT_TIMEOUT_MS = 20_000;
-
-function readIntentTimeoutMs(): number {
-  const raw = getEnv("SHOPPING_INTENT_TIMEOUT_MS").trim();
-  if (raw.length === 0) return DEFAULT_INTENT_TIMEOUT_MS;
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value <= 0 || value > 120_000) {
-    throw new Error("Invalid SHOPPING_INTENT_TIMEOUT_MS");
-  }
-  return value;
-}
-
-function readTemperature(): number {
-  const raw = getEnv("SHOPPING_ASSISTANT_TEMPERATURE").trim();
-  const value = raw.length === 0 ? 0 : Number(raw);
-  if (!Number.isFinite(value) || value < 0 || value > 2) {
-    throw new Error("Invalid SHOPPING_ASSISTANT_TEMPERATURE");
-  }
-  return value;
-}
-
-const model = getEnv("SHOPPING_ASSISTANT_MODEL").trim() || undefined;
-const temperature = readTemperature();
+const { model, temperature, intentTimeoutMs } = readShoppingAssistantModelSettings();
 // Structured output is chosen by declared capability, never by model name.
 const routingCapabilities = getConfiguredLlmCapabilities("chat");
 
@@ -72,7 +50,7 @@ const graph = createShoppingAssistantGraph({
   confirmationStore: runtime.confirmationStore,
   interruptManifestRepository: runtime.interruptManifestRepository,
   intentRouter: new LlmShoppingIntentRouter({
-    timeoutMs: readIntentTimeoutMs(),
+    timeoutMs: intentTimeoutMs,
     createModel: () =>
       llmGateway.createChatModel({
         purpose: "chat",
