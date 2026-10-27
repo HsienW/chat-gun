@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { decodeJsonText } from "../../platform/json-decode.js";
 import type { ChatModelInvoker } from "../../platform/llm-gateway.js";
+import { classifyProviderError } from "../../platform/provider-error-category.js";
 import {
   SHOPPING_INTENT_RATIONALE_CODES,
   SHOPPING_INTENTS,
@@ -83,6 +84,21 @@ export function parseShoppingIntent(content: unknown): z.infer<typeof shoppingIn
   return parsed.success ? parsed.data : undefined;
 }
 
+/** Classification only: the provider message may echo the prompt or credentials, so it is never logged. */
+function logProviderError(error: unknown, attempt: number, timedOut: boolean): void {
+  const record = error !== null && typeof error === "object" ? (error as Record<string, unknown>) : undefined;
+  const status = record?.statusCode ?? record?.status;
+  console.warn(JSON.stringify({
+    event: "shopping_intent_provider_error",
+    promptVersion: SHOPPING_INTENT_PROMPT_VERSION,
+    attempt,
+    category: timedOut ? "provider_timeout" : classifyProviderError(error),
+    ...(typeof status === "number" && Number.isInteger(status) ? { statusCode: status } : {}),
+    timedOut,
+    errorName: error instanceof Error ? error.name : "UnknownError",
+  }));
+}
+
 export class LlmShoppingIntentRouter implements ShoppingIntentRouter {
   readonly promptVersion = SHOPPING_INTENT_PROMPT_VERSION;
   private readonly maxAttempts: number;
@@ -104,11 +120,11 @@ export class LlmShoppingIntentRouter implements ShoppingIntentRouter {
         response = await this.options
           .createModel()
           .invoke(prompt, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
-      } catch {
+      } catch (error) {
         // A timeout is an upstream failure; only the caller's signal means cancellation.
-        return signal?.aborted
-          ? { status: "cancelled", failureCode: "INTENT_ROUTING_CANCELLED", attempts: attempt }
-          : { status: "provider_error", failureCode: "INTENT_ROUTING_PROVIDER_ERROR", attempts: attempt };
+        if (signal?.aborted) return { status: "cancelled", failureCode: "INTENT_ROUTING_CANCELLED", attempts: attempt };
+        logProviderError(error, attempt, timeout.aborted);
+        return { status: "provider_error", failureCode: "INTENT_ROUTING_PROVIDER_ERROR", attempts: attempt };
       }
       const parsed = parseShoppingIntent(response.content);
       if (parsed !== undefined) return { status: "routed", ...parsed, attempts: attempt };

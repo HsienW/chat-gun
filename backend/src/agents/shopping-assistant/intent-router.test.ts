@@ -104,6 +104,75 @@ describe("LlmShoppingIntentRouter", () => {
     });
   });
 
+  it("logs a secret-free classification of a provider error", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const error = Object.assign(new Error("upstream 503 for key sk-test-secret"), { status: 503 });
+    const { model } = scriptedModel(error);
+
+    try {
+      await expect(router(model).route("hello")).resolves.toMatchObject({ status: "provider_error" });
+
+      expect(warn).toHaveBeenCalledOnce();
+      const line = String(warn.mock.calls[0]?.[0]);
+      expect(JSON.parse(line)).toEqual({
+        event: "shopping_intent_provider_error",
+        promptVersion: "shopping-intent-v1",
+        attempt: 1,
+        category: "provider_unavailable",
+        statusCode: 503,
+        timedOut: false,
+        errorName: "Error",
+      });
+      expect(line).not.toContain("sk-test-secret");
+      expect(line).not.toContain("hello");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("logs a timeout as provider_timeout", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const invoke = vi.fn(
+      (_input: unknown, options?: { signal?: AbortSignal }) =>
+        new Promise<AIMessage>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+        })
+    );
+
+    try {
+      await router({ invoke }, 20).route("hello");
+
+      expect(JSON.parse(String(warn.mock.calls[0]?.[0]))).toMatchObject({
+        event: "shopping_intent_provider_error",
+        category: "provider_timeout",
+        timedOut: true,
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("does not log a provider error when the caller cancelled", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const controller = new AbortController();
+    const invoke = vi.fn(
+      (_input: unknown, options?: { signal?: AbortSignal }) =>
+        new Promise<AIMessage>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          controller.abort();
+        })
+    );
+
+    try {
+      await expect(router({ invoke }).route("hello", controller.signal)).resolves.toMatchObject({
+        status: "cancelled",
+      });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("stops without calling the model once the caller cancelled", async () => {
     const { model, invoke } = scriptedModel('{"intent":"product_lookup","rationaleCode":"asks_product_info"}');
     const controller = new AbortController();
