@@ -337,7 +337,12 @@ function readRunContext(input: unknown, config: unknown): InteractionRunContext 
 
   // Legacy interaction callers may omit taskId until the bounded migration ends.
   const taskId = correlation.taskId ?? runId;
-  const scopeId = readString(records, ["scope_id", "scopeId"]) ?? threadId;
+  // Interrupt manifests are written with the canonical scope, so lookups must
+  // use it too; legacy aliases only apply to callers without canonical context.
+  const scopeId =
+    executionContext?.scope.scopeId ??
+    readString(records, ["scope_id", "scopeId"]) ??
+    threadId;
   const idempotencyKey = readString(records, [
     "x-idempotency-key",
     "idempotency_key",

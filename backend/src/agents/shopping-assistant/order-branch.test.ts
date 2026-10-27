@@ -884,8 +884,8 @@ describe("order branch cancellation", () => {
     const state = await governed.invoke({ kind: "cancel", targetRunId: "run-1" }, {
       runId: "run-2",
       configurable: {
+        // No legacy scope_id alias: production config carries the scope only in the canonical context.
         ...runConfig("thread-governed", "run-2").configurable,
-        scope_id: TENANT,
         task_id: "task-run-2",
         "x-request-id": "request-run-2",
         "x-idempotency-key": "idempotency-run-2",

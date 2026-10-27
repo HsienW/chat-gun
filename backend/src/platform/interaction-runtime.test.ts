@@ -4,6 +4,7 @@ import type { ActiveRunOwnership } from "../runtime/interaction/ownership.js";
 import type { InputClassificationResult } from "../runtime/interaction/classify.js";
 import type { InteractionTaskEvent } from "../runtime/interaction/events.js";
 import { IDEMPOTENCY_RECORD_SCHEMA_VERSION } from "../runtime/idempotency/idempotency-key.js";
+import { readExecutionContext, withExecutionContext } from "../runtime/execution-context/read-execution-context.js";
 import {
   applyInteractionGovernance,
   createInteractionOrchestrator,
@@ -933,6 +934,31 @@ describe("cancel routing for a thread waiting on a tool confirmation", () => {
         }),
       }),
     );
+  });
+
+  it("looks up the waiting confirmation in the canonical scope when no legacy alias is present", async () => {
+    const dependencies = idleThreadDependencies();
+    const isWaitingToolConfirmation = vi.fn(async () => true);
+    dependencies.config.isWaitingToolConfirmation = isWaitingToolConfirmation;
+    const graph = cancelGraph();
+    const canonical = readExecutionContext(null, { configurable: {
+      request_id: "request-2", thread_id: "thread-1", run_id: "run-2", task_id: "task-run-2",
+    } }, "development");
+    const config = withExecutionContext(
+      { runId: "run-2", configurable: { thread_id: "thread-1", "x-request-id": "request-2" } },
+      { ...canonical, scope: { ...canonical.scope, scopeId: "tenant-scope-1" } },
+    );
+
+    const result = await applyInteractionGovernance(
+      graph,
+      createInteractionOrchestrator(dependencies.config),
+    ).invoke({ kind: "cancel", targetRunId: "run-1" }, config);
+
+    expect(isWaitingToolConfirmation).toHaveBeenCalledWith({
+      threadId: "thread-1",
+      scopeId: "tenant-scope-1",
+    });
+    expect(result).toEqual({ withdrawn: true });
   });
 
   it("does not consult the waiting lookup while a run is active", async () => {
