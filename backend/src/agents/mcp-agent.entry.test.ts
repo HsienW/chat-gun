@@ -256,4 +256,30 @@ describe.each([false, true])("mcp_agent entry and dispatch step (pipeline: %s)",
     } }) as never, headers("thread-mcp-principal", "resume-run", "intruder"))).rejects.toThrow("binding mismatch");
     expect(h.written).not.toHaveBeenCalled();
   });
+
+  it("records a rejected confirmation through the production audit logger", async () => {
+    const h = await loadMcpAgent({ pipeline });
+    // Same module instance that mcp-agent.ts injected as confirmationAudit.
+    const { auditLogger } = await import("../platform/observability.js");
+    const record = vi.spyOn(auditLogger, "record").mockResolvedValue(undefined);
+    await h.graph.invoke({ messages: [new HumanMessage("write the fixture")] }, headers("thread-mcp-audit", "run-1"));
+    const waiting = (await h.graph.getState({ configurable: { thread_id: "thread-mcp-audit" } })).values as {
+      pendingAuthorization: ConfirmationRequiredDescriptor;
+    };
+    const [interruptId, manifest] = [...h.manifests.manifests.entries()][0]!;
+    h.manifests.manifests.set(interruptId, { ...manifest, status: "expired" });
+
+    await h.graph.invoke(new Command({ resume: {
+      type: "tool_authorization_confirmation", schemaVersion: waiting.pendingAuthorization.schemaVersion,
+      approvalId: waiting.pendingAuthorization.approvalId, decisionId: waiting.pendingAuthorization.decisionId, decision: "approve",
+    } }) as never, headers("thread-mcp-audit", "resume-run"));
+
+    expect(record).toHaveBeenCalledWith("authorization.confirmation.rejected", {
+      decisionId: waiting.pendingAuthorization.decisionId,
+      reasonCode: "CONFIRMATION_REPLAYED_OR_EXPIRED",
+      waitingRunId: "run-1",
+      resumeRunId: "resume-run",
+    });
+    expect(h.written).not.toHaveBeenCalled();
+  });
 });
