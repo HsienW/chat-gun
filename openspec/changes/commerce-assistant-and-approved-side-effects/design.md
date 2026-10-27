@@ -618,7 +618,7 @@ requested ─▶ awaiting_approval ─┬─▶ approved ─┬─▶ executing 
 | 預先授權的決策無法驗證（§6.10） | 既有 `AUTHORIZATION_UNAVAILABLE`（dispatch 前拒絕，audit `tool.authorization.decision_unverified`） | `failed`（未提交） |
 | BFF 客戶端 state 寫入（§6.13） | `CLIENT_STATE_WRITE_FORBIDDEN`（HTTP 400，不轉送） | — |
 | 狀態查詢 | `ORDER_OPERATION_NOT_FOUND` | — |
-| 前端 card | `CARD_PAYLOAD_INVALID`（前端內部） | 安全降級 |
+| 前端 card | `invalid_payload`（前端內部，`UnsupportedCardReason`） | 安全降級 |
 
 - provider error 不得轉成 not found；授權拒絕、逾時、審批 deny 不進入 retry（既有 `trusted-tool-authorization`）。
 

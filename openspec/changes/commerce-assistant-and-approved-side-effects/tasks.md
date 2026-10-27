@@ -9,7 +9,7 @@
 - [x] 以 `master` 實際比對 design §2 的每一列假設（confirmation 節點組裝、X20 durable 審批、dispatch pipeline 依來源 flag 建立、runner 重用與 claim 結果映射、拒絕錯誤碼、既有 `cancel` 輸入與審批紀錄、逾期判定時機、審批狀態 CHECK、resume 的 run 綁定、tool 全量載入、前端審批 UI、BFF 透傳、ledger 是否寫入 decisionId、等待 tool 審批時 `cancel` 的分類與處理路徑、未取得 claim 時寫入的執行紀錄狀態、重用結果的 payload 內容、部署環境的 active scope 粒度、已核准但尚未 ledger claim 時的取消中止訊號是否在 claim 前被檢查），記錄結論與差異。中止訊號若不會在 claim 前被檢查，停止並回報 CCR（影響「已核准但尚未執行時取消」的成立）。scope 若不是 tenant 層級，停止並回報 CCR 重新評估 design §13 Q2。
 - [x] 盤點所有讀取或寫入 `business_effects.commit_state` 的元件（取消判定、recovery、補償／saga、狀態查詢、資料治理、運維查詢），逐一記錄新增「已釋放」後的處理方式（等同沒有任何效果；第 7 版改以 `released_at` 欄位表達，盤點結果仍適用，見 design §6.8、§6.11）。
 - [x] 盤點所有同時寫入 `business_effects` 與 `tool_executions` 的交易及其加鎖順序（design §6.9、§19 SI-1）。
-- [ ] 對齊命名：authorization action、approval policy key、資料分級 key、data inventory 分級值、typed failure 碼（design §9）、`confirmationOutcome` 欄位、去重 outcome 形狀；語意不得改變。
+- [x] 對齊命名：authorization action、approval policy key、資料分級 key、data inventory 分級值、typed failure 碼（design §9）、`confirmationOutcome` 欄位、去重 outcome 形狀；語意不得改變。（2026-10-27：逐項比對程式現況，只有 design §9 前端 card 一列與實作不一致；依 Master 裁定把該列改為實作的 `invalid_payload`，語意不變，未修改程式；`evidence/t0-naming-alignment.md`）
 - [x] 確認 `card.emit` 的發出機制與前端解析點，以及 interrupt resume 經 BFF 的既有路徑。
 - [x] 產出盤點紀錄 `evidence/t0-inventory.md`。
 
@@ -271,7 +271,7 @@ npm run build
   （2026-10-26：情境對照見 `evidence/tr-summary.md` §6；HEAD 上 12 項 Postgres 整合全部失敗，新 run 核准回 `CONFIRMATION_BINDING_MISMATCH`）
 - [x] confirmation 節點（design §6.14 第 1 點，第 13 版）：既有 manifest 結構比對不符時維持拋錯；新增的 manifest 非 `waiting` 與 thread 不一致改為 typed failure（`CONFIRMATION_REPLAYED_OR_EXPIRED`／`CONFIRMATION_BINDING_MISMATCH`）並記 audit，不 consume、不 dispatch、不轉移 manifest；檢查在 `interrupt()` 之前；`confirmationOutcome` 沿用 `resolveConfirmationOutcome`。
 - [x] `consume` 綁定：移除「execution context 的 runId 等於審批描述的 runId」，改為 `threadId` 相等。SQL 單列 CAS 仍以審批描述的 runId 比對 `run_id`，這是等待中 Run 的資料庫層綁定，MUST NOT 移除或改為比對承載 resume 的 run；approvalId、decisionId、scope、tenant、resource tenant 與允許審批人的檢查不變。`authorization.confirmation.consumed`／`rejected` audit 新增 `waitingRunId` 與 `resumeRunId`，不作 metric label。撤回與天氣澄清 resume 的綁定不變。
-- [x] audit 接線（design §6.14 第 3 點，第 13 版）：`createToolAuthorizationGraphNodes` 新增選填 confirmation audit sink（未提供時 no-op）；production 組裝的 `PgAuthorizationConfirmationStore` 與 `mcp_agent`、`shopping_assistant` 的 confirmation 節點注入既有 `auditLogger`；節點層 audit 失敗不改變結果。以測試證明 production 組裝不再是 no-op。（2026-10-26：production 審批儲存以測試證明，修改前失敗；`mcp_agent` 節點的 production 注入只以原始碼與 tsc 核對，沒有執行期測試；`evidence/tr-summary.md` §7）
+- [x] audit 接線（design §6.14 第 3 點，第 13 版）：`createToolAuthorizationGraphNodes` 新增選填 confirmation audit sink（未提供時 no-op）；production 組裝的 `PgAuthorizationConfirmationStore` 與 `mcp_agent`、`shopping_assistant` 的 confirmation 節點注入既有 `auditLogger`；節點層 audit 失敗不改變結果。以測試證明 production 組裝不再是 no-op。（2026-10-26：production 審批儲存以測試證明，修改前失敗；`mcp_agent` 節點的 production 注入只以原始碼與 tsc 核對，沒有執行期測試；`evidence/tr-summary.md` §7。2026-10-27 補上 `mcp_agent` 執行期測試，pipeline 開與關兩種都有，移除注入後會失敗；`evidence/abc-summary.md` §B）
 - [x] 隔離的真實 Postgres 整合測試（需要 Docker，開始前先告知 Master；使用獨立 schema 或資料庫，測試後清除）：以 `PgAuthorizationConfirmationStore`、`PgInterruptManifestRepository` 與 `PostgresSaver` 跑一次「interrupt → 以不同 run 識別 resume → 核准 → dispatch 一次」，並驗證重放與跨 thread 為 typed failure；補上階段性 review m3 的 `mcp_agent` 審批路徑 Postgres 回歸（確認 T7 的 manifest 時間參數修正沒有引入回歸）。（2026-10-26：`confirmation-resume.integration.test.ts` 12 passed，隨機 schema 測試後 DROP；T8 同範圍＋TR 共 11 files、168 passed、0 skipped；另修正撤回 `updatedAt` 序列化缺陷，`evidence/tr-summary.md` §4–§5）
 - [x] 回歸：既有 confirmation、撤回、逾期、澄清 resume 測試與 `mcp_agent` tool message snapshot 全數通過。（2026-10-26：回歸 15 files、110 passed；完整測試 1998 passed，只有 2 個既有環境失敗，已在 HEAD 重現；`evidence/tr-summary.md` §4）
 
@@ -348,6 +348,8 @@ npm run test
 - [x] 測試：全部狀態可區分；requested／approved 不顯示為已確認；亂序與重複事件；連續點擊只送一次；重新載入後等待審批仍可操作；期限已過不自行改為逾期；confirmed 與 executing 卡片無撤銷、復原或取消控制項；未知 card 降級。
 
 > 2026-10-26 實作紀錄（`evidence/t10-summary.md`）：第 1、3、4 項完成並驗證（frontend lint／test／build 通過）。第 2 項依 Master 2026-10-26 裁定勾選：前端已知 active-run hint 時才帶、未知不帶，最終結果以服務端為更高優先的事實來源（審批綁定依 design §6.14 由伺服器端等待中 run 決定；卡片狀態只依後端事件與 thread state）；design §11 的文字待協調者同步。第 5 項依 Master 2026-10-26 裁定勾選：「重新載入後等待審批仍可操作」的驗收範圍為「同一 thread 從 server 狀態重建」（已測試）；瀏覽器重新整理回到原對話依賴待辦 A（server 端 thread 擁有者檢查）＋B（前端 `/chat/<threadId>` 路由），另行處理。
+>
+> 2026-10-27 獨立審查：Qwen 判定 APPROVE，有 1 項 Minor（`App.tsx` `handleStreamUpdate` 中，`extractAgentRuntimeEvents` 路徑取得的 card 沒有經過 active run 過濾），列為後續處理。Qwen 回報模型身分 unverified，Master 決定比照 S9 接受。`artifacts/review-result-x43-t10-2026-10-27.json` 由人工保存，CCR 只修正其中繼欄位；詳見 `evidence/qwen-t10-review.md`。
 
 驗證命令：
 
