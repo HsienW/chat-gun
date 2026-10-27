@@ -906,7 +906,19 @@ ChainTurnExpectation = {
 | 層級 | 路由、商品模型、政策合成 | kb_search | 訂單與 ledger | 用途 |
 |---|---|---|---|---|
 | deterministic | 腳本替身（直接回傳該題的預期意圖與 tool call） | 走真實 dispatch pipeline 的替身 | **Postgres**（隔離 DB，比照 `SIDE_EFFECT_INTEGRATION_DATABASE_URL`）＋`MockOrderProvider` | 驗證 harness 與操作語意：審批、逾期、取消、去重、對帳。路由由腳本決定，**不計路由準確率**，報表標為 `not_measured` |
-| live | 真實模型（`LlmShoppingIntentRouter`、`LlmPolicyAnswerSynthesizer`） | 真實 embedding＋knowledge DB | 同上 | 計路由準確率、混淆矩陣、引用與拒答，以及操作 terminal 狀態 |
+| live | 真實模型（`LlmShoppingIntentRouter`、`LlmPolicyAnswerSynthesizer`） | 真實 embedding＋knowledge DB（專用評測 tenant，見下方 B1） | 同上，ledger 以每題合成 principal 隔離（見下方 B1） | 計路由準確率、混淆矩陣、引用與拒答，以及操作 terminal 狀態 |
+
+#### live 層的資料隔離：B1（第 18 版，Master 2026-10-27 裁定）
+
+> Master 原話：「採 B1：live 用單一專用評測 tenant，執行開始時匯入 kb-v1，每題以不同合成 principal 隔離 ledger，結束後清除該 tenant 的 runtime 與 knowledge 資料。並行重複的第一筆由 harness 腳本送出。請更新 design §20.5 後實作。」
+
+- **專用評測 tenant**：每次 live 執行使用單一專用 tenant，名稱由 `evaluationRunId` 衍生（例如 `<evaluationRunId>-live`），不得重用其他執行或正式 tenant。執行開始時把 `kb-v1` 匯入這個 tenant；embedding、rerank 與門檻沿用 X42 r3 的設定（`text-embedding-v4`／1024、`kb-threshold-v1`），檢索數字才能與 X42 比較。匯入失敗時整次執行標為 `incomplete`，不進入評測。
+- **每題一個合成 principal**：ledger 的 business effect key 含 `principalId`、不含 tenant，所以題目之間以不同的合成 principal 隔離；該題 fixture 訂單的 `ownerPrincipalId` 改為該題的 principal。principal 由 `evaluationRunId` 與 `caseId` 衍生，只用於評測，不對應任何真實使用者。
+- **並行重複的第一筆由 harness 腳本送出**：真實模型可能為兩次提交填出不同的 `lineItems`，使 business effect key 不同而無法驗證去重。因此第一筆由 harness 以固定輸入直接送出，第二筆走受測 graph；預期結果與 deterministic 層相同（`provider.submissions === 1`、`dedup.reason` 符合預期）。
+- **檢索內容注入**：依 20.8 決策點 2 方案 B，live 只以使用者訊息注入涵蓋，報表註明 live 沒有覆蓋「檢索內容注入」。
+- **結束清除**：不論成功、失敗或中斷，結束時都清除該 tenant 的 runtime 列（審批、ledger、task 等以該 tenant 或該次 principal 為範圍的資料）與 knowledge 資料。清除失敗時在報表與 provenance 標示，並以非零結束碼回報，不得靜默略過。
+- **環境不足時 fail-closed**：必要的模型、embedding、knowledge DB 或 ledger DB 設定缺少時，執行器在開始前以 typed failure 結束，不寫入任何 tenant 資料，也不輸出分數。
+- **不新增依賴、不修改 lockfile。**
 
 - **人工決定**：由 harness 以測試 principal 送出，受測模型不會產生這些決定（spec 要求）。
   - approve／deny：以 `Command({ resume: tool_authorization_confirmation })` 送出。
