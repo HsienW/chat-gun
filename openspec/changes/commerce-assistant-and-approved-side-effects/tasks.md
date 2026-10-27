@@ -317,6 +317,26 @@ npm run build
 SIDE_EFFECT_INTEGRATION_DATABASE_URL=<本機 Postgres> npx vitest run <TE 新增與受影響的 integration test>
 ```
 
+## TF Codex S1～S8 核對的修正（第 16 版，F1～F4）
+
+> 前置：Codex 獨立核對（`evidence/codex-review-s1-s8.md`）與 CCR 仲裁（`evidence/ccr-arbitration-s1-s8.md`）。handoff `hdo-x43-fix-from-review-f1-f4-032`，授權 `auth-x43-ccr-impl-013`。實作者為 CCR，驗收者 MUST 不是 CCR。F1、F3 的 design（§6.13 第 3 點、§6.8「釋放寫入失敗」）已於 2026-10-27 由 Master 確認。
+
+- [x] F2：governance 的 run context 有 canonical context 時，以其 scope 為準；只有沒有 canonical context 時才用 legacy alias，最後才退回 threadId（design §6.2、§6.15）。先寫失敗測試：沒有 `scope_id` alias、canonical scope 與 threadId 不同時，有等待審批的取消 MUST 進入 graph 撤回。並移除既有 governance 取消測試中遮蔽問題的 alias。同一修正也讓 `deep_researcher` 的澄清 resume 授權以 canonical scope 比對 manifest。（2026-10-27：修正前失敗、修正後通過；backend lint／build 通過，test 只剩 2 項既有失敗；PG integration 190 passed；`evidence/tf-summary.md`。2026-10-27 由 Qwen 獨立驗收 APPROVE，Master 接受（模型身分比照 S9），`evidence/qwen-tf-review.md`）
+- [x] F1：BFF 拒絕頂層含 `lg_name` 的 run `input`（單筆、批次、crons），回傳 `CLIENT_STATE_WRITE_FORBIDDEN`。共用 graph 入口拒絕含 `lg_name` 的一般物件輸入，以及含 `resume` 以外欄位的 `Command`；只含 `resume` 的 `Command` 照常執行（design §6.13 第 16 版）。重現 Codex 的攻擊本文：BFF 拒絕且不轉送；graph 入口的 gate 與 dispatch 都 MUST NOT 被呼叫，state 不變。既有 resume（審批、澄清）回歸 MUST 通過。（2026-10-27：真實 `StateGraph` 重現攻擊；修正前 graph 入口與 BFF 的新案例皆失敗，修正後通過；mcp_agent production 組裝以攻擊本文驗證被拒且 state 不變；backend、bff 驗證通過；`evidence/tf-summary.md`。未經真實 BFF＋Agent Server 傳輸驗證。2026-10-27 由 Qwen 獨立驗收 APPROVE，Master 接受（模型身分比照 S9），`evidence/qwen-tf-review.md`）
+- [x] F3：runner 集中釋放出口的釋放寫入失敗時，回傳 `deferred`／`SIDE_EFFECT_PERSISTENCE_UNCERTAIN`，opt-in 來源建立 reconciliation task（design §6.8 第 16 版）。故障注入：tool 回報 `ORDER_NOT_FOUND` 或 dispatch 前取消，接著 `releaseClaim` 拋錯；結果 MUST 不是一般 failed／cancelled，task MUST 建立一次，dispatch MUST NOT 重來。（2026-10-27：修正前 4 failed、修正後通過；backend 驗證通過、PG integration 272 passed；`evidence/tf-summary.md`。2026-10-27 由 Qwen 獨立驗收 APPROVE，Master 接受（模型身分比照 S9），`evidence/qwen-tf-review.md`）
+- [ ] F4：取得 harness repo 的精確 commit、版本對應與 build／test 原始紀錄（由 Master 提供）後，補 TH 的核對；CCR 不自行推定。
+
+驗證命令：
+
+```bash
+cd backend
+npm run lint
+npm run test
+npm run build
+cd ../bff
+npm run test
+```
+
 ## T9 BFF 透傳證明（先證明，再宣稱無變更）
 
 > 前置：T0、T1；第 2 項另需 TR 與 TE（第 14 版 S10、第 15 版 S11）。T6 的前端串接與 T10 依賴本 Task 結論。對應 design §12、§6.14、§6.15、§6.16。

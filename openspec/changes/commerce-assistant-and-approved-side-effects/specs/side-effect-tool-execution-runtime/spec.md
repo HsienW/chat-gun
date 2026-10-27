@@ -98,6 +98,14 @@
 - **THEN** MUST 只有一個重新占用成功並呼叫外部系統
 - **AND** 另一個 MUST 得到進行中重複的去重結果
 
+#### Scenario: 釋放寫入失敗
+
+- **GIVEN** 某次執行以確定未提交的結果結束（例如 tool 回報訂單不存在，或 dispatch 前取消）
+- **WHEN** 釋放 business effect 的寫入失敗
+- **THEN** 結果 MUST NOT 為一般的未提交失敗或取消，MUST 為持久化不確定
+- **AND** 開啟 reconciliation task 的來源 MUST 建立 reconciliation task
+- **AND** MUST NOT 重新 dispatch，MUST NOT 自動重試
+
 #### Scenario: 執行逾時但確定未 dispatch
 
 - **GIVEN** 某次執行在呼叫外部系統之前因逾時而結束

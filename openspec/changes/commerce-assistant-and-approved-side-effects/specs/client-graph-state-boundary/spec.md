@@ -24,6 +24,13 @@ BFF MUST 在轉送前拒絕任何會讓客戶端直接寫入 graph state 或跳�
 - **THEN** BFF MUST 以 typed 錯誤拒絕且不轉送
 - **AND** 同一請求即使也帶有 `resume` 仍 MUST 被拒絕
 
+#### Scenario: 拒絕以 run 輸入偽裝 Command
+
+- **GIVEN** 已登入的客戶端
+- **WHEN** 建立 run 的請求，其 run 輸入頂層物件帶有 LangGraph 用來辨識 Command 的保留標記（例如偽裝成含 `update`、`goto` 的 Command）
+- **THEN** BFF MUST 以 typed 錯誤拒絕且不轉送
+- **AND** 不論該標記的值為何都 MUST 拒絕
+
 #### Scenario: 批次請求中有一筆違反
 
 - **GIVEN** 一個含多筆 run 的批次請求
@@ -66,3 +73,22 @@ BFF MUST 在轉送前拒絕任何會讓客戶端直接寫入 graph state 或跳�
 - **GIVEN** 一個 `shopping_assistant` thread
 - **WHEN** 客戶端送出訊息輸入或取消輸入
 - **THEN** graph MUST 照常處理
+
+---
+
+### Requirement: graph 入口 MUST 拒絕偽裝成 Command 的 run 輸入
+
+經共用 graph 入口的所有 graph MUST 在執行任何節點前，拒絕偽裝成 Command 的 run 輸入：帶有 LangGraph Command 保留標記的一般物件，以及含 `resume` 以外欄位的 Command。只含 `resume` 的 Command MUST 照常執行。此防線 MUST 在 graph 內成立，不依賴 BFF。
+
+#### Scenario: 輸入偽裝成 Command
+
+- **GIVEN** 經共用 graph 入口的任一 graph（例如 `shopping_assistant`、`mcp_agent`、`deep_researcher`）
+- **WHEN** run 輸入是帶有 Command 保留標記的一般物件，或是帶有 `resume` 以外欄位（例如 `update`、`goto`）的 Command
+- **THEN** graph 入口 MUST 以 typed 錯誤拒絕，MUST NOT 執行任何節點
+- **AND** graph state MUST 不變，授權節點 MUST NOT 被跳過
+
+#### Scenario: 只含 resume 的 Command 照常執行
+
+- **GIVEN** 等待審批或澄清的 thread
+- **WHEN** graph 收到只含 `resume` 的 Command
+- **THEN** graph MUST 照常恢復，行為與變更前一致

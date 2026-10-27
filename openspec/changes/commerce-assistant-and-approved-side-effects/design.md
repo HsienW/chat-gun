@@ -373,6 +373,11 @@ tool 只知道「這次對模擬訂單系統做了什麼」，不知道 approval
   - reconciliation 確認 `not_committed`。
 - **絕不釋放**：結果未知（`unknown`）、已提交（`committed`）、持久化不確定本身。持久化不確定時，只有 §6.6 的 reconciler 確認 `not_committed` 後才釋放（第 10 版）；其餘未知一律走 `outcome_unknown` 與 reconciliation task。
 - **集中處理**：釋放放在 runner 的結束出口一次處理，不在各錯誤分支分別處理，避免遺漏任何一條路徑。
+- **釋放寫入失敗（第 16 版，F3；Master 2026-10-27 確認）**：
+  - **問題**：集中出口的釋放寫入失敗時，claim 仍然留著，runner 卻照樣回報原本的 failed／cancelled。之後同一 key 的申請都會被判為進行中重複，也沒有 task 接手（Codex S1～S8 核對 F3）。
+  - **規則**：與 §6.6 中 reconciled 路徑的釋放失敗做法相同：MUST NOT 回報一般的 failed／cancelled，改回 `deferred`／`SIDE_EFFECT_PERSISTENCE_UNCERTAIN`，並建立 reconciliation task（reasonCode `SIDE_EFFECT_PERSISTENCE_UNCERTAIN`）。task 建立與 audit 依 §6.6；建立 task 屬 runner 的 opt-in，未開啟的來源不建立 task，但回傳值同樣改為 `deferred`。
+  - **語意**：效果其實沒有提交，未確定的只有 claim 的釋放。因此由 X31 依 ledger 目前狀態結案（reconciler 確認 `not_committed` 後再釋放）。不重新 dispatch，也不自動重試。對使用者呈現為 `outcome_unknown`，直到 task 結案。
+  - **替代方案**：維持原本的 failed，另外加 typed audit 並為殘留的 claim 建立清理 task。不採用，理由是要新增 task 種類與 reasonCode，而且回報「已結束」時 claim 實際上還在，等於掩蓋了持久化不確定。
 - **釋放的寫入**：以 CAS 在 `commit_state = 'prepared' AND released_at IS NULL` 的 business effect 上寫入 `released_at`，同時把持有 claim 的 tool execution 轉為 failed；兩者依 §6.9 的順序在同一交易內完成。
 - **重新占用**：新的提交（必須是新的、已重新審批的 tool call）在 `prepare` 遇到「`prepared` 且 `released_at` 有值」時，以 CAS 清空 `released_at` 並建立新的 tool execution；並行的兩個重新占用只有一個成功，另一個依原效果的新狀態判定為 `in_flight_duplicate`。同一列 business effect 保留，歷次嘗試都在 tool execution 留下紀錄。
 - **與 Invariant 6 的關係**：重新占用只發生在使用者重新申請並重新審批時，不是自動重試；runtime 對已核准的 dispatch 仍是 `maxAttempts = 1`。
@@ -432,6 +437,7 @@ tool 只知道「這次對模擬訂單系統做了什麼」，不知道 approval
    | `POST /threads` 本文帶 `supersteps` | 拒絕 |
    | 任何本文（含批次陣列、crons）中的 `command` 含 `resume` 以外的欄位（`update`、`goto` 或其他） | 拒絕；同時帶 `resume` 也拒絕 |
    | 只含 `resume` 的 `command` | 照常轉送 |
+   | 任何本文（含批次陣列、crons）中的 run `input` 頂層為物件且含 LangGraph 保留的序列化標記 `lg_name`（不論值；第 16 版，F1） | 拒絕 |
    | 以 POST 實作的唯讀請求：`/threads/{id}/history`、`/threads/{id}/state/checkpoint`、`/threads/search`、`/threads/count`、`/assistants/search`、`/assistants/count`、`/store/items/search`、`/store/namespaces` | 照常轉送 |
    | 一般 run 輸入（prompt、取消、deep_researcher 的設定欄位） | 照常轉送 |
 
@@ -439,6 +445,14 @@ tool 只知道「這次對模擬訂單系統做了什麼」，不知道 approval
    - 路徑比對以「去掉 `/api/langgraph` 前綴後的 LangGraph 路由樣式」進行，`thread_id` 等參數以樣式比對，不寫死任何實際 ID。路由與欄位清單是 LangGraph API 1.4.5 的穩定協定常數，集中在一個具型別的清單並有測試；升級 LangGraph API 時 MUST 重新核對（記入 §14）。
    - 判斷以結構化解析的 JSON 進行；本文無法解析時沿用既有行為（交由上游驗證），不另行放寬或拒絕。
 2. **graph（縱深防線）**：`shopping_assistant` 宣告獨立的輸入 schema（§4.2），只含 `messages`、`kind`、`targetRunId`。即使 BFF 檢查遺漏或出現新的寫入路徑，run 輸入也無法寫入審批、tool 佇列、操作狀態等內部 state。
+3. **graph 入口拒絕 Command 表示（第 16 版，F1；Master 2026-10-27 確認）**：
+   - **問題**：LangGraph 以 `lg_name` 辨識 Command，也接受 JSON 的一般物件。run `input` 只要寫成 `{"lg_name": "Command", "update": …, "goto": …}`，就會被當成 Command 執行。它的 `update` 不受輸入 schema 限制，`goto` 也能跳過授權節點，第 1、2 道防線都被繞過（Codex S1～S8 核對 F1，`evidence/codex-review-s1-s8.md`）。
+   - **規則**：共用 graph 入口 `instrumentGraphWithExecutionContext` 在呼叫 graph 前檢查輸入：
+     - 頂層為一般物件且含 `lg_name` → 拒絕，typed `CLIENT_STATE_WRITE_FORBIDDEN`，不呼叫 graph。
+     - 是 `Command` 實例（LangGraph API 由外層 `command` 建立）但帶有 `resume` 以外的欄位（`update`、`goto`、`graph`）→ 拒絕。
+     - 只含 `resume` 的 `Command` 實例 → 照常執行。
+   - **適用範圍**：所有經共用入口的 graph（`shopping_assistant`、`mcp_agent`、`deep_researcher`，以及經共用入口包裝時的 `math_agent`）。BFF 的檢查本來就涵蓋所有 graph；只要 graph 入口有一處遺漏，同類繞過就會重現。各 graph 的輸入 schema 仍維持「不在本次範圍」。
+   - **替代方案**：只在 `shopping_assistant` 檢查。不採用，理由是 `mcp_agent` 同樣使用 confirmation 節點，F1 對它同樣成立。
 
 **不在本次範圍**：既有 graph（`mcp_agent` 等）的輸入 schema；BFF 以外直接連 LangGraph API 的路徑（compose 只對外公開 BFF）；`/assistants` 建立或修改時夾帶的 config（decisionId 不再從 config 讀取，§6.10）。
 
