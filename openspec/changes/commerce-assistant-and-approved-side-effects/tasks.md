@@ -397,13 +397,13 @@ npm run build
 > 前置：T5、T7、T10、TB1。對應 `retrieval-evaluation` ADDED Requirement。
 
 - [x] 拒答可觀察性（design §20.6，依決策點 1）：新增 additive state 欄位 `turnEvidence.answerStatus` 與 audit `shopping.policy.abstained`；回覆文字與既有 audit 不變；舊 checkpoint 讀為 null。 （2026-10-27：handoff 034 完成並驗證，`evidence/tb1-t11-summary.md`。待非 CCR 驗收）
-- [ ] 執行器 `backend/src/evaluation/commerce/`（design §20.5）：驅動真實 `createShoppingAssistantGraph`，每題獨立 thread，以測試 principal 建立 execution context。人工決定（approve、deny、expire、cancel_before_effect）由 harness 送出，不由受測模型產生。故障以每題獨立的 `MockOrderProvider` 注入；並行重複以 commit gate 搭配兩個實例共用 Postgres ledger。每輪只讀結構化結果。
-- [ ] 計分與報表（design §20.7）：
+- [x] 執行器 `backend/src/evaluation/commerce/`（design §20.5）：驅動真實 `createShoppingAssistantGraph`，每題獨立 thread，以測試 principal 建立 execution context。人工決定（approve、deny、expire、cancel_before_effect）由 harness 送出，不由受測模型產生。故障以每題獨立的 `MockOrderProvider` 注入；並行重複以 commit gate 搭配兩個實例共用 Postgres ledger。每輪只讀結構化結果。 （2026-10-27：handoff 034 完成並驗證，`evidence/t11-runner-summary.md`。待非 CCR 驗收）
+- [x] 計分與報表（design §20.7）： （2026-10-27：handoff 034 完成並驗證，`evidence/t11-runner-summary.md`。待非 CCR 驗收）
   - 逐輪路由（誤分流與 route 失敗計為失敗）、引用與拒答、操作 terminal 狀態與 dedup 原因，以及兩個禁止結果。
   - 5×5 混淆矩陣只在 live 計算，deterministic 標為 `not_measured`。
   - provenance 含 `mode` 等欄位；deterministic 與 live 分開輸出。
   - 任一題未完成時，整次執行標為 incomplete，不發布分數。
-- [ ] deterministic 執行（需要隔離的 Postgres）：全部 `chain-eval-v1` 通過，結果寫入 `backend/data/commerce-eval/results/`。
+- [x] deterministic 執行（需要隔離的 Postgres）：全部 `chain-eval-v1` 通過，結果寫入 `backend/data/commerce-eval/results/`。 （2026-10-27：handoff 034 完成並驗證，`evidence/t11-runner-summary.md`。待非 CCR 驗收）
 - [ ] live 執行（需要 Master 提供模型與 knowledge DB）：在同一份鏈路設定上依序執行 `knowledge:evaluate`（`kb-eval-v1`，40 題）與鏈路評測，報表並列；記錄資料集版本、模型識別、prompt 版本、門檻版本、執行次數、日期與合成資料聲明。
 
 驗證命令（npm script 名稱依決策點 3；新增 script 需要授權範圍包含 `backend/package.json`）：
