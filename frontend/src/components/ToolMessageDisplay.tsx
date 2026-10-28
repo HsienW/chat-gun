@@ -185,7 +185,7 @@ export function ToolMessageDisplay({
     <div className="border border-border bg-card/70 rounded-lg overflow-hidden mt-4 mb-2 min-w-0">
       <Collapsible open={isExpanded} onOpenChange={onToggle}>
         <CollapsibleTrigger asChild>
-          <button className="w-full px-4 py-3 hover:bg-[#7A1E1E]/20 transition-all duration-200 text-left focus:outline-none focus:bg-[#7A1E1E]/20">
+          <button className="w-full px-4 py-3 hover:bg-muted transition-all duration-200 text-left focus:outline-none focus:bg-muted">
             <div className="flex items-center justify-between min-w-0">
               <div className="flex items-center gap-3 min-w-0 flex-1">
                 <div className="flex items-center gap-2 min-w-0 flex-1">
