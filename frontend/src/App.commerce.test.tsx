@@ -42,6 +42,12 @@ vi.mock('@/components/ChatMessagesView', () => ({
 
 import App from './App';
 
+function renderApp() {
+  const result = render(<App />);
+  fireEvent.click(screen.getByRole('button', { name: /Gun Shop/ }));
+  return result;
+}
+
 const DEADLINE = '2099-10-26T12:15:00.000Z';
 
 const waitingOperation = {
@@ -115,7 +121,7 @@ describe('App commerce approval', () => {
   it('restores a waiting approval from the server thread state after a reload', () => {
     reloadedWaitingThread();
 
-    render(<App />);
+    renderApp();
 
     expect(screen.getByTestId('operation-call-1')).toHaveTextContent('等待審批');
     expect(screen.getByRole('button', { name: '核准' })).toBeEnabled();
@@ -123,7 +129,7 @@ describe('App commerce approval', () => {
 
   it('sends one approval resume with the server approval identifiers', () => {
     reloadedWaitingThread();
-    render(<App />);
+    renderApp();
 
     fireEvent.click(screen.getByRole('button', { name: '核准' }));
     fireEvent.click(screen.getByRole('button', { name: '核准' }));
@@ -149,7 +155,7 @@ describe('App commerce approval', () => {
 
   it('shows a typed error and keeps the approval open when the resume fails', () => {
     reloadedWaitingThread();
-    render(<App />);
+    renderApp();
 
     fireEvent.click(screen.getByRole('button', { name: '核准' }));
     act(() => {
@@ -171,7 +177,7 @@ describe('App commerce approval', () => {
   it('sends the existing cancel input for the waiting run', () => {
     mocks.thread.messages = [{ type: 'ai', content: '請確認', id: 'ai-1' } as Message];
     mocks.thread.interrupt = { value: interruptValue };
-    render(<App />);
+    renderApp();
 
     act(() => {
       mocks.options?.onUpdateEvent?.({
@@ -203,7 +209,7 @@ describe('App commerce approval', () => {
 
   it('keeps a confirmed operation when a late executing card arrives', () => {
     mocks.thread.messages = [{ type: 'ai', content: '處理中', id: 'ai-1' } as Message];
-    render(<App />);
+    renderApp();
     const status = (state: string, stateVersion: number) => ({
       schemaVersion: 'order_operation_status@1',
       operationRef: { toolCallId: 'call-1', operationId: 'approval-1' },
