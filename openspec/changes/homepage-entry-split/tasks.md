@@ -57,5 +57,5 @@ cd frontend && npm run lint && npm run test && npm run build
 
 - [x] 7.1 將依賴 agent 下拉選單的既有測試（例如 `App.commerce.test.tsx`、`App.stream-activity.test.tsx`、`InputForm.model-selection.test.tsx`）改為經入口與開關操作；不得刪除案例或放寬斷言。
 - [x] 7.2 確認 `git diff --stat` 不含 `backend/`、`bff/`、`backend/langgraph.json`、`frontend/index.html` 的頁籤標題、README、`docs/` 或其他 Change；request 欄位與相同目標 assistant 在本 Change 前一致（Requirement「入口拆分 MUST 保留既有跨層契約」）。
-- [ ] 7.3 本機手動 smoke：首頁 → Gun Chat（關／開深度研究各一則）→ 以頂部模式切換到 Gun Shop（確認為空對話）→ 一則商品查詢 → 回首頁；記錄結果。Gun Shop 審批的錄影 smoke 屬 1A-2，由 Master 執行，不在本 Task 勾選範圍。
+- [x] 7.3 本機手動 smoke：首頁 → Gun Chat（關／開深度研究各一則）→ 以頂部模式切換到 Gun Shop（確認為空對話）→ 一則商品查詢 → 回首頁；記錄結果。Gun Shop 審批的錄影 smoke 屬 1A-2，由 Master 執行，不在本 Task 勾選範圍。Master 人工 smoke 與 Codex 補跑一般對話，2026-10-28；工具連線失敗屬 fix-knowledge-egress-in-container。
   - 驗證：`cd frontend && npm run lint && npm run test && npm run build`；如實列出未執行的 live 驗證。
