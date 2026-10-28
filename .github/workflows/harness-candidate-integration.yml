@@ -83,11 +83,21 @@ jobs:
             npmVersion = (npm --version).Trim()
             tarballs = @()
           }
+          # chat-gun backend manifest is the single source of the expected version; the SHA pin still fixes code identity.
+          $manifest = Get-Content -LiteralPath 'chat-gun/backend/package.json' -Raw | ConvertFrom-Json -AsHashtable
           foreach ($name in @('contracts', 'kernel', 'sdk', 'testkit')) {
+            $packageName = "@gun-ai/harness-$name"
+            $expectedVersion = $manifest.dependencies[$packageName]
+            if (-not $expectedVersion -or
+                $expectedVersion -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+              throw "Harness dependency is not an exact version: $packageName $expectedVersion"
+            }
             $packed = @(npm pack "gun-harness/packages/$name" --pack-destination $packDir --json --ignore-scripts | ConvertFrom-Json)
             if ($LASTEXITCODE -ne 0 -or $packed.Count -ne 1) { throw "Packing $name failed" }
             $item = $packed[0]
-            if ($item.version -ne '0.1.0-alpha.2') { throw "Wrong $name version: $($item.version)" }
+            if ($item.name -ne $packageName -or $item.version -ne $expectedVersion) {
+              throw "Candidate harness version mismatch: $($item.name) $($item.version), expected $packageName $expectedVersion"
+            }
             $file = Join-Path $packDir $item.filename
             $evidence.tarballs += [ordered]@{
               name = $item.name
