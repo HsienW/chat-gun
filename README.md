@@ -22,12 +22,13 @@
   <a href="https://opentelemetry.io/"><img src="https://img.shields.io/badge/OpenTelemetry-Observability-8A7600" alt="OpenTelemetry" /></a>
   <a href="https://github.com/comet-ml/opik"><img src="https://img.shields.io/badge/Opik-Tracing_%26_Evaluation-6F4CFF" alt="Opik" /></a>
   <a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://img.shields.io/badge/qwen--plus-Generation-1E3A8A" alt="qwen-plus" /></a>
-  <a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://img.shields.io/badge/text--embedding--v4-Embedding_1024d-0EA5E9" alt="text-embedding-v4" /></a>
+  <a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://img.shields.io/badge/text--embedding--v4-Embedding-0EA5E9" alt="text-embedding-v4" /></a>
   <a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://img.shields.io/badge/qwen3--rerank-Rerank-0EA5E9" alt="qwen3-rerank" /></a>
   <a href="https://www.postgresql.org/"><img src="https://img.shields.io/badge/PostgreSQL-16-336791" alt="PostgreSQL" /></a>
 </p>
 
 <p align="center">
+  <a href="#功能演示">功能演示</a> ·
   <a href="#核心能力">核心能力</a> ·
   <a href="#快速開始">快速開始</a> ·
   <a href="#業務場景">業務場景</a> ·
@@ -40,9 +41,29 @@
 ---
 
 Chat Gun 是一套由 Frontend、BFF 與 LangGraph Runtime 組成的全端 Agent 應用。
-- 底層是 Agent 平台：工具統一調度、檢索答案可回溯、會改變外部狀態的操作必須先經人工核准，並以邏輯冪等鍵保證重複送出只生效一次。
-- 上層是 AI 業務場景：建立在平台能力之上，目前有兩個入口 **Gun Chat** 處理一般對話與深度研究，**Gun Shop** 是一條從商品查詢、政策問答到退款核准的 AI 智能客服。
+- Agent 平台：是底層能力，負責工具統一調度、檢索答案可回溯、會改變外部狀態的操作必須先經人工核准，並以邏輯冪等鍵保證重複送出只生效一次。
+- AI 業務場景：是上層功能，建立在平台能力之上，目前有兩個入口 **Gun Chat** 處理一般對話與深度研究，**Gun Shop** 是一條從商品查詢、政策問答到退款核准的 AI 智能客服鏈路。
 - 所有模型呼叫、工具執行與憑證解析都在 Server 端完成，瀏覽器只透過 BFF 與 Runtime 通訊。業務場景的語料與訂單資料為合成資料，訂單工具為模擬；機制是真實的，展示它們的業務情境是模擬的。
+
+## 功能演示
+
+<p align="center">
+  <img src="./assets/chat-gun-demo.webp" alt="Chat Gun demo" width="1280" />
+</p>
+
+<p align="center">
+  <img src="./assets/chat-gun-01.png" alt="Entry screen" width="1280" />
+</p>
+
+<p align="center">
+  <img src="./assets/chat-gun-02.png" alt="Entry screen" width="1280" />
+</p>
+
+<p align="center">
+  <img src="./assets/chat-gun-03.png" alt="Entry screen" width="1280" />
+</p>
+
+**其他操作的畫面見[操作畫面](./docs/gun-shop.md#操作畫面)。**
 
 ## 核心能力
 
@@ -76,30 +97,10 @@ Chat Gun 是一套由 Frontend、BFF 與 LangGraph Runtime 組成的全端 Agent
 - **訂單操作狀態**： 等待核准、執行中、已確認、已去重、失敗、生效前已取消、結果未知、核准被拒、核准逾期，九種狀態在介面上互相可辨識；不提供 undo。deterministic test 10／10（含核准被拒、逾期、生效前取消）。見[操作狀態](./docs/gun-shop.md#gun-shop-流程走查)與[訂單冪等整合測試](./backend/src/agents/shopping-assistant/order-idempotency.integration.test.ts)。
 - **模擬邊界**： 商品與政策答案只落在合成語料並帶引用；退款與取消作用在模擬訂單系統，不觸及真實交易。見[範圍與限制](./docs/scope-and-limitations.md)。
 
-## Demo
-
-<p align="center">
-  <img src="./assets/chat-gun-demo.webp" alt="Chat Gun demo" width="1280" />
-</p>
-
-<p align="center">
-  <img src="./assets/chat-gun-01.png" alt="Entry screen" width="1280" />
-</p>
-
-<p align="center">
-  <img src="./assets/chat-gun-02.png" alt="Entry screen" width="1280" />
-</p>
-
-<p align="center">
-  <img src="./assets/chat-gun-03.png" alt="Entry screen" width="1280" />
-</p>
-
-**其他操作的畫面見[操作畫面](./docs/gun-shop.md#操作畫面)。**
-
 ## 快速開始
 
 > 📌
-> 預設僅適用於本地開發。公開部署前，請啟用 Authentication、設定明確的 CORS allowlist、妥善管理 Secrets 與資料庫憑證，並依部署架構設計配置共享 Rate limiting、TLS 與 Reverse Proxy。若需要跨重啟或多實例恢復 Agent 執行，請改用 durable checkpointer。
+> 目前預設僅本地開發。公開部署前，請啟用 Authentication、設定明確的 CORS allowlist、妥善管理 Secrets 與資料庫憑證，並依部署架構設計配置共享 Rate limiting、TLS 與 Reverse Proxy。若需要跨重啟或多實例恢復 Agent 執行，請改用 durable checkpointer。
 
 - Node >= 22
 - npm >= 10.8.x
