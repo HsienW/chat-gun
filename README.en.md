@@ -1,7 +1,7 @@
 # Chat Gun
 
 <p align="center">
-  <img src="./assets/chat-gun-logo.jpg" alt="chat-gun" width="720"/>
+  <img src="./assets/chat-gun-logo.webp" alt="chat-gun" width="720"/>
 </p>
 
 <p align="center">
@@ -83,13 +83,13 @@ Chat Gun is a full-stack agent application composed of a Frontend, a BFF, and a 
 - **Agent／Tool SDK**: a versioned manifest declares inputs and outputs, side-effect class, required permissions, and execution conditions; a tool is granted only to the Agent that declares it. See [`@gun-ai/harness-sdk`](https://www.npmjs.com/package/@gun-ai/harness-sdk).
 
 ### Agent Platform: Runtime Governance
-- **Retrieval and refusal:** PostgreSQL + pgvector stores the vector index, and the flow is "candidate recall → rerank → evidence threshold → citation binding"; every citation traces back to a stored chunk and its source version, and the system explicitly refuses when there is no supporting evidence. After adding `qwen3-rerank`, MRR 0.796 → 0.917, false refusal rate 0.30 → 0.10, citation accuracy 1.000 (test split). See [retrieval evaluation](./docs/evaluation.md#檢索品質) (Traditional Chinese).
-- **Side effects:** external state changes must first obtain a persistable human approval; the approval is bound to the conversation and can be consumed only once, and the model can only "request" an approval, never "record" one. See the [approval integration test](./backend/src/runtime/authorization/confirmation-resume.integration.test.ts).
-- **Idempotency and outcomes:** the idempotency key is derived from "operation kind + order + normalized line items" and does not include the retry count; concurrent duplicate submissions take effect only once, and the second is recognized as deduplicated. When a response is lost after submission, the operation enters `outcome_unknown` and a reconciliation task is created; the system does not blindly retry and does not report success. See the [concurrent idempotency integration test](./backend/src/runtime/side-effect/business-effect-ledger.integration.test.ts).
+- **Retrieval and refusal:** PostgreSQL + pgvector provides the vector index; citations are bound after `qwen3-rerank` and evidence thresholds, with explicit refusal when evidence is insufficient. Recall@5 1.000, MRR 0.917, citation accuracy 1.000, false refusal rate 0.100 (test split). See [knowledge base retrieval](./docs/retrieval.md) (Traditional Chinese) and [evaluation](./docs/evaluation.md#檢索品質) (Traditional Chinese).
+- **Side effects:** external state changes require persistable human approval first; the model can request approval but cannot record it. See the [Gun Shop flow walkthrough](./docs/gun-shop.md#gun-shop-流程走查) (Traditional Chinese).
+- **Idempotency and outcomes:** the idempotency key is derived from the business operation, and concurrent duplicate submissions take effect only once; losing the response after submission puts the operation into `outcome_unknown` and creates a reconciliation task. See [concurrency and regression verification](./docs/gun-shop.md#並行與回歸驗證) (Traditional Chinese).
 - **Trust boundary:** the BFF maps API keys to trusted identities, centralizes CORS, rate limiting, timeouts, and cancellation propagation, and rejects direct client writes to conversation state. See [BFF](./docs/bff.md#對話-state-的寫入防護) (Traditional Chinese).
 - **Observability and evaluation:** provides Metrics, OpenTelemetry, and Opik tracing; evaluation has two layers, deterministic (verifying runtime guarantees) and live (measuring model quality), each recording its dataset, model, and prompt versions. Model grading was reviewed by humans on 10 questions with a judge agreement rate of 0.600, so faithfulness is not published. See [Evaluation](./docs/evaluation.md) (Traditional Chinese).
 
-### Business Scenario: Gun Shop AI Customer Service Chain
+### Business Scenario: Gun Shop AI Customer Service
 
 A business scenario built with the Agent platform's capabilities, adding no new Runtime mechanisms. Its numbers also serve as end-to-end verification of the platform guarantees.
 

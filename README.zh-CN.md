@@ -1,7 +1,7 @@
 # Chat Gun
 
 <p align="center">
-  <img src="./assets/chat-gun-logo.jpg" alt="chat-gun" width="720"/>
+  <img src="./assets/chat-gun-logo.webp" alt="chat-gun" width="720"/>
 </p>
 
 <p align="center">
@@ -83,13 +83,13 @@ Chat Gun 是一套由 Frontend、BFF 与 LangGraph Runtime 组成的全栈 Agent
 - **Agent／Tool SDK**：以版本化 manifest 声明输入输出、副作用类别、所需权限与执行条件；工具只授予声明它的 Agent。见 [`@gun-ai/harness-sdk`](https://www.npmjs.com/package/@gun-ai/harness-sdk)。
 
 ### Agent 平台: Runtime 治理
-- **检索与拒答：**PostgreSQL + pgvector 存储向量索引，流程为「候选召回 → rerank → 证据门槛 → 引用绑定」；每个引用可回溯到已存储片段与来源版本，无依据时明确拒答。加入 `qwen3-rerank` 后 MRR 0.796 → 0.917、误拒率 0.30 → 0.10、引用准确率 1.000（test split）。见[检索评测](./docs/evaluation.md#檢索品質)（繁中）。
-- **副作用：**外部状态变更必须先取得可持久化的人工审批；审批与对话绑定、只能消费一次，模型只能「请求」审批，不能「记录」审批。见[审批集成测试](./backend/src/runtime/authorization/confirmation-resume.integration.test.ts)。
-- **幂等与结果：**幂等键由「操作种类＋订单＋规范化后的明细」推导，不含重试次数；并发重复提交只生效一次，第二次识别为去重。提交后失去响应时进入 `outcome_unknown` 并建立对账任务，不盲目重试、不回报成功。见[并发幂等集成测试](./backend/src/runtime/side-effect/business-effect-ledger.integration.test.ts)。
+- **检索与拒答：**PostgreSQL + pgvector 向量索引，经 `qwen3-rerank` 与证据门槛后绑定引用，无依据时明确拒答。Recall@5 1.000、MRR 0.917、引用准确率 1.000、误拒率 0.100（test split）。见[知识库检索](./docs/retrieval.md)（繁中）与[评测](./docs/evaluation.md#檢索品質)（繁中）。
+- **副作用：**外部状态变更须先取得可持久化的人工审批，模型只能请求、不能记录审批。见[Gun Shop 流程走查](./docs/gun-shop.md#gun-shop-流程走查)（繁中）。
+- **幂等与结果：**幂等键由业务操作推导，并发重复提交只生效一次；提交后失去响应时进入 `outcome_unknown` 并建立对账任务。见[并发与回归验证](./docs/gun-shop.md#並行與回歸驗證)（繁中）。
 - **可信边界：**BFF 将 API key 映射为可信身份，集中处理 CORS、限流、超时与取消传递，并拒绝客户端直接写入对话 state。见 [BFF](./docs/bff.md#對話-state-的寫入防護)（繁中）。
 - **观测与评测：**提供 Metrics、OpenTelemetry 与 Opik tracing；评测分 deterministic（验证 runtime 保证）与 live（衡量模型质量）两层，各自记录数据集、模型与 prompt 版本。模型评分经 10 题人工复核，评审一致率 0.600，因此忠实度不发布。见[评测](./docs/evaluation.md)（繁中）。
 
-### 业务场景：Gun Shop AI 智能客服链路
+### 业务场景：Gun Shop AI 智能客服
 
 使用 Agent 平台的能力搭建的业务场景，不新增 Runtime 机制。它的数字同时是平台保证的端到端验证。
 
