@@ -1,3 +1,5 @@
+[← 回到 README](../README.md)
+
 # Agent 執行架構
 
 <p>
@@ -150,3 +152,12 @@ Frontend 會把事件轉成活動時間軸與答案串流。無法辨識的新�
 - Tool audit event 只保留可診斷的 metadata；敏感輸入與輸出必須經過遮蔽。
 
 OpenTelemetry 與 Opik 都由環境變數啟用，未設定時不影響主要請求流程。
+
+## 入口與互動能力
+
+- **Streaming**：即時串流回答與執行活動，支援取消與錯誤處理，使用者能中止進行中的請求並看見明確的錯誤狀態。
+- **Human-in-the-Loop**：訂單操作的核准流程；天氣地點不明確時，Agent 會列出候選地點向使用者確認，再接續原本的對話執行。
+- **Multimodal input**：接受 PNG、JPEG 與 WebP 圖片，透過 vision model 分析內容並納入回答或研究流程。
+- **Model providers**：支援 Qwen、OpenAI-compatible 與 CCR-compatible endpoints，統一由 LLM Gateway 處理模型能力與呼叫介面。
+
+Gun Shop 的入口、已註冊 Graph 與操作流程見 [Gun Shop](./gun-shop.md)；模型與各層設定見[設定](./configuration.md)。

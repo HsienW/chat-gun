@@ -1,46 +1,80 @@
 # Chat Gun
 
 <p align="center">
-  <img src="./assets/chat-gun-logo.jpg" alt="chat-gun" width="1024" />
+  <img src="./assets/chat-gun-logo.jpg" alt="chat-gun" width="720"/>
 </p>
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-22C55E)](./LICENSE)
-[![LangGraph](https://img.shields.io/badge/LangGraph-JS-06B6D4)](https://langchain-ai.github.io/langgraphjs/)
-[![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-Observability-8A7600)](https://opentelemetry.io/)
-[![MCP](https://img.shields.io/badge/MCP-Protocol-111827)](https://modelcontextprotocol.io/)
-[![Qwen](https://img.shields.io/badge/Qwen-Model_Provider-1E3A8A)](https://github.com/QwenLM/Qwen)
-[![Tavily](https://img.shields.io/badge/Tavily-Search_API-BE185D)](https://docs.tavily.com/documentation/api-reference/endpoint/search)
-[![Brave Search](https://img.shields.io/badge/Brave_Search-MCP-FB542B)](https://brave.com/search/api/)
-[![Opik](https://img.shields.io/badge/Opik-Tracing_%26_Evaluation-6F4CFF)](https://github.com/comet-ml/opik)
-[![Origins](https://img.shields.io/badge/Project_Origins-Ylang_Labs-F97316)](https://github.com/Ylang-Labs/langgraph-react-agent-studio)
-
 <p align="center">
-  <a href="./README.en.md">English</a> |
-  <a href="./README.md">繁體中文</a> |
+  <a href="./README.en.md">English</a> | 
+  <a href="./README.md">繁體中文</a> | 
   <a href="./README.zh-CN.md">简体中文</a>
 </p>
 
-Chat Gun is a full-stack agent chat application built with React, TypeScript, and LangGraph JS. It supports multi-agent conversations, streamed responses, tool calling, image input, and human-in-the-loop workflows, with a BFF that manages API traffic between the browser and the LangGraph runtime.
+<p align="center">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-22C55E" alt="License" /></a>
+  <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-19-61DAFB" alt="React 19" /></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.7-3178C6" alt="TypeScript" /></a>
+  <a href="https://langchain-ai.github.io/langgraphjs/"><img src="https://img.shields.io/badge/LangGraph-JS-06B6D4" alt="LangGraph" /></a>
+  <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-Protocol-111827" alt="MCP" /></a>
+  <a href="https://github.com/QwenLM/Qwen"><img src="https://img.shields.io/badge/Qwen-Model_Provider-1E3A8A" alt="Qwen" /></a>
+  <a href="https://docs.tavily.com/documentation/api-reference/endpoint/search"><img src="https://img.shields.io/badge/Tavily-Search_API-BE185D" alt="Tavily" /></a>
+  <a href="https://brave.com/search/api/"><img src="https://img.shields.io/badge/Brave_Search-MCP-FB542B" alt="Brave Search" /></a>
+  <a href="https://opentelemetry.io/"><img src="https://img.shields.io/badge/OpenTelemetry-Observability-8A7600" alt="OpenTelemetry" /></a>
+  <a href="https://github.com/comet-ml/opik"><img src="https://img.shields.io/badge/Opik-Tracing_%26_Evaluation-6F4CFF" alt="Opik" /></a>
+  <a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://img.shields.io/badge/qwen--plus-Generation-1E3A8A" alt="qwen-plus" /></a>
+  <a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://img.shields.io/badge/text--embedding--v4-Embedding_1024d-0EA5E9" alt="text-embedding-v4" /></a>
+  <a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://img.shields.io/badge/qwen3--rerank-Rerank-0EA5E9" alt="qwen3-rerank" /></a>
+  <a href="https://www.postgresql.org/"><img src="https://img.shields.io/badge/PostgreSQL-16-336791" alt="PostgreSQL" /></a>
+</p>
 
-## Core Features
+<p align="center">
+  <a href="#capabilities">Capabilities</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#business-scenario">Business Scenario</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#evaluation">Evaluation</a> ·
+  <a href="#security-and-limitations">Security and Limitations</a> ·
+  <a href="#documentation-guide">Documentation Guide</a>
+</p>
 
-- **Agent workflows**:
-  - Deep Researcher performs multi-step research and source verification.
-  - Chat Assistant handles general conversations.
+---
+
+Chat Gun is a full-stack agent application composed of a Frontend, a BFF, and a LangGraph Runtime.
+- The lower layer is an agent platform: tools are dispatched through a single path, retrieved answers are traceable to their sources, operations that change external state must first receive human approval, and a logical idempotency key guarantees that duplicate submissions take effect only once.
+- The upper layer is AI business scenarios built on top of the platform capabilities. There are currently two entry points: **Gun Chat** handles general conversation and deep research, and **Gun Shop** is an AI customer service chain that runs from product lookup and policy Q&A to refund approval.
+- All model calls, tool executions, and credential resolution happen on the server; the browser communicates with the Runtime only through the BFF. The corpus and order data used by the business scenarios are synthetic, and the order tools are simulated; the mechanisms are real, while the business context used to demonstrate them is simulated.
+
+## Capabilities
+
+### Agent Platform: Harness
+
+- **Agent-workflows**: five Graphs share the same Runtime.
+  - Deep Researcher performs multi-step research and citation verification.
+  - Chat Assistant handles general conversation.
+  - Shopping Assistant routes by intent across product lookup, policy Q&A, and order operations.
   - Math Solver evaluates expressions and performs numerical calculations.
-  - MCP Agent uses native and MCP tools through tool calling.
-- **Streaming**: Streams answers and execution activity in real time, with cancellation and exception handling so users can stop active requests and see clear error states.
-- **HITL**: When a weather location is ambiguous, the agent presents candidate locations for confirmation and then resumes the original thread.
-- **Multimodal input**: Accepts PNG, JPEG, and WebP images and uses a vision model to incorporate their content into answers and research workflows.
-- **Native Tools**: Includes calculation, web search powered by the Tavily Search API, web fetching, current weather, and weather forecast tools that agents can select as needed.
-- **MCP integration**: Optionally loads Filesystem and Brave Search MCP Servers; Brave Search extends search capabilities as an optional MCP Tool.
-- **Agent/Tool SDK**: Provides typed declarations for agents and tools, with versioned manifests describing inputs, outputs, required permissions, and execution requirements.
-- **Model providers**: Supports Qwen, OpenAI-compatible, and CCR-compatible endpoints through a shared LLM Gateway interface.
-- **API Gateway**: The BFF centralizes API key authentication, maps verified API keys to trusted principal contexts, and handles CORS, request size validation, timeouts, cancellation propagation, and rate limiting. When authentication is enabled, client-supplied identity and tenant headers are not treated as trusted identity sources.
-- **Observability & Evaluation**: Provides metrics and OpenTelemetry, with optional Opik tracing, versioned datasets, and experiments for tracking and evaluating agent behavior.
+  - MCP Agent uses native and MCP tools through Tool Calling.
+- **Streaming**: answers and execution activity stream in real time, runs can be cancelled midway, and errors are presented as explicit states.
+- **HITL**: Human-in-the-Loop order operations require human approval first; when a weather location is ambiguous, candidate locations are listed for the user to confirm before the original conversation resumes.
+- **Multimodal input**: accepts PNG, JPEG, and WebP images, which are analyzed by a vision model and incorporated into the answer or research flow.
+- **Model providers**: supports Qwen, OpenAI-compatible, and CCR-compatible endpoints; the LLM Gateway handles model capability checks and calls in one place.
+- **Native Tools and MCP**: built-in calculation, web search (Tavily), web page extraction, weather, knowledge base retrieval, and simulated order operations; Filesystem and Brave Search MCP Servers can optionally be loaded. See [Tools and MCP](./docs/tools-and-mcp.md) (Traditional Chinese).
+- **Agent／Tool SDK**: a versioned manifest declares inputs and outputs, side-effect class, required permissions, and execution conditions; a tool is granted only to the Agent that declares it. See [`@gun-ai/harness-sdk`](https://www.npmjs.com/package/@gun-ai/harness-sdk).
 
-> 📌
-> The default configuration is intended for local development only. Before exposing the application publicly, enable authentication, define an explicit CORS allowlist, secure secrets and database credentials, and configure shared rate limiting, TLS, and a reverse proxy for your deployment architecture. Use a durable checkpointer if agent runs must survive restarts or continue across multiple instances.
+### Agent Platform: Runtime Governance
+- **Retrieval and refusal:** PostgreSQL + pgvector stores the vector index, and the flow is "candidate recall → rerank → evidence threshold → citation binding"; every citation traces back to a stored chunk and its source version, and the system explicitly refuses when there is no supporting evidence. After adding `qwen3-rerank`, MRR 0.796 → 0.917, false refusal rate 0.30 → 0.10, citation accuracy 1.000 (test split). See [retrieval evaluation](./docs/evaluation.md#檢索品質) (Traditional Chinese).
+- **Side effects:** external state changes must first obtain a persistable human approval; the approval is bound to the conversation and can be consumed only once, and the model can only "request" an approval, never "record" one. See the [approval integration test](./backend/src/runtime/authorization/confirmation-resume.integration.test.ts).
+- **Idempotency and outcomes:** the idempotency key is derived from "operation kind + order + normalized line items" and does not include the retry count; concurrent duplicate submissions take effect only once, and the second is recognized as deduplicated. When a response is lost after submission, the operation enters `outcome_unknown` and a reconciliation task is created; the system does not blindly retry and does not report success. See the [concurrent idempotency integration test](./backend/src/runtime/side-effect/business-effect-ledger.integration.test.ts).
+- **Trust boundary:** the BFF maps API keys to trusted identities, centralizes CORS, rate limiting, timeouts, and cancellation propagation, and rejects direct client writes to conversation state. See [BFF](./docs/bff.md#對話-state-的寫入防護) (Traditional Chinese).
+- **Observability and evaluation:** provides Metrics, OpenTelemetry, and Opik tracing; evaluation has two layers, deterministic (verifying runtime guarantees) and live (measuring model quality), each recording its dataset, model, and prompt versions. Model grading was reviewed by humans on 10 questions with a judge agreement rate of 0.600, so faithfulness is not published. See [Evaluation](./docs/evaluation.md) (Traditional Chinese).
+
+### Business Scenario: Gun Shop AI Customer Service Chain
+
+A business scenario built with the Agent platform's capabilities, adding no new Runtime mechanisms. Its numbers also serve as end-to-end verification of the platform guarantees.
+
+- **After-sales customer service chain:** intent routing → product cards → policy Q&A (with citations) → refund request → human approval → idempotent execution → status card. Live intent routing accuracy 1.000 (18 turns), prohibited outcomes 0. See the [flow walkthrough](./docs/gun-shop.md#gun-shop-流程走查) (Traditional Chinese) and [flow evaluation](./docs/evaluation.md#流程評測) (Traditional Chinese).
+- **Order operation states:** awaiting approval, executing, confirmed, deduplicated, failed, cancelled before taking effect, outcome unknown, approval rejected, and approval expired — nine states that are mutually distinguishable in the interface; undo is not provided. Deterministic test 10／10 (including approval rejected, expired, and cancelled before taking effect). See [operation states](./docs/gun-shop.md#gun-shop-流程走查) (Traditional Chinese) and the [order idempotency integration test](./backend/src/agents/shopping-assistant/order-idempotency.integration.test.ts).
+- **Simulation boundary:** product and policy answers come only from the synthetic corpus and carry citations; refunds and cancellations act on a simulated order system and never touch real transactions. See [Scope and Limitations](./docs/scope-and-limitations.md) (Traditional Chinese).
 
 ## Demo
 
@@ -49,38 +83,103 @@ Chat Gun is a full-stack agent chat application built with React, TypeScript, an
 </p>
 
 <p align="center">
-  <img src="./assets/chat-gun-01.png" alt="Chat home screen" width="1280" />
+  <img src="./assets/chat-gun-01.png" alt="Entry screen" width="1280" />
 </p>
 
 <p align="center">
-  <img src="./assets/chat-gun-02.png" alt="Agent response and activity" width="1280" />
+  <img src="./assets/chat-gun-02.png" alt="Entry screen" width="1280" />
 </p>
 
 <p align="center">
-  <img src="./assets/chat-gun-03.png" alt="Tool-assisted agent result" width="1280" />
+  <img src="./assets/chat-gun-03.png" alt="Entry screen" width="1280" />
 </p>
+
+**Screens for other operations are in [Operation Screens](./docs/gun-shop.md#操作畫面) (Traditional Chinese).**
+
+## Quick Start
+
+> 📌
+> The defaults are for local development only. Before any public deployment, enable Authentication, configure an explicit CORS allowlist, manage Secrets and database credentials properly, and configure shared Rate limiting, TLS, and a Reverse Proxy according to your deployment architecture. If Agent runs need to resume across restarts or multiple instances, switch to a durable checkpointer.
+
+- Node >= 22
+- npm >= 10.8.x
+- Docker and Docker Compose
+- Fill in `QWEN_API_KEY`, `TAVILY_API_KEY`, and a `LANGSMITH_API_KEY` with LangGraph Cloud access in the root `.env`
+- For alternative authorization methods, see the [full installation guide](./docs/getting-started.md#docker-compose) (Traditional Chinese).
+
+```bash
+git clone https://github.com/HsienW/chat-gun.git
+cd chat-gun
+npm --prefix backend ci
+cp backend/.env.example backend/.env
+# Fill in QWEN_API_KEY in backend/.env and set the following host connections:
+# DATABASE_URL=postgresql://postgres:postgres@localhost:5433/postgres
+# KNOWLEDGE_DATABASE_URL=postgresql://postgres:postgres@localhost:5434/knowledge
+docker compose up -d langgraph-postgres knowledge-postgres
+npm --prefix backend run migrations:up
+npm --prefix backend run knowledge:corpus
+npm --prefix backend run knowledge:ingest
+docker compose up --build
+```
+
+- Open <http://localhost:8123/app/>; the home page shows the two entry points, Gun Chat and Gun Shop. Enter a refund request in Gun Shop to see the approval card and the status card that follows.
+
+- Local ingestion uses host ports `5433`／`5434`; the knowledge base connection inside containers must use `knowledge-postgres:5432`, so do not pass the host `KNOWLEDGE_DATABASE_URL` into the container. For the local three-terminal startup, PowerShell commands, and test entry points, see [Quick Start](./docs/getting-started.md) (Traditional Chinese).
+
+## Business Scenario
+
+**When AI enters a business scenario, what matters most is often what happens after a Tool is called.**
+
+Taking the Gun Shop AI customer service as an example, the table below compares it with the approach of "executing a tool call as soon as the model outputs it":
+
+| Situation | Execute the tool call directly | Chat Gun |
+| --- | --- | --- |
+| The model outputs a refund call | Executes immediately | Enters `awaiting_approval` and submits only after approval |
+| The same refund is submitted repeatedly or concurrently | May execute multiple times | Takes effect only once; later submissions return `deduplicated` and point to the original operation |
+| The connection drops after submission | Retries or reports failure | Enters `outcome_unknown` and creates a reconciliation task; does not retry and does not report success |
+| The client rewrites conversation state to fake an approval | Depends on the implementation | The BFF rejects the state write; approval is verified against server-side records |
+| The corpus has no answer | May answer from the model's own knowledge instead | Explicitly refuses |
+| Source of the answer | A text description | Every citation resolves to a stored chunk and its source version |
+
+**1. The model produces a request, not a side effect.** Tool calls for refunds and cancellations first stop at approval; the approval record is stored on the server, bound to the conversation, and can be consumed only once. Tool Dispatch performs the submission after approval and writes the result to the side-effect ledger.
+
+**2. The idempotency key describes a business operation, not a single call.** The key is derived from the operation kind, the order, and the normalized line items, and excludes the retry count and call identifiers, so concurrent or repeated submissions converge into the same operation. When a response is lost after submission, the system admits it "does not know" instead of guessing an outcome.
+
+**3. Answers must trace back to the corpus.** Candidate chunks must still pass the evidence threshold after rerank, and every citation is bound to a stored chunk and its source version; if no chunk meets the threshold, the system explicitly refuses.
 
 ## Architecture
 
-This diagram shows the layers a request passes through from the browser to the model provider, and where observability attaches.
+- **Frontend:** handles the entry points, streaming, and card rendering, and holds no model, tool, or database credentials.
+- **BFF:** the only external boundary: verifies identity, rate limits, propagates timeouts and cancellation, and rejects client writes to conversation state.
+- **LangGraph Runtime:** hosts the five Graphs; the entry point decides which Graph is used, so no extra model routing is needed.
+- **Tool Registry:** dispatches all tools through a single path; tools that change external state first go through human approval and write to the ledger after submission.
+
+The diagram below shows which layers a Chat Gun request passes through from the frontend to the model Provider, where tools and side effects converge, and where observability is attached.
 
 ```mermaid
 flowchart LR
   B["Browser"]
   F["Frontend<br/>Vite + React 19"]
-  G["BFF<br/>Auth · CORS · Rate limit · Timeout"]
+  G["BFF<br/>Auth · CORS · Rate limiting · Timeouts · State write guard"]
   L["LangGraph Agent Server"]
   A1["deep_researcher"]
   A2["chatbot"]
   A3["math_agent"]
   A4["mcp_agent"]
+  A5["shopping_assistant"]
   GW["LLM Gateway"]
   Q["Qwen"]
   O["OpenAI-compatible"]
   C["CCR"]
-  TR["Tool Registry<br/>X14 dispatch"]
+  TR["Tool Registry<br/>Unified Tool Dispatch"]
   NT["Native tools"]
+  KB["kb_search"]
+  OD["Order tools<br/>External state changes"]
   MT["MCP servers"]
+  EM["Embedding · Rerank"]
+  KS["Knowledge base<br/>PostgreSQL + pgvector"]
+  HI["Human approval<br/>Persistable"]
+  LG["Side-effect Ledger"]
   OT["OpenTelemetry"]
   OP["Opik"]
 
@@ -91,386 +190,89 @@ flowchart LR
   L --> A2
   L --> A3
   L --> A4
+  L --> A5
   A1 --> GW
   A2 --> GW
   A3 --> GW
   A4 --> GW
+  A5 --> GW
   GW --> Q
   GW --> O
   GW --> C
   A1 --> TR
   A3 --> TR
   A4 --> TR
+  A5 --> TR
   TR --> NT
+  TR --> KB
+  TR --> OD
   TR --> MT
+  KB --> EM
+  KB --> KS
+  EM --> Q
+  OD --> HI
+  OD --> LG
   L -.->|"spans"| OT
   L -.->|"traces / evals"| OP
 ```
 
-| Directory | Purpose | Default local port |
+| Directory | Purpose | Local default port |
 | --- | --- | ---: |
-| `frontend/` | Chat UI, streaming state, tool results, and image input | `5173` |
-| `bff/` | API gateway, validation, proxying, timeouts, and rate limiting | `8787` |
-| `backend/` | LangGraph agents, model integrations, tools, and MCP | `2024` |
+| `frontend/` | Entry home page, Chat UI, streaming states, tool results, product and approval cards, image input | `5173` |
+| `bff/` | API gateway, validation, proxying, timeouts, rate limiting, and state write guard | `8787` |
+| `backend/` | LangGraph agents, model integration, Tools, knowledge base, and MCP | `2024` |
 
-During local development, the frontend proxies `/api/*` to the BFF, while LangGraph requests are forwarded to the backend through `/api/langgraph/*`. Model, tool, and MCP credentials remain on the server.
+For how entry points map to Graphs, see [Entry Points and Agents](./docs/gun-shop.md#入口與-agents) (Traditional Chinese).
 
-```text
-http://localhost:5173/app/
-  -> http://127.0.0.1:8787/api/langgraph/*
-  -> http://localhost:2024
-```
+## Evaluation
 
-## Agents
+**Retrieval quality (platform capability):**
+- Dataset `kb-eval-v1` (40 questions, including refusal questions), corpus `kb-v1` (synthetic), Embedding `text-embedding-v4` (1024 dimensions), Rerank `qwen3-rerank`, answer generation `qwen-plus`.
 
-| Graph ID | Name | Purpose |
-| --- | --- | --- |
-| `deep_researcher` | Deep Researcher | In-depth research, source organization, tool calling, weather queries, and image understanding |
-| `chatbot` | Chat Assistant | General conversations |
-| `math_agent` | Math Solver | Math questions and calculations |
-| `mcp_agent` | MCP Agent | Uses enabled native and MCP tools |
+Only the **test split** is listed below
 
-The frontend offers `qwen-plus`, `qwen-max`, and `qwen-turbo`, with `qwen-plus` selected by default. The backend can assign different models to individual agents.
+| Configuration | Recall@5 | MRR | Citation accuracy | Correct refusal rate | False refusal rate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `vector_only` | 0.863 | 0.796 | 1.000 | 1.000 | 0.300 |
+| `vector_rerank` | 1.000 | 0.917 | 1.000 | 1.000 | 0.100 |
 
-## Requirements
+**Flow evaluation (business implementation):**
+- Deterministic test 10／10; live intent routing accuracy 1.000 (18 turns, `qwen3.7-plus`), prohibited outcomes 0.
+- Dataset `chain-eval-v1` (15 questions), order data `synthetic-orders-v1` (synthetic), prompts `shopping-intent-v1`／`shopping-policy-answer-v1`.
 
-- Node >= 22
-- npm >= 10.8.x
-- A Qwen API key or an available OpenAI-compatible or CCR-compatible endpoint
-- A Tavily Search API key for the built-in `web_search` tool
-- A Brave Search API key when enabling the optional Brave Search MCP Server
-- Docker and Docker Compose (optional)
+**Known limitation:** the live test split passes 3／10; the remaining 7 questions share the same symptom (order operations return an empty result) and have not been fixed yet. The same set of cases all pass at the deterministic layer.
 
-## Installation
+For full results, run counts, the dev split, latency, metric definitions, why faithfulness is not published, methodology, and how to rerun, see [Evaluation](./docs/evaluation.md) (Traditional Chinese).
 
-```bash
-git clone https://github.com/HsienW/chat-gun.git
-cd chat-gun
+## Security and Limitations
 
-cd backend && npm ci
-cd ../bff && npm ci
-cd ../frontend && npm ci
-cd ..
-```
+**Tools run in-process:** OS-level sandboxing has not shipped yet; tools declared to run in a separate process are explicitly rejected at registration or dispatch time and do not fall back to in-process execution. Read the [security settings](./docs/tool-security-isolation.md) (Traditional Chinese) before connecting MCP.
 
-PowerShell:
+**Scope:**
 
-```powershell
-git clone https://github.com/HsienW/chat-gun.git
-Set-Location chat-gun
+- The corpus and order data are synthetic and do not represent real products or operating rules.
+- The order tools are simulated, with no real transactions, payments, or external vendor integrations.
+- Undo is not provided; an operation can only be cancelled before its side effect takes place.
+- Evaluation is offline regression; the numbers reflect method effectiveness on controlled synthetic datasets, not production performance.
 
-Set-Location backend
-npm ci
-Set-Location ..\bff
-npm ci
-Set-Location ..\frontend
-npm ci
-Set-Location ..
-```
+For the operation history projection, automatic reconciliation, and model selection mechanisms that are not yet implemented, see [Scope and Limitations](./docs/scope-and-limitations.md) (Traditional Chinese).
 
-## Configuration
+## Documentation Guide
 
-### Backend
-
-Create the local configuration from the example file:
-
-```bash
-cp backend/.env.example backend/.env
-```
-
-PowerShell:
-
-```powershell
-Copy-Item backend/.env.example backend/.env
-```
-
-When using Qwen, provide at least the following values:
-
-```env
-LLM_PROVIDER=qwen
-QWEN_API_KEY=your_qwen_api_key
-```
-
-Deep Researcher's built-in `web_search` tool uses the Tavily Search API:
-
-```env
-TAVILY_API_KEY=your_tavily_api_key
-```
-
-You can also connect other model endpoints:
-
-```env
-# OpenAI-compatible
-LLM_PROVIDER=openai-compatible
-OPENAI_COMPATIBLE_BASE_URL=https://your-endpoint.example/v1
-OPENAI_COMPATIBLE_API_KEY=your_api_key
-OPENAI_COMPATIBLE_MODEL=your_model
-
-# CCR-compatible
-LLM_PROVIDER=ccr
-CCR_BASE_URL=http://127.0.0.1:3456/v1
-CCR_API_KEY=your_api_key
-CCR_MODEL=your_model
-```
-
-See [`backend/.env.example`](./backend/.env.example) for additional model, image, weather, tool, and MCP settings. Do not commit API keys or other credentials to version control.
-
-### BFF
-
-```bash
-cp bff/.env.example bff/.env
-```
-
-PowerShell:
-
-```powershell
-Copy-Item bff/.env.example bff/.env
-```
-
-| Environment variable | Purpose |
+| I want to… | Start here |
 | --- | --- |
-| `BFF_LANGGRAPH_API_URL` | LangGraph API URL |
-| `BFF_ALLOWED_ORIGINS` | Browser origins allowed to access the BFF |
-| `BFF_REQUIRE_AUTH` | Whether an API key or Bearer token is required; trusted principal profiles are also required when enabled |
-| `BFF_API_KEYS` | Usually left empty; when set, every key still needs a corresponding principal profile |
-| `BFF_API_KEY_PRINCIPALS_JSON` | API-key-indexed principal profile JSON containing `principalId`, `principalType`, `tenantId`, `roles`, and `scopes` |
-| `BFF_LEGACY_HEADER_MODE` | Whether to continue forwarding the compatibility `x-bff-user-id` header to the Backend; defaults to `true` |
-| `BFF_MAX_BODY_BYTES` | Request body size limit |
-| `BFF_UPSTREAM_TIMEOUT_MS` | Upstream request timeout |
-| `BFF_RATE_LIMIT_REDIS_URI` | Redis rate limiter; uses the in-memory limiter when unset |
-
-See [`bff/.env.example`](./bff/.env.example) for other BFF options.
-
-When BFF authentication is enabled, every API key must have a trusted principal profile. Setting only `BFF_API_KEYS` returns `401` because trusted identity data is missing. The BFF ignores client-supplied `x-user-id` and `x-tenant-id` headers, derives the `x-bff-*` headers from the profile, and forwards them to the Backend. Resource-level authorization is enabled explicitly by each tool or workflow that requires it.
-
-```env
-BFF_REQUIRE_AUTH=true
-BFF_API_KEY_PRINCIPALS_JSON={"replace-with-a-long-random-key":{"principalId":"local-user","principalType":"user","tenantId":"local","roles":[],"scopes":[]}}
-```
-
-The JSON key in `BFF_API_KEY_PRINCIPALS_JSON` is itself a credential. Provide it only through environment variables or a secret manager, and never commit it to version control.
-
-### Frontend
-
-Local development does not require a `frontend/.env` file. The frontend uses same-origin `/api/langgraph` by default. Set the BFF URL when deploying it separately:
-
-```env
-VITE_LANGGRAPH_API_URL=https://api.example.com/api/langgraph
-```
-
-See [`frontend/.env.example`](./frontend/.env.example) for image input limits. Values prefixed with `VITE_*` are included in the browser bundle and must not contain secrets.
-
-## Local Development
-
-Start the backend, BFF, and frontend in separate terminals.
-
-```bash
-# Terminal 1
-cd backend
-npm run dev
-```
-
-```bash
-# Terminal 2
-cd bff
-npm run dev
-```
-
-```bash
-# Terminal 3
-cd frontend
-npm run dev
-```
-
-Open <http://localhost:5173/app/>.
-
-Use the BFF health endpoints to verify service status:
-
-```bash
-curl http://127.0.0.1:8787/api/health
-curl http://127.0.0.1:8787/api/ready
-```
-
-PowerShell:
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:8787/api/health
-Invoke-RestMethod http://127.0.0.1:8787/api/ready
-```
-
-`/api/ready` checks whether the BFF can connect to the LangGraph backend.
-
-## Tools
-
-| Tool | Purpose | Required configuration |
-| --- | --- | --- |
-| `calculator_tool` | Arithmetic calculations | None |
-| `web_search` | Tavily Search API | `TAVILY_API_KEY` |
-| `web_fetch` | HTTP/HTTPS page fetching | None |
-| `current_weather` | Current weather from Open-Meteo | None |
-| `weather_forecast` | Weather forecasts from Open-Meteo | None |
-
-Use `TOOL_ALLOWLIST`, `TOOL_DENYLIST`, `TOOL_TIMEOUT_MS`, and tool-specific settings to restrict the available capabilities. By default, `web_fetch` allows only ports `80` and `443` and blocks unsafe private network addresses.
-
-### Extending Agents and Tools
-
-- TypeScript developers can use these packages:
-  - [`@gun-ai/harness-sdk`](https://www.npmjs.com/package/@gun-ai/harness-sdk) provides `defineAgent` and `defineTool`.
-    - Declare agents and tools with versioned manifests that specify data schemas, required permissions, execution environments, retry behavior, and other requirements.
-    - Declarations are validated during registration; incomplete or contradictory settings are rejected.
-
-  - [`@gun-ai/harness-testkit`](https://www.npmjs.com/package/@gun-ai/harness-testkit)
-    - Provides test helpers. This project uses alpha versions of these packages; pin compatible versions when extending it.
-
-- To use a custom tool in Chat Gun, you must also integrate its implementation into the Backend and configure authorization and execution. Installing the SDK does not automatically enable tools or bypass existing security checks.
-
-## MCP
-
-MCP tools are not loaded at startup by default. Enable the Filesystem MCP Server with:
-
-```env
-MCP_LOAD_ON_START=true
-MCP_FILESYSTEM_ENABLED=true
-MCP_FILESYSTEM_PATH=/absolute/path/to/workspace
-MCP_FILESYSTEM_ALLOWED_ROOTS=/absolute/path/to/workspace
-```
-
-Allow Deep Researcher to use MCP tools:
-
-```env
-DEEP_RESEARCHER_MCP_ENABLED=true
-```
-
-Enable the optional Brave Search MCP Server:
-
-```env
-MCP_BRAVE_SEARCH_ENABLED=true
-BRAVE_API_KEY=your_brave_api_key
-```
-
-`MCP_FILESYSTEM_PATH` must be located within `MCP_FILESYSTEM_ALLOWED_ROOTS`. Separate multiple roots with `;` on Windows and `:` on Linux or macOS.
-
-## Observability
-
-The BFF exposes a metrics endpoint:
-
-```bash
-curl http://127.0.0.1:8787/api/metrics
-```
-
-OpenTelemetry is disabled by default. Connect an OTLP collector with:
-
-```env
-OTEL_ENABLED=true
-OTEL_SERVICE_NAME=chat-gun
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-OTEL_EXPORTER_OTLP_PROTOCOL=http
-OTEL_SAMPLE_RATE=1
-```
-
-Opik supports agent tracing and weather evaluation during development. It is disabled by default. When enabling hosted tracing, use non-production data and keep redaction enabled.
-
-```env
-OPIK_ENABLED=true
-OPIK_API_KEY=your_opik_api_key
-OPIK_WORKSPACE=your_workspace
-OPIK_REDACT_ENABLED=true
-```
-
-Run the evaluation:
-
-```bash
-cd backend
-npm run eval:opik
-```
-
-## Docker Compose
-
-Docker Compose starts PostgreSQL, Redis, the LangGraph API, and the BFF. The BFF also serves the built frontend.
-
-Create a `.env` file in the project root:
-
-```env
-QWEN_API_KEY=your_qwen_api_key
-TAVILY_API_KEY=your_tavily_api_key
-```
-
-Start the services:
-
-```bash
-docker compose up --build
-```
-
-Open <http://localhost:8123/app/>.
-
-Compose uses Qwen by default. To use another provider or enable additional backend features, add the corresponding environment variables to `langgraph-api.environment` in `docker-compose.yml`.
-
-## Testing
-
-Backend:
-
-```bash
-cd backend
-npm run lint
-npm run test
-npm run build
-```
-
-BFF:
-
-```bash
-cd bff
-npm run test
-npm run build
-```
-
-Frontend:
-
-```bash
-cd frontend
-npm run lint
-npm run test
-npm run build
-```
-
-## Troubleshooting
-
-### Frontend shows `Invalid URL`
-
-`VITE_LANGGRAPH_API_URL` must be a complete URL. Remove this setting when the frontend and BFF share the same origin.
-
-```env
-VITE_LANGGRAPH_API_URL=http://localhost:5173/api/langgraph
-```
-
-### `/api/langgraph/*` returns 502
-
-First, check the BFF and backend status:
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:8787/api/ready
-Invoke-RestMethod http://localhost:2024/ok
-```
-
-Then verify that `BFF_LANGGRAPH_API_URL` points to the running LangGraph API.
-
-### `Research synthesis failed ... fetch failed`
-
-Check the model or tool provider API key, base URL, and network connection. When using Qwen or Alibaba Cloud Bailian, you can test connectivity with:
-
-```powershell
-Test-NetConnection dashscope.aliyuncs.com -Port 443
-```
-
-If a proxy is required, configure `HTTPS_PROXY`, `HTTP_PROXY`, and `NO_PROXY` in `backend/.env`, then restart the backend.
-
-## Documentation
-
-- [BFF API Gateway](./docs/bff.en.md)
-- [Agent Runtime Architecture](./docs/architecture.en.md)
-- [TypeScript + LangGraph Architecture](./docs/typescript-langgraph-architecture.en.md)
-- [Tool and MCP Security Configuration](./docs/tool-security-isolation.en.md)
+| Run it locally and run the tests | [Quick Start](./docs/getting-started.md) (Traditional Chinese) |
+| Configure models, the knowledge base, BFF, and Frontend | [Configuration](./docs/configuration.md) (Traditional Chinese) |
+| See the Gun Shop flow walkthrough and operation states | [Gun Shop](./docs/gun-shop.md) (Traditional Chinese) |
+| Understand the retrieval pipeline, chunking, thresholds, and resumable ingestion | [Knowledge Base Retrieval](./docs/retrieval.md) (Traditional Chinese) |
+| See full evaluation data or rerun the evaluation | [Evaluation](./docs/evaluation.md) (Traditional Chinese) |
+| Understand the request flow, State, and checkpoints | [Runtime Architecture](./docs/architecture.md) (Traditional Chinese) · [TypeScript + LangGraph](./docs/typescript-langgraph-architecture.md) (Traditional Chinese) |
+| Check trusted identity, rate limiting, and state protection | [BFF](./docs/bff.md) (Traditional Chinese) |
+| Add a tool or connect MCP | [Tools and MCP](./docs/tools-and-mcp.md) (Traditional Chinese) · [Security Settings](./docs/tool-security-isolation.md) (Traditional Chinese) |
+| Connect OpenTelemetry or Opik | [Observability](./docs/observability.md) (Traditional Chinese) |
+| Troubleshoot common errors | [Troubleshooting](./docs/troubleshooting.md) (Traditional Chinese) |
+| See the full list of limitations | [Scope and Limitations](./docs/scope-and-limitations.md) (Traditional Chinese) |
 
 ## License
 
-Apache License 2.0. See [LICENSE](./LICENSE) for details.
+Apache License 2.0. See [LICENSE](./LICENSE).

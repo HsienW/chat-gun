@@ -1,3 +1,5 @@
+[← 回到 README](../README.md)
+
 # BFF API gateway
 
 <p>
@@ -159,3 +161,9 @@ BFF 會設定 `x-request-id` 及驗證後的 `x-bff-*` identity headers；client
 ## Audit logs
 
 BFF 在 request 完成時輸出 JSON audit log，內容包括 request ID、method、path、status、duration、已解析的 Principal、tenant 與 client IP。Log 不應額外加入 authorization header、API key 或完整 request body。
+
+## 對話 state 的寫入防護
+
+**對話 state 的寫入防護。** 核准紀錄與待執行的工具呼叫都存在對話 state 中，因此 BFF 在轉送前會拒絕下列請求：更新 thread state、建立 thread 時預寫 state，以及 `command` 中夾帶 `resume` 以外的欄位。核准所需的決策識別由 Server 端紀錄驗證，客戶端無法偽造。
+
+Gun Shop 核准與操作狀態見 [Gun Shop](./gun-shop.md)；完整 BFF 環境變數摘要見[設定](./configuration.md#bff)。
