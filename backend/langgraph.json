@@ -5,7 +5,8 @@
     "deep_researcher": "./src/agents/deep-researcher.ts:deepResearcherGraph",
     "chatbot": "./src/agents/chatbot.ts:chatbotGraph",
     "math_agent": "./src/agents/math-agent.ts:mathAgentGraph",
-    "mcp_agent": "./src/agents/mcp-agent.ts:mcpAgentGraph"
+    "mcp_agent": "./src/agents/mcp-agent.ts:mcpAgentGraph",
+    "shopping_assistant": "./src/agents/shopping-assistant/production.ts:shoppingAssistantGraph"
   },
   "http": {
     "app": "./src/operations/http-app.ts:operationsHttpApp",

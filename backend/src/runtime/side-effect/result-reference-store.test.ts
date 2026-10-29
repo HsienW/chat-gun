@@ -92,6 +92,36 @@ describe("PgResultReferenceStore", () => {
     expect(JSON.stringify(insertValues)).not.toContain("must-not-enter-ledger");
   });
 
+  it.each([
+    ["reuses the stored reference for the same result", [resultReferenceRow()], "result-ref-1"],
+    ["rejects a different result for the same execution", [], undefined],
+  ])("%s when the execution already has one", async (_case, existingRows, expectedId) => {
+    const texts: string[] = [];
+    const db: Queryable = {
+      query: createFakeQuery(async (text) => {
+        texts.push(text);
+        return text.includes("INSERT INTO result_references")
+          ? { rows: [], rowCount: 0 }
+          : { rows: existingRows, rowCount: existingRows.length };
+      }),
+    };
+    const save = new PgResultReferenceStore(db).save({
+      toolExecutionId: "execution-1",
+      result: { operationId: "operation-1", sensitivePayload: "x" },
+      policy: createPolicy(),
+      scope,
+      toolVersion: "1",
+    });
+
+    if (expectedId) {
+      await expect(save).resolves.toMatchObject({ resultRefId: expectedId });
+    } else {
+      await expect(save).rejects.toThrow("conflicts with the stored result");
+    }
+    expect(texts[0]).toContain("ON CONFLICT (tool_execution_id) DO NOTHING");
+    expect(texts[1]).toContain("result_hash = $6");
+  });
+
   it("rejects incomplete external operation metadata before persistence", async () => {
     let queryCalled = false;
     const db: Queryable = {

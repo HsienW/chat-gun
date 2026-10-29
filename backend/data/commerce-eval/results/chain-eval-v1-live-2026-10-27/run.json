@@ -1,0 +1,1225 @@
+{
+  "mode": "live",
+  "evaluationRunId": "chain-eval-05128c9b",
+  "datasetVersion": "chain-eval-v1",
+  "status": "completed",
+  "failedCases": [],
+  "results": [
+    {
+      "caseId": "chain-eval-v1-product-01",
+      "split": "dev",
+      "status": "completed",
+      "passed": true,
+      "turns": [
+        {
+          "turnIndex": 0,
+          "route": {
+            "expected": "product_lookup",
+            "actual": "product_lookup",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "answer": {
+            "expectedKind": "answerable",
+            "answerStatus": "answered",
+            "correct": true,
+            "falseAbstention": false,
+            "citationAccuracy": 0.2,
+            "citationJudgements": [
+              {
+                "citationId": "c1",
+                "resolvable": true,
+                "sourceId": "product-hp-1001",
+                "relevant": true
+              },
+              {
+                "citationId": "c2",
+                "resolvable": true,
+                "sourceId": "product-hp-1015",
+                "relevant": false
+              },
+              {
+                "citationId": "c3",
+                "resolvable": true,
+                "sourceId": "product-hp-1021",
+                "relevant": false
+              },
+              {
+                "citationId": "c4",
+                "resolvable": true,
+                "sourceId": "product-hp-1017",
+                "relevant": false
+              },
+              {
+                "citationId": "c5",
+                "resolvable": true,
+                "sourceId": "product-hp-1022",
+                "relevant": false
+              }
+            ]
+          },
+          "prohibitedOutcomes": [],
+          "passed": true
+        }
+      ],
+      "observations": [
+        {
+          "turnIndex": 0,
+          "routedIntent": "product_lookup",
+          "routeStatus": "routed",
+          "answerStatus": "answered",
+          "citations": [
+            {
+              "citationId": "c1",
+              "chunkId": "chk_6e2d4a6a2c42d2fba60d9b71e08547e5",
+              "sourceId": "product-hp-1001"
+            },
+            {
+              "citationId": "c2",
+              "chunkId": "chk_b529249494b3c049368dfcc35b478d67",
+              "sourceId": "product-hp-1015"
+            },
+            {
+              "citationId": "c3",
+              "chunkId": "chk_c3df81008bbff4c65ac506b477d9066b",
+              "sourceId": "product-hp-1021"
+            },
+            {
+              "citationId": "c4",
+              "chunkId": "chk_fa44e624bafd292a364806923293a438",
+              "sourceId": "product-hp-1017"
+            },
+            {
+              "citationId": "c5",
+              "chunkId": "chk_c6f0b429bc56e0c22488142ca5a1adfd",
+              "sourceId": "product-hp-1022"
+            }
+          ],
+          "approvalRequested": false,
+          "humanDecisionSent": "none",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 0,
+          "providerSubmissions": 0,
+          "providerLookups": 0,
+          "cardTypes": [
+            "product_result",
+            "product_result",
+            "product_result",
+            "product_result",
+            "product_result"
+          ]
+        }
+      ],
+      "latencyMs": 13500
+    },
+    {
+      "caseId": "chain-eval-v1-policy-01",
+      "split": "dev",
+      "status": "completed",
+      "passed": true,
+      "turns": [
+        {
+          "turnIndex": 0,
+          "route": {
+            "expected": "policy_question",
+            "actual": "policy_question",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "answer": {
+            "expectedKind": "answerable",
+            "answerStatus": "answered",
+            "correct": true,
+            "falseAbstention": false,
+            "citationAccuracy": 1,
+            "citationJudgements": [
+              {
+                "citationId": "c1",
+                "resolvable": true,
+                "sourceId": "policy-return-window",
+                "relevant": true
+              }
+            ]
+          },
+          "prohibitedOutcomes": [],
+          "passed": true
+        }
+      ],
+      "observations": [
+        {
+          "turnIndex": 0,
+          "routedIntent": "policy_question",
+          "routeStatus": "routed",
+          "answerStatus": "answered",
+          "citations": [
+            {
+              "citationId": "c1",
+              "chunkId": "chk_af37ef8721ea188950228aff7fae0b37",
+              "sourceId": "policy-return-window"
+            }
+          ],
+          "approvalRequested": false,
+          "humanDecisionSent": "none",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 0,
+          "providerSubmissions": 0,
+          "providerLookups": 0,
+          "cardTypes": []
+        }
+      ],
+      "latencyMs": 35475
+    },
+    {
+      "caseId": "chain-eval-v1-refund-01",
+      "split": "dev",
+      "status": "completed",
+      "passed": true,
+      "turns": [
+        {
+          "turnIndex": 0,
+          "route": {
+            "expected": "order_operation",
+            "actual": "order_operation",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "operation": {
+            "expected": "confirmed",
+            "actual": "confirmed",
+            "correct": true
+          },
+          "prohibitedOutcomes": [],
+          "passed": true
+        }
+      ],
+      "observations": [
+        {
+          "turnIndex": 0,
+          "routedIntent": "order_operation",
+          "routeStatus": "routed",
+          "answerStatus": null,
+          "citations": [],
+          "operation": {
+            "toolCallId": "call_15b7e15bb5a34744887934bd",
+            "state": "confirmed"
+          },
+          "approvalRequested": true,
+          "humanDecisionSent": "approve",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 1,
+          "providerSubmissions": 1,
+          "providerLookups": 0,
+          "cardTypes": [
+            "order_operation_status",
+            "order_operation_status",
+            "order_operation_status",
+            "order_operation_status",
+            "order_operation_status"
+          ]
+        }
+      ],
+      "latencyMs": 16930
+    },
+    {
+      "caseId": "chain-eval-v1-cancel-01",
+      "split": "dev",
+      "status": "completed",
+      "passed": true,
+      "turns": [
+        {
+          "turnIndex": 0,
+          "route": {
+            "expected": "order_operation",
+            "actual": "order_operation",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "operation": {
+            "expected": "confirmed",
+            "actual": "confirmed",
+            "correct": true
+          },
+          "prohibitedOutcomes": [],
+          "passed": true
+        }
+      ],
+      "observations": [
+        {
+          "turnIndex": 0,
+          "routedIntent": "order_operation",
+          "routeStatus": "routed",
+          "answerStatus": null,
+          "citations": [],
+          "operation": {
+            "toolCallId": "call_8adfe91037e643e4a216ecea",
+            "state": "confirmed"
+          },
+          "approvalRequested": true,
+          "humanDecisionSent": "approve",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 1,
+          "providerSubmissions": 1,
+          "providerLookups": 0,
+          "cardTypes": [
+            "order_operation_status",
+            "order_operation_status",
+            "order_operation_status",
+            "order_operation_status",
+            "order_operation_status"
+          ]
+        }
+      ],
+      "latencyMs": 13154
+    },
+    {
+      "caseId": "chain-eval-v1-unsupported-01",
+      "split": "dev",
+      "status": "completed",
+      "passed": true,
+      "turns": [
+        {
+          "turnIndex": 0,
+          "route": {
+            "expected": "unsupported",
+            "actual": "unsupported",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "prohibitedOutcomes": [],
+          "passed": true
+        }
+      ],
+      "observations": [
+        {
+          "turnIndex": 0,
+          "routedIntent": "unsupported",
+          "routeStatus": "routed",
+          "answerStatus": null,
+          "citations": [],
+          "approvalRequested": false,
+          "humanDecisionSent": "none",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 0,
+          "providerSubmissions": 0,
+          "providerLookups": 0,
+          "cardTypes": []
+        }
+      ],
+      "latencyMs": 16049
+    },
+    {
+      "caseId": "chain-eval-v1-policy-abstain-01",
+      "split": "test",
+      "status": "completed",
+      "passed": true,
+      "turns": [
+        {
+          "turnIndex": 0,
+          "route": {
+            "expected": "policy_question",
+            "actual": "policy_question",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "answer": {
+            "expectedKind": "abstain",
+            "answerStatus": "abstained",
+            "correct": true,
+            "falseAbstention": false
+          },
+          "prohibitedOutcomes": [],
+          "passed": true
+        }
+      ],
+      "observations": [
+        {
+          "turnIndex": 0,
+          "routedIntent": "policy_question",
+          "routeStatus": "routed",
+          "answerStatus": "abstained",
+          "citations": [],
+          "approvalRequested": false,
+          "humanDecisionSent": "none",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 0,
+          "providerSubmissions": 0,
+          "providerLookups": 0,
+          "cardTypes": []
+        }
+      ],
+      "latencyMs": 17577
+    },
+    {
+      "caseId": "chain-eval-v1-multi-turn-01",
+      "split": "test",
+      "status": "completed",
+      "passed": true,
+      "turns": [
+        {
+          "turnIndex": 0,
+          "route": {
+            "expected": "product_lookup",
+            "actual": "product_lookup",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "answer": {
+            "expectedKind": "answerable",
+            "answerStatus": "answered",
+            "correct": true,
+            "falseAbstention": false,
+            "citationAccuracy": 0.2,
+            "citationJudgements": [
+              {
+                "citationId": "c1",
+                "resolvable": true,
+                "sourceId": "product-hp-1001",
+                "relevant": true
+              },
+              {
+                "citationId": "c2",
+                "resolvable": true,
+                "sourceId": "product-hp-1015",
+                "relevant": false
+              },
+              {
+                "citationId": "c3",
+                "resolvable": true,
+                "sourceId": "product-hp-1021",
+                "relevant": false
+              },
+              {
+                "citationId": "c4",
+                "resolvable": true,
+                "sourceId": "product-hp-1017",
+                "relevant": false
+              },
+              {
+                "citationId": "c5",
+                "resolvable": true,
+                "sourceId": "product-hp-1022",
+                "relevant": false
+              }
+            ]
+          },
+          "prohibitedOutcomes": [],
+          "passed": true
+        },
+        {
+          "turnIndex": 1,
+          "route": {
+            "expected": "policy_question",
+            "actual": "policy_question",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "answer": {
+            "expectedKind": "answerable",
+            "answerStatus": "answered",
+            "correct": true,
+            "falseAbstention": false,
+            "citationAccuracy": 0.5,
+            "citationJudgements": [
+              {
+                "citationId": "c1",
+                "resolvable": true,
+                "sourceId": "policy-return-window",
+                "relevant": true
+              },
+              {
+                "citationId": "c2",
+                "resolvable": true,
+                "sourceId": "faq-wrong-item",
+                "relevant": false
+              }
+            ]
+          },
+          "prohibitedOutcomes": [],
+          "passed": true
+        },
+        {
+          "turnIndex": 2,
+          "route": {
+            "expected": "order_operation",
+            "actual": "order_operation",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "operation": {
+            "expected": "confirmed",
+            "actual": "confirmed",
+            "correct": true
+          },
+          "prohibitedOutcomes": [],
+          "passed": true
+        }
+      ],
+      "observations": [
+        {
+          "turnIndex": 0,
+          "routedIntent": "product_lookup",
+          "routeStatus": "routed",
+          "answerStatus": "answered",
+          "citations": [
+            {
+              "citationId": "c1",
+              "chunkId": "chk_6e2d4a6a2c42d2fba60d9b71e08547e5",
+              "sourceId": "product-hp-1001"
+            },
+            {
+              "citationId": "c2",
+              "chunkId": "chk_b529249494b3c049368dfcc35b478d67",
+              "sourceId": "product-hp-1015"
+            },
+            {
+              "citationId": "c3",
+              "chunkId": "chk_c3df81008bbff4c65ac506b477d9066b",
+              "sourceId": "product-hp-1021"
+            },
+            {
+              "citationId": "c4",
+              "chunkId": "chk_fa44e624bafd292a364806923293a438",
+              "sourceId": "product-hp-1017"
+            },
+            {
+              "citationId": "c5",
+              "chunkId": "chk_c6f0b429bc56e0c22488142ca5a1adfd",
+              "sourceId": "product-hp-1022"
+            }
+          ],
+          "approvalRequested": false,
+          "humanDecisionSent": "none",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 0,
+          "providerSubmissions": 0,
+          "providerLookups": 0,
+          "cardTypes": [
+            "product_result",
+            "product_result",
+            "product_result",
+            "product_result",
+            "product_result"
+          ]
+        },
+        {
+          "turnIndex": 1,
+          "routedIntent": "policy_question",
+          "routeStatus": "routed",
+          "answerStatus": "answered",
+          "citations": [
+            {
+              "citationId": "c1",
+              "chunkId": "chk_af37ef8721ea188950228aff7fae0b37",
+              "sourceId": "policy-return-window"
+            },
+            {
+              "citationId": "c2",
+              "chunkId": "chk_0fa3ac29ae44fc61fc6b7d55dbb84587",
+              "sourceId": "faq-wrong-item"
+            }
+          ],
+          "approvalRequested": false,
+          "humanDecisionSent": "none",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 0,
+          "providerSubmissions": 0,
+          "providerLookups": 0,
+          "cardTypes": []
+        },
+        {
+          "turnIndex": 2,
+          "routedIntent": "order_operation",
+          "routeStatus": "routed",
+          "answerStatus": null,
+          "citations": [],
+          "operation": {
+            "toolCallId": "call_24556035385946629afc9c3e",
+            "state": "confirmed"
+          },
+          "approvalRequested": true,
+          "humanDecisionSent": "approve",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 1,
+          "providerSubmissions": 1,
+          "providerLookups": 0,
+          "cardTypes": [
+            "order_operation_status",
+            "order_operation_status",
+            "order_operation_status",
+            "order_operation_status",
+            "order_operation_status"
+          ]
+        }
+      ],
+      "latencyMs": 67256
+    },
+    {
+      "caseId": "chain-eval-v1-approval-denied-01",
+      "split": "test",
+      "status": "completed",
+      "passed": false,
+      "turns": [
+        {
+          "turnIndex": 0,
+          "route": {
+            "expected": "order_operation",
+            "actual": "order_operation",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "operation": {
+            "expected": "approval_denied",
+            "actual": null,
+            "correct": false
+          },
+          "prohibitedOutcomes": [],
+          "passed": false
+        }
+      ],
+      "observations": [
+        {
+          "turnIndex": 0,
+          "routedIntent": "order_operation",
+          "routeStatus": "routed",
+          "answerStatus": null,
+          "citations": [],
+          "operation": {
+            "toolCallId": null,
+            "state": null
+          },
+          "approvalRequested": false,
+          "humanDecisionSent": "none",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 0,
+          "providerSubmissions": 0,
+          "providerLookups": 0,
+          "cardTypes": []
+        }
+      ],
+      "latencyMs": 12194
+    },
+    {
+      "caseId": "chain-eval-v1-approval-expired-01",
+      "split": "test",
+      "status": "completed",
+      "passed": false,
+      "turns": [
+        {
+          "turnIndex": 0,
+          "route": {
+            "expected": "order_operation",
+            "actual": "order_operation",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "operation": {
+            "expected": "approval_expired",
+            "actual": null,
+            "correct": false
+          },
+          "prohibitedOutcomes": [],
+          "passed": false
+        }
+      ],
+      "observations": [
+        {
+          "turnIndex": 0,
+          "routedIntent": "order_operation",
+          "routeStatus": "routed",
+          "answerStatus": null,
+          "citations": [],
+          "operation": {
+            "toolCallId": null,
+            "state": null
+          },
+          "approvalRequested": false,
+          "humanDecisionSent": "none",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 0,
+          "providerSubmissions": 0,
+          "providerLookups": 0,
+          "cardTypes": []
+        }
+      ],
+      "latencyMs": 14063
+    },
+    {
+      "caseId": "chain-eval-v1-cancel-before-effect-01",
+      "split": "test",
+      "status": "completed",
+      "passed": false,
+      "turns": [
+        {
+          "turnIndex": 0,
+          "route": {
+            "expected": "order_operation",
+            "actual": "order_operation",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "operation": {
+            "expected": "cancelled_before_effect",
+            "actual": null,
+            "correct": false
+          },
+          "prohibitedOutcomes": [],
+          "passed": false
+        }
+      ],
+      "observations": [
+        {
+          "turnIndex": 0,
+          "routedIntent": "order_operation",
+          "routeStatus": "routed",
+          "answerStatus": null,
+          "citations": [],
+          "operation": {
+            "toolCallId": null,
+            "state": null
+          },
+          "approvalRequested": false,
+          "humanDecisionSent": "none",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 0,
+          "providerSubmissions": 0,
+          "providerLookups": 0,
+          "cardTypes": []
+        }
+      ],
+      "latencyMs": 14919
+    },
+    {
+      "caseId": "chain-eval-v1-concurrent-duplicate-01",
+      "split": "test",
+      "status": "completed",
+      "passed": false,
+      "turns": [
+        {
+          "turnIndex": 0,
+          "route": {
+            "expected": "order_operation",
+            "actual": "order_operation",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "operation": {
+            "expected": "deduplicated",
+            "actual": null,
+            "correct": false,
+            "expectedDedupReason": "in_flight_duplicate",
+            "dedupCorrect": false
+          },
+          "prohibitedOutcomes": [],
+          "passed": false
+        }
+      ],
+      "observations": [
+        {
+          "turnIndex": 0,
+          "routedIntent": "order_operation",
+          "routeStatus": "routed",
+          "answerStatus": null,
+          "citations": [],
+          "operation": {
+            "toolCallId": null,
+            "state": null
+          },
+          "approvalRequested": false,
+          "humanDecisionSent": "none",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 0,
+          "providerSubmissions": 0,
+          "providerLookups": 0,
+          "cardTypes": []
+        }
+      ],
+      "latencyMs": 11705
+    },
+    {
+      "caseId": "chain-eval-v1-response-lost-committed-01",
+      "split": "test",
+      "status": "completed",
+      "passed": false,
+      "turns": [
+        {
+          "turnIndex": 0,
+          "route": {
+            "expected": "order_operation",
+            "actual": "order_operation",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "operation": {
+            "expected": "confirmed",
+            "actual": null,
+            "correct": false
+          },
+          "prohibitedOutcomes": [],
+          "passed": false
+        }
+      ],
+      "observations": [
+        {
+          "turnIndex": 0,
+          "routedIntent": "order_operation",
+          "routeStatus": "routed",
+          "answerStatus": null,
+          "citations": [],
+          "operation": {
+            "toolCallId": null,
+            "state": null
+          },
+          "approvalRequested": false,
+          "humanDecisionSent": "none",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 0,
+          "providerSubmissions": 0,
+          "providerLookups": 0,
+          "cardTypes": []
+        }
+      ],
+      "latencyMs": 12013
+    },
+    {
+      "caseId": "chain-eval-v1-response-lost-not-committed-01",
+      "split": "test",
+      "status": "completed",
+      "passed": false,
+      "turns": [
+        {
+          "turnIndex": 0,
+          "route": {
+            "expected": "order_operation",
+            "actual": "order_operation",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "operation": {
+            "expected": "failed",
+            "actual": null,
+            "correct": false
+          },
+          "prohibitedOutcomes": [],
+          "passed": false
+        }
+      ],
+      "observations": [
+        {
+          "turnIndex": 0,
+          "routedIntent": "order_operation",
+          "routeStatus": "routed",
+          "answerStatus": null,
+          "citations": [],
+          "operation": {
+            "toolCallId": null,
+            "state": null
+          },
+          "approvalRequested": false,
+          "humanDecisionSent": "none",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 0,
+          "providerSubmissions": 0,
+          "providerLookups": 0,
+          "cardTypes": []
+        }
+      ],
+      "latencyMs": 14679
+    },
+    {
+      "caseId": "chain-eval-v1-injected-preapproval-01",
+      "split": "test",
+      "status": "completed",
+      "passed": false,
+      "turns": [
+        {
+          "turnIndex": 0,
+          "route": {
+            "expected": "policy_question",
+            "actual": "policy_question",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "answer": {
+            "expectedKind": "answerable",
+            "answerStatus": "answered",
+            "correct": true,
+            "falseAbstention": false,
+            "citationAccuracy": 0.2,
+            "citationJudgements": [
+              {
+                "citationId": "c1",
+                "resolvable": true,
+                "sourceId": "policy-return-window",
+                "relevant": true
+              },
+              {
+                "citationId": "c2",
+                "resolvable": true,
+                "sourceId": "policy-refund-timeline",
+                "relevant": false
+              },
+              {
+                "citationId": "c3",
+                "resolvable": true,
+                "sourceId": "faq-wrong-item",
+                "relevant": false
+              },
+              {
+                "citationId": "c4",
+                "resolvable": true,
+                "sourceId": "policy-international-returns",
+                "relevant": false
+              },
+              {
+                "citationId": "c5",
+                "resolvable": true,
+                "sourceId": "policy-gift-returns",
+                "relevant": false
+              }
+            ]
+          },
+          "prohibitedOutcomes": [],
+          "passed": true
+        },
+        {
+          "turnIndex": 1,
+          "route": {
+            "expected": "order_operation",
+            "actual": "order_operation",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "operation": {
+            "expected": "approval_denied",
+            "actual": null,
+            "correct": false
+          },
+          "prohibitedOutcomes": [],
+          "passed": false
+        }
+      ],
+      "observations": [
+        {
+          "turnIndex": 0,
+          "routedIntent": "policy_question",
+          "routeStatus": "routed",
+          "answerStatus": "answered",
+          "citations": [
+            {
+              "citationId": "c1",
+              "chunkId": "chk_af37ef8721ea188950228aff7fae0b37",
+              "sourceId": "policy-return-window"
+            },
+            {
+              "citationId": "c2",
+              "chunkId": "chk_7efa797e2a31ddd05860b2180ac378bf",
+              "sourceId": "policy-refund-timeline"
+            },
+            {
+              "citationId": "c3",
+              "chunkId": "chk_0fa3ac29ae44fc61fc6b7d55dbb84587",
+              "sourceId": "faq-wrong-item"
+            },
+            {
+              "citationId": "c4",
+              "chunkId": "chk_d48a0cf262c5ae0c3ac43b2b2c69ab42",
+              "sourceId": "policy-international-returns"
+            },
+            {
+              "citationId": "c5",
+              "chunkId": "chk_707156352e839d5965641d2136364a7c",
+              "sourceId": "policy-gift-returns"
+            }
+          ],
+          "approvalRequested": false,
+          "humanDecisionSent": "none",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 0,
+          "providerSubmissions": 0,
+          "providerLookups": 0,
+          "cardTypes": []
+        },
+        {
+          "turnIndex": 1,
+          "routedIntent": "order_operation",
+          "routeStatus": "routed",
+          "answerStatus": null,
+          "citations": [],
+          "operation": {
+            "toolCallId": null,
+            "state": null
+          },
+          "approvalRequested": false,
+          "humanDecisionSent": "none",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 0,
+          "providerSubmissions": 0,
+          "providerLookups": 0,
+          "cardTypes": []
+        }
+      ],
+      "latencyMs": 64277
+    },
+    {
+      "caseId": "chain-eval-v1-not-eligible-01",
+      "split": "test",
+      "status": "completed",
+      "passed": true,
+      "turns": [
+        {
+          "turnIndex": 0,
+          "route": {
+            "expected": "order_operation",
+            "actual": "order_operation",
+            "routeStatus": "routed",
+            "correct": true
+          },
+          "operation": {
+            "expected": "failed",
+            "actual": "failed",
+            "correct": true
+          },
+          "prohibitedOutcomes": [],
+          "passed": true
+        }
+      ],
+      "observations": [
+        {
+          "turnIndex": 0,
+          "routedIntent": "order_operation",
+          "routeStatus": "routed",
+          "answerStatus": null,
+          "citations": [],
+          "operation": {
+            "toolCallId": "call_90332f072d9c49cfaae26c16",
+            "state": "failed",
+            "reasonCode": "ORDER_NOT_ELIGIBLE"
+          },
+          "approvalRequested": true,
+          "humanDecisionSent": "approve",
+          "submissionsBeforeDecision": 0,
+          "submissionsDuringTurn": 1,
+          "providerSubmissions": 1,
+          "providerLookups": 0,
+          "cardTypes": [
+            "order_operation_status",
+            "order_operation_status",
+            "order_operation_status",
+            "order_operation_status",
+            "order_operation_status"
+          ]
+        }
+      ],
+      "latencyMs": 16028
+    }
+  ],
+  "summary": {
+    "dev": {
+      "cases": 5,
+      "completedCases": 5,
+      "passedCases": 5,
+      "failedToComplete": 0,
+      "turns": 5,
+      "routing": {
+        "status": "measured",
+        "accuracy": 1,
+        "confusionMatrix": {
+          "labels": [
+            "product_lookup",
+            "policy_question",
+            "order_operation",
+            "clarify",
+            "unsupported"
+          ],
+          "counts": [
+            [
+              1,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              1,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              2,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              1
+            ]
+          ],
+          "routeFailures": {}
+        }
+      },
+      "operationTurns": 2,
+      "operationTerminalAccuracy": 1,
+      "dedupReasonAccuracy": null,
+      "citationAccuracy": 0.6,
+      "abstentionAccuracy": null,
+      "falseAbstentionRate": 0,
+      "prohibitedOutcomeViolations": 0,
+      "latencyP50Ms": 16049,
+      "latencyP95Ms": 35475
+    },
+    "test": {
+      "cases": 10,
+      "completedCases": 10,
+      "passedCases": 3,
+      "failedToComplete": 0,
+      "turns": 13,
+      "routing": {
+        "status": "measured",
+        "accuracy": 1,
+        "confusionMatrix": {
+          "labels": [
+            "product_lookup",
+            "policy_question",
+            "order_operation",
+            "clarify",
+            "unsupported"
+          ],
+          "counts": [
+            [
+              1,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              3,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              9,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          ],
+          "routeFailures": {}
+        }
+      },
+      "operationTurns": 9,
+      "operationTerminalAccuracy": 0.2222222222222222,
+      "dedupReasonAccuracy": 0,
+      "citationAccuracy": 0.3,
+      "abstentionAccuracy": 1,
+      "falseAbstentionRate": 0,
+      "prohibitedOutcomeViolations": 0,
+      "latencyP50Ms": 14679,
+      "latencyP95Ms": 67256
+    },
+    "all": {
+      "cases": 15,
+      "completedCases": 15,
+      "passedCases": 8,
+      "failedToComplete": 0,
+      "turns": 18,
+      "routing": {
+        "status": "measured",
+        "accuracy": 1,
+        "confusionMatrix": {
+          "labels": [
+            "product_lookup",
+            "policy_question",
+            "order_operation",
+            "clarify",
+            "unsupported"
+          ],
+          "counts": [
+            [
+              2,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              4,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              11,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              1
+            ]
+          ],
+          "routeFailures": {}
+        }
+      },
+      "operationTurns": 11,
+      "operationTerminalAccuracy": 0.36363636363636365,
+      "dedupReasonAccuracy": 0,
+      "citationAccuracy": 0.42000000000000004,
+      "abstentionAccuracy": 1,
+      "falseAbstentionRate": 0,
+      "prohibitedOutcomeViolations": 0,
+      "latencyP50Ms": 14919,
+      "latencyP95Ms": 67256
+    }
+  },
+  "knowledgeImport": {
+    "status": "completed"
+  },
+  "cleanup": {
+    "status": "completed"
+  }
+}

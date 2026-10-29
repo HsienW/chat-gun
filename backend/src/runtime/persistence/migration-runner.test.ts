@@ -26,6 +26,10 @@ const migrationNames = [
   "020_create_recovery_records.sql",
   "021_create_data_governance.sql",
   "022_add_tool_execution_security_evidence.sql",
+  "023_add_authorization_confirmation_withdrawal.sql",
+  "024_add_side_effect_claim_release.sql",
+  "025_create_reconciliation_tasks.sql",
+  "026_create_order_operation_requests.sql",
 ] as const;
 
 function expectedResults(

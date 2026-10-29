@@ -1,0 +1,24 @@
+{
+  "datasetVersion": "chain-eval-v1",
+  "corpusVersion": "kb-v1",
+  "orderFixtureVersion": "synthetic-orders-v1",
+  "split": "all",
+  "mode": "deterministic",
+  "graphId": "shopping_assistant",
+  "intentPromptVersion": "chain-eval-script-v1",
+  "policyPromptVersion": "chain-eval-script-v1",
+  "embeddingModel": null,
+  "embeddingSpaceId": null,
+  "rerankModel": null,
+  "generationModel": null,
+  "judgeModel": null,
+  "thresholdVersion": null,
+  "configVersion": "chain-eval-scripted-retrieval-v1",
+  "confirmationTimeoutMs": {
+    "default": 900000,
+    "expireCases": 1000
+  },
+  "runCount": 1,
+  "date": "2026-10-27",
+  "synthetic": true
+}

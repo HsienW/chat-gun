@@ -47,10 +47,15 @@ jobs:
             if ($null -eq $locked -or $null -eq $installed) {
               throw "Missing lockfile entry: $name"
             }
-            if ($manifest.dependencies[$name] -ne '0.1.0-alpha.2' -or
-                $lock.packages[''].dependencies[$name] -ne '0.1.0-alpha.2' -or
-                $locked.version -ne '0.1.0-alpha.2' -or
-                $installed.version -ne '0.1.0-alpha.2') {
+            # The manifest is the single source of the expected version; it must be an exact SemVer.
+            $expectedVersion = $manifest.dependencies[$name]
+            if (-not $expectedVersion -or
+                $expectedVersion -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+              throw "Harness dependency is not an exact version: $name $expectedVersion"
+            }
+            if ($lock.packages[''].dependencies[$name] -ne $expectedVersion -or
+                $locked.version -ne $expectedVersion -or
+                $installed.version -ne $expectedVersion) {
               throw "Wrong published version: $name"
             }
             if ($locked.resolved -notlike 'https://registry.npmjs.org/*' -or

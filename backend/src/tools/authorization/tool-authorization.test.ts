@@ -1,8 +1,11 @@
 import { readFileSync } from "node:fs";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Queryable } from "../../runtime/persistence/rows.js";
+import { auditLogger } from "../../platform/observability.js";
+import { executionContextSchema } from "../../runtime/execution-context/execution-context.js";
+import { createConfirmationRequiredDescriptor, parseConfirmationResume } from "../../runtime/authorization/confirmation.js";
 import {
   BUILT_IN_MCP_RISK_DESCRIPTORS,
   createLocalToolRiskPolicies,
@@ -28,6 +31,28 @@ function createDatabase(): Queryable {
 }
 
 describe("createToolAuthorizationConfig", () => {
+  it("connects the production confirmation store to the audit logger", async () => {
+    const audit = vi.spyOn(auditLogger, "record").mockResolvedValue(undefined);
+    try {
+      const context = executionContextSchema.parse(fixture.validContext);
+      const descriptor = createConfirmationRequiredDescriptor({
+        decisionId: "decision-audit", executionContext: context, action: "tool:write", toolName: "write_file",
+        resource: { resourceType: "mcp_tool", resourceId: "filesystem:write_file", tenantId: context.scope.tenantId },
+        policyVersion: "runtime-authorization-v1", timeoutMs: 60_000,
+      });
+      const composition = createRuntimeToolAuthorizationComposition({ profile: "production", db: createDatabase() });
+      const result = await composition.confirmationStore.consume({ descriptor,
+        resume: parseConfirmationResume({ type: "tool_authorization_confirmation", schemaVersion: "1.0", approvalId: descriptor.approvalId, decisionId: descriptor.decisionId, decision: "approve" }),
+        executionContext: { ...context, runId: "new-run", threadId: "different-thread" },
+      });
+      expect(result).toEqual({ ok: false, reasonCode: "CONFIRMATION_BINDING_MISMATCH" });
+      expect(audit).toHaveBeenCalledWith("authorization.confirmation.rejected", {
+        decisionId: descriptor.decisionId, reasonCode: "CONFIRMATION_BINDING_MISMATCH",
+        waitingRunId: context.runId, resumeRunId: "new-run",
+      });
+    } finally { audit.mockRestore(); }
+  });
+
   it("assembles production dependencies and reads the canonical execution context", async () => {
     const config = createToolAuthorizationConfig({
       profile: "production",
@@ -129,5 +154,50 @@ describe("local production ToolRiskPolicy registry", () => {
         ({ schemaVersion }) => schemaVersion === "1.0"
       )
     ).toBe(true);
+  });
+});
+
+describe("runtime confirmation timeout", () => {
+  const decision = {
+    decisionId: "decision-timeout",
+    effect: "require_confirmation" as const,
+    reasonCode: "REQUIRES_CONFIRMATION" as const,
+    createdAt: "2026-10-25T12:00:00.000Z",
+  };
+  const request = {
+    action: "tool:write",
+    resource: { resourceType: "tool", resourceId: "order_refund_request", tenantId: "tenant-1" },
+    context: { toolName: "order_refund_request" },
+  };
+  const context = {
+    ...fixture.validContext,
+    principal: { ...(fixture.validContext.principal as Record<string, unknown>), tenantId: "tenant-1" },
+    scope: { scopeId: "tenant-1", scopeType: "tenant", tenantId: "tenant-1" },
+  };
+
+  async function expiresInMs(): Promise<number> {
+    const composition = createRuntimeToolAuthorizationComposition({ profile: "production", db: createDatabase() });
+    const descriptor = await composition.authorization.onRequireConfirmation!(
+      decision as never,
+      request as never,
+      context as never
+    );
+    return Date.parse(descriptor.expiresAt) - Date.parse("2026-10-25T12:00:00.000Z");
+  }
+
+  it("defaults to 15 minutes and follows a configured short timeout", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-25T12:00:00.000Z"));
+    try {
+      vi.stubEnv("TOOL_AUTHORIZATION_CONFIRMATION_TIMEOUT_MS", undefined);
+      await expect(expiresInMs()).resolves.toBe(900_000);
+      vi.stubEnv("TOOL_AUTHORIZATION_CONFIRMATION_TIMEOUT_MS", "1000");
+      await expect(expiresInMs()).resolves.toBe(1_000);
+      vi.stubEnv("TOOL_AUTHORIZATION_CONFIRMATION_TIMEOUT_MS", "0");
+      await expect(expiresInMs()).rejects.toThrow("Invalid TOOL_AUTHORIZATION_CONFIRMATION_TIMEOUT_MS");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
   });
 });

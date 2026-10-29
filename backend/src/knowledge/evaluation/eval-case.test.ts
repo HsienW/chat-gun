@@ -60,6 +60,20 @@ describe("eval_case@1 contract", () => {
     expect(parsed.rejected).toEqual([{ index: 1, caseId: "case-1", code: "EVAL_CASE_DUPLICATE_ID" }]);
   });
 
+  it("rejects an eval_case@1.1 chain case as an unknown expected kind instead of skipping it", () => {
+    const chain = validCase({
+      schemaVersion: "eval_case@1.1",
+      caseId: "chain-1",
+      input: { question: "Hi", language: "en", turns: [{ message: "Hi" }] },
+      expected: { kind: "chain", turns: [{ expectedIntent: "clarify" }] },
+    });
+
+    const parsed = parseEvalDataset(datasetOf([chain]));
+
+    expect(parsed.cases).toEqual([]);
+    expect(parsed.rejected).toEqual([{ index: 0, caseId: "chain-1", code: "EVAL_CASE_UNKNOWN_EXPECTED_KIND" }]);
+  });
+
   it("requires synthetic provenance on every case", () => {
     const parsed = parseEvalDataset(datasetOf([validCase({ provenance: { synthetic: false, createdAt: "x", method: "x" } })]));
     expect(parsed.rejected[0]?.code).toBe("EVAL_CASE_INVALID");

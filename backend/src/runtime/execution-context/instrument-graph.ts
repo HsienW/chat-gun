@@ -1,3 +1,5 @@
+import { Command } from "@langchain/langgraph";
+
 import type { ExecutionContext } from "./execution-context.js";
 import { withExecutionContext } from "./read-execution-context.js";
 import {
@@ -15,6 +17,32 @@ const STREAM_METHODS = new Set<PropertyKey>(["stream", "streamEvents", "streamLo
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export const CLIENT_STATE_WRITE_FORBIDDEN = "CLIENT_STATE_WRITE_FORBIDDEN";
+
+export class ClientStateWriteForbiddenError extends Error {
+  readonly code = CLIENT_STATE_WRITE_FORBIDDEN;
+
+  constructor() {
+    super("Run input may not write graph state or route to a node");
+    this.name = "ClientStateWriteForbiddenError";
+  }
+}
+
+/**
+ * LangGraph runs any input carrying its `lg_name` marker as a Command, so a
+ * plain JSON run input could update state outside the input schema or jump
+ * past the authorization nodes. Only a resume-only Command may enter
+ * (design §6.13 point 3).
+ */
+function assertNoClientStateWrite(input: unknown): void {
+  if (input instanceof Command) {
+    const routes = Array.isArray(input.goto) ? input.goto.length > 0 : input.goto != null;
+    if (input.update != null || input.graph != null || routes) throw new ClientStateWriteForbiddenError();
+    return;
+  }
+  if (isRecord(input) && "lg_name" in input) throw new ClientStateWriteForbiddenError();
 }
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
@@ -91,6 +119,7 @@ export function instrumentGraphWithExecutionContext<TGraph extends object>(
       if (typeof member !== "function") return member;
       if (property === "invoke") {
         return async (input: unknown, config?: unknown) => {
+          assertNoClientStateWrite(input);
           const prepared = await prepareConfigWithIdentityStatus(
             input,
             config,
@@ -103,6 +132,7 @@ export function instrumentGraphWithExecutionContext<TGraph extends object>(
       if (STREAM_METHODS.has(property)) {
         return (input: unknown, config?: unknown): AsyncIterable<unknown> =>
           (async function* streamWithContext() {
+            assertNoClientStateWrite(input);
             const prepared = await prepareConfigWithIdentityStatus(
               input,
               config,

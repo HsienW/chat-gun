@@ -15,10 +15,12 @@ import type { Queryable } from "../../runtime/persistence/rows.js";
 import { getPool } from "../../runtime/persistence/connection.js";
 import type { ToolAuthorizationGovernanceConfig } from "../../platform/tool-governance.js";
 import { getBooleanEnv, getEnv } from "../../platform/env.js";
+import { auditLogger } from "../../platform/observability.js";
 import {
   createConfirmationRequiredDescriptor,
   PgAuthorizationConfirmationStore,
   type AuthorizationConfirmationStore,
+  type AuthorizationConfirmationWithdrawalStore,
 } from "../../runtime/authorization/confirmation.js";
 import {
   PgInterruptManifestRepository,
@@ -113,11 +115,13 @@ export interface CreateRuntimeToolAuthorizationCompositionInput {
   policyVersion?: string;
   enableDevelopmentReadDefault?: boolean;
   mcpRiskDescriptors?: readonly unknown[];
+  /** Policies for tools only one graph loads, such as the shopping assistant's order tools. */
+  additionalPolicies?: readonly ToolRiskPolicy[];
 }
 
 export interface ToolAuthorizationComposition {
   authorization: ToolAuthorizationGovernanceConfig;
-  confirmationStore: AuthorizationConfirmationStore;
+  confirmationStore: AuthorizationConfirmationStore & AuthorizationConfirmationWithdrawalStore;
   interruptManifestRepository: InterruptManifestRepository;
   mcpRiskDescriptors: readonly McpToolRiskDescriptorV1[];
 }
@@ -264,6 +268,7 @@ export function createRuntimeToolAuthorizationComposition(
   const policies = [
     ...createLocalToolRiskPolicies(),
     ...mcpRiskDescriptors.map(toMcpToolRiskPolicy),
+    ...(input.additionalPolicies ?? []),
   ];
   const configuredDatabase =
     input.db === undefined ? getPool() : input.db;
@@ -280,7 +285,8 @@ export function createRuntimeToolAuthorizationComposition(
   return {
     authorization,
     confirmationStore: new PgAuthorizationConfirmationStore(
-      configuredDatabase ?? unavailableDatabase
+      configuredDatabase ?? unavailableDatabase,
+      auditLogger
     ),
     interruptManifestRepository: configuredDatabase
       ? new PgInterruptManifestRepository(configuredDatabase)

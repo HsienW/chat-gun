@@ -61,19 +61,17 @@ Frontend MUST stabilize callbacks passed to memoized children or runtime hooks w
 - THEN `handleCopy` SHOULD keep a stable function reference
 - AND copy-to-clipboard behavior MUST remain unchanged
 
-#### Scenario: Runtime update callback reads selected agent
+#### Scenario: Runtime update callback reads the current target assistant
 
-- GIVEN `selectedAgentId` changes
+- GIVEN 目前目標 assistant 因入口或深度研究開關改變（目標 assistant 由入口與開關推導，不再由 agent 選單設定）
 - WHEN a later stream update event is handled
-- THEN `onUpdateEvent` MUST read the latest selected agent value
+- THEN `onUpdateEvent` MUST read the latest target assistant value
 - AND the callback MUST NOT rely on a stale closure
 
 #### Scenario: Hook dependency validation
 
 - WHEN frontend lint runs
 - THEN the new `useMemo` and `useCallback` usages MUST satisfy `react-hooks/exhaustive-deps`
-
----
 
 ### Requirement: Pure chat display components MUST define safe memo boundaries
 

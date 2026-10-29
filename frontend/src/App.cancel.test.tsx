@@ -23,13 +23,16 @@ vi.mock('@/components/WelcomeScreen', () => ({
       input: string,
       effort: string,
       model: string,
-      agentId: string,
       attachments: unknown[]
     ) => void;
     isLoading: boolean;
     onCancel: () => void;
+    deepResearch?: { onChange: (enabled: boolean) => void };
   }) => (
     <div data-testid="welcome-screen">
+      <button type="button" onClick={() => props.deepResearch?.onChange(true)}>
+        deep-research-on
+      </button>
       <div data-testid="welcome-loading">{props.isLoading ? 'loading' : 'idle'}</div>
       <button type="button" onClick={props.onCancel}>
         cancel
@@ -37,7 +40,7 @@ vi.mock('@/components/WelcomeScreen', () => ({
       <button
         type="button"
         onClick={() =>
-          props.handleSubmit('next question', 'standard', 'test-model', 'deep_researcher', [])
+          props.handleSubmit('next question', 'standard', 'test-model', [])
         }
       >
         submit
@@ -51,15 +54,18 @@ vi.mock('@/components/ChatMessagesView', () => ({
     messages: Message[];
     isLoading: boolean;
     onCancel: () => void;
+    deepResearch?: { onChange: (enabled: boolean) => void };
     onSubmit: (
       input: string,
       effort: string,
       model: string,
-      agentId: string,
       attachments: unknown[]
     ) => void;
   }) => (
     <div data-testid="chat-view">
+      <button type="button" onClick={() => props.deepResearch?.onChange(true)}>
+        deep-research-on
+      </button>
       <div data-testid="activity-bubble">{props.isLoading ? 'loading' : 'idle'}</div>
       {props.messages.map((message, index) => (
         <div key={message.id ?? index} data-testid={`message-${index}`}>
@@ -74,7 +80,7 @@ vi.mock('@/components/ChatMessagesView', () => ({
       <button
         type="button"
         onClick={() =>
-          props.onSubmit('next question', 'standard', 'test-model', 'deep_researcher', [])
+          props.onSubmit('next question', 'standard', 'test-model', [])
         }
       >
         submit-next
@@ -94,6 +100,13 @@ vi.mock('@/lib/agent-run-config', () => ({
 
 import App from './App';
 
+function renderApp() {
+  const result = render(<App />);
+  fireEvent.click(screen.getByRole('button', { name: /Gun Chat/ }));
+  fireEvent.click(screen.getByText('deep-research-on'));
+  return result;
+}
+
 describe('App cancel handling', () => {
   beforeEach(() => {
     mocks.thread.messages = [];
@@ -112,7 +125,7 @@ describe('App cancel handling', () => {
     ];
     mocks.thread.isLoading = true;
 
-    const { rerender } = render(<App />);
+    const { rerender } = renderApp();
 
     expect(screen.getByTestId('activity-bubble')).toHaveTextContent('loading');
 
@@ -144,7 +157,7 @@ describe('App cancel handling', () => {
     ];
     mocks.thread.isLoading = true;
 
-    const { rerender } = render(<App />);
+    const { rerender } = renderApp();
 
     fireEvent.click(screen.getByText('cancel'));
     mocks.thread.isLoading = false;

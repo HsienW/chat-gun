@@ -102,6 +102,7 @@ export class PgResultReferenceStore implements ResultReferenceStore {
          result_ref_id, tool_execution_id, scope_id, tenant_id, principal_id,
          tool_version, cache_state, result_hash, payload_ref
        ) VALUES ($1, $2, $3, $4, $5, $6, 'reusable', $7, $8)
+       ON CONFLICT (tool_execution_id) DO NOTHING
        RETURNING ${RESULT_REFERENCE_COLUMNS}`,
       [
         resultRefId,
@@ -114,8 +115,11 @@ export class PgResultReferenceStore implements ResultReferenceStore {
         resultReference.payloadRef,
       ]
     );
-    const row = inserted.rows[0];
-    if (!row) throw new Error("Result reference insert returned no row");
+    // Writing the same result again for an execution, e.g. after the commit
+    // write failed (design §6.6), reuses the stored reference; any other
+    // result for that execution is a conflict.
+    const row = inserted.rows[0] ?? (await this.findSameResult(input, resultReference.resultHash));
+    if (!row) throw new Error("Result reference conflicts with the stored result of this execution");
     return {
       ...mapResultReference(row),
       ...(resultReference.externalSystemNamespace
@@ -125,6 +129,31 @@ export class PgResultReferenceStore implements ResultReferenceStore {
         ? { externalOperationId: resultReference.externalOperationId }
         : {}),
     };
+  }
+
+  private async findSameResult<TResult>(
+    input: SaveResultReferenceInput<TResult>,
+    resultHash: string
+  ): Promise<ResultReferenceRow | undefined> {
+    const existing = await this.db.query<ResultReferenceRow>(
+      `SELECT ${RESULT_REFERENCE_COLUMNS}
+       FROM result_references
+       WHERE tool_execution_id = $1
+         AND scope_id = $2
+         AND tenant_id = $3
+         AND principal_id = $4
+         AND tool_version = $5
+         AND result_hash = $6`,
+      [
+        input.toolExecutionId,
+        input.scope.scopeId,
+        input.scope.tenantId,
+        input.scope.principalId,
+        input.toolVersion,
+        resultHash,
+      ]
+    );
+    return existing.rows[0];
   }
 
   async resolve<TResult>(

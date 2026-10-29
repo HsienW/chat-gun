@@ -80,8 +80,8 @@ function createStep(
 
 function envelopeError(envelope: StructuredToolResultEnvelope): StepError {
   const outcome = envelope.outcome;
-  if (outcome.type === "succeeded") {
-    throw new Error("Cannot derive a failure from a successful Tool result");
+  if (outcome.type === "succeeded" || outcome.type === "deduplicated") {
+    throw new Error("Cannot derive a failure from a successful or deduplicated Tool result");
   }
   if (outcome.type === "cancelled") {
     return {

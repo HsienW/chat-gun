@@ -4,10 +4,12 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { interrupt } from "@langchain/langgraph";
 
 import { getGovernedToolExecutor } from "../../platform/tool-governance.js";
+import type { ExecutionContext } from "../execution-context/execution-context.js";
 import {
   readExecutionContext,
   withExecutionContext,
 } from "../execution-context/read-execution-context.js";
+import { createToolDispatchStepId } from "../execution-context/tool-call-context.js";
 import type { GovernedToolOutcome } from "../side-effect/governed-outcome.js";
 import {
   createConfirmationInterruptId,
@@ -22,13 +24,28 @@ import {
   parseConfirmationResume,
   toConfirmationInterruptPayload,
   type AuthorizationConfirmationStore,
+  type AuthorizationConfirmationWithdrawalStore,
+  type ConfirmationConsumeResult,
+  type ConfirmationAuditSink,
   type ConfirmationRequiredDescriptor,
 } from "./confirmation.js";
+
+export type ConfirmationOutcome = "denied" | "expired" | "withdrawn";
+
+export interface ConfirmationOutcomeRecord {
+  toolCallId: string;
+  outcome: ConfirmationOutcome;
+}
 
 export interface AuthorizationGraphToolCall {
   toolName: string;
   toolCallId: string;
   input: unknown;
+  /**
+   * Set only by the gate or confirmation node from a server-side authorization
+   * decision; never derived from model output.
+   */
+  authorizationDecisionId?: string;
 }
 
 export interface AuthorizationGraphState {
@@ -36,13 +53,68 @@ export interface AuthorizationGraphState {
   toolQueue: AuthorizationGraphToolCall[];
   activeToolCall?: AuthorizationGraphToolCall | null;
   pendingAuthorization?: ConfirmationRequiredDescriptor | null;
+  /** Written only when `confirmationOutcome` is enabled; graphs without the option never see it. */
+  confirmationOutcome?: ConfirmationOutcomeRecord | null;
 }
 
 export interface CreateToolAuthorizationGraphNodesInput {
   tools: readonly StructuredToolInterface[];
   confirmationStore: AuthorizationConfirmationStore;
+  confirmationAudit?: ConfirmationAuditSink;
   interruptManifestRepository: InterruptManifestRepository;
   executionManifest: ExecutionManifestRef;
+  /**
+   * Opt-in machine-readable confirmation outcome. Disabled by default so existing
+   * graphs keep their tool message content byte-for-byte.
+   */
+  confirmationOutcome?: {
+    statusReader: Pick<AuthorizationConfirmationWithdrawalStore, "findStatus">;
+  };
+  /**
+   * Opt-in record written before the approval exists. When it fails, no
+   * approval or interrupt is created and the call ends with `unavailableErrorCode`.
+   */
+  confirmationRequestRecorder?: ConfirmationRequestRecorder;
+}
+
+export interface ConfirmationRequestRecorder {
+  record(input: {
+    descriptor: ConfirmationRequiredDescriptor;
+    call: AuthorizationGraphToolCall;
+    executionContext: ExecutionContext;
+  }): Promise<void>;
+  unavailableErrorCode: string;
+}
+
+/** Maps a non-approved consume result to an outcome without parsing error strings. */
+export async function resolveConfirmationOutcome(
+  consumed: ConfirmationConsumeResult,
+  descriptor: ConfirmationRequiredDescriptor,
+  statusReader: Pick<AuthorizationConfirmationWithdrawalStore, "findStatus">
+): Promise<ConfirmationOutcome | undefined> {
+  if (consumed.ok) return consumed.status === "denied" ? "denied" : undefined;
+  if (consumed.reasonCode === "CONFIRMATION_TIMEOUT") return "expired";
+  if (consumed.reasonCode !== "CONFIRMATION_REPLAYED_OR_EXPIRED") return undefined;
+  const current = await statusReader
+    .findStatus({
+      approvalId: descriptor.approvalId,
+      decisionId: descriptor.decisionId,
+    })
+    .catch(() => null);
+  if (!current) return undefined;
+  if (current.withdrawn) return "withdrawn";
+  if (current.status === "expired") return "expired";
+  return current.status === "denied" ? "denied" : undefined;
+}
+
+function withAuthorizationDecision(
+  call: AuthorizationGraphToolCall,
+  decisionId: string | undefined
+): AuthorizationGraphToolCall {
+  const { authorizationDecisionId: _ignored, ...base } = call;
+  return decisionId === undefined
+    ? base
+    : { ...base, authorizationDecisionId: decisionId };
 }
 
 function extractToolCalls(messages: readonly unknown[]): AuthorizationGraphToolCall[] {
@@ -63,6 +135,7 @@ function errorCode(outcome: GovernedToolOutcome<unknown>): string {
   if (outcome.type === "succeeded") return "";
   if (outcome.type === "cancelled") return "TOOL_EXECUTION_CANCELLED";
   if (outcome.type === "confirmation_required") return "REQUIRES_CONFIRMATION";
+  if (outcome.type === "deduplicated") return "SIDE_EFFECT_CLAIM_NOT_ACQUIRED";
   return outcome.errorCode;
 }
 
@@ -83,13 +156,27 @@ function toolMessage(
 
 function executionConfig(
   config: RunnableConfig,
-  call: AuthorizationGraphToolCall
+  call: AuthorizationGraphToolCall,
+  options: { dispatchStep?: boolean } = {}
 ): RunnableConfig {
   const context = readExecutionContext(undefined, config, "production");
   const compatibleConfig: Record<string, unknown> = { ...config };
+  // Only dispatch gets a step: the gate leaves it unset so the approval and its
+  // manifest never point at a step the dispatch has not created (design §6.16).
   const enriched = withExecutionContext(compatibleConfig, {
     ...context,
     toolCallId: call.toolCallId,
+    ...(options.dispatchStep
+      ? {
+          stepId: createToolDispatchStepId({
+            taskId: context.taskId,
+            nodeName: "physical_dispatch",
+            toolName: call.toolName,
+            toolCallId: call.toolCallId,
+            input: call.input,
+          }),
+        }
+      : {}),
   });
   if (
     enriched.configurable === null ||
@@ -140,6 +227,23 @@ export function createToolAuthorizationGraphNodes(
       const descriptor = confirmationRequiredDescriptorSchema.parse(
         outcome.descriptor
       );
+      const recorder = input.confirmationRequestRecorder;
+      if (recorder !== undefined) {
+        try {
+          await recorder.record({
+            descriptor,
+            call,
+            executionContext: readExecutionContext(undefined, config, "production"),
+          });
+        } catch {
+          return {
+            messages: [toolMessage(call, { errorCode: recorder.unavailableErrorCode })],
+            toolQueue: remaining,
+            activeToolCall: null,
+            pendingAuthorization: null,
+          };
+        }
+      }
       await input.confirmationStore.upsertPending(descriptor);
       await input.interruptManifestRepository.create(
         createConfirmationInterruptManifest({
@@ -163,7 +267,7 @@ export function createToolAuthorizationGraphNodes(
     }
     return {
       toolQueue: remaining,
-      activeToolCall: call,
+      activeToolCall: withAuthorizationDecision(call, outcome.decisionId),
       pendingAuthorization: null,
     };
   }
@@ -203,15 +307,35 @@ export function createToolAuthorizationGraphNodes(
       throw new Error("Confirmation interrupt manifest is unavailable or incompatible");
     }
 
-    const resume = parseConfirmationResume(
-      interrupt(toConfirmationInterruptPayload(descriptor))
-    );
     const context = readExecutionContext(undefined, config, "production");
-    const consumed = await input.confirmationStore.consume({
-      descriptor,
-      resume,
-      executionContext: { ...context, toolCallId: call.toolCallId },
-    });
+    const rejectionCode = manifest.status !== "waiting"
+      ? "CONFIRMATION_REPLAYED_OR_EXPIRED"
+      : context.threadId !== descriptor.threadId
+        ? "CONFIRMATION_BINDING_MISMATCH"
+        : undefined;
+    let consumed: ConfirmationConsumeResult;
+    if (rejectionCode !== undefined) {
+      // Isolate both synchronous and asynchronous sink failures from rejection.
+      await Promise.resolve().then(() => input.confirmationAudit?.record(
+        "authorization.confirmation.rejected",
+        {
+          decisionId: descriptor.decisionId,
+          reasonCode: rejectionCode,
+          waitingRunId: descriptor.runId,
+          resumeRunId: context.runId,
+        }
+      )).catch(() => undefined);
+      consumed = { ok: false, reasonCode: rejectionCode };
+    } else {
+      const resume = parseConfirmationResume(
+        interrupt(toConfirmationInterruptPayload(descriptor))
+      );
+      consumed = await input.confirmationStore.consume({
+        descriptor,
+        resume,
+        executionContext: { ...context, toolCallId: call.toolCallId },
+      });
+    }
     if (!consumed.ok || consumed.status !== "approved") {
       if (consumed.ok && consumed.status === "denied") {
         await input.interruptManifestRepository.transitionStatus({
@@ -226,16 +350,26 @@ export function createToolAuthorizationGraphNodes(
           nextStatus: "expired",
         });
       }
+      const errorCode = consumed.ok ? "CONFIRMATION_CANCELLED" : consumed.reasonCode;
+      const outcome = input.confirmationOutcome
+        ? await resolveConfirmationOutcome(
+            consumed,
+            descriptor,
+            input.confirmationOutcome.statusReader
+          )
+        : undefined;
+      if (outcome === undefined) {
+        return {
+          messages: [toolMessage(call, { errorCode })],
+          activeToolCall: null,
+          pendingAuthorization: null,
+        };
+      }
       return {
-        messages: [
-          toolMessage(call, {
-            errorCode: consumed.ok
-              ? "CONFIRMATION_CANCELLED"
-              : consumed.reasonCode,
-          }),
-        ],
+        messages: [toolMessage(call, { errorCode, confirmationOutcome: outcome })],
         activeToolCall: null,
         pendingAuthorization: null,
+        confirmationOutcome: { toolCallId: call.toolCallId, outcome },
       };
     }
     await input.interruptManifestRepository.transitionStatus({
@@ -243,7 +377,10 @@ export function createToolAuthorizationGraphNodes(
       expectedStatus: "waiting",
       nextStatus: "resumed",
     });
-    return { activeToolCall: call, pendingAuthorization: null };
+    return {
+      activeToolCall: withAuthorizationDecision(call, descriptor.decisionId),
+      pendingAuthorization: null,
+    };
   }
 
   async function physicalDispatch(
@@ -262,7 +399,10 @@ export function createToolAuthorizationGraphNodes(
     }
     const outcome = await executor.executeAuthorizedTyped(
       call.input,
-      executionConfig(config, call)
+      executionConfig(config, call, { dispatchStep: true }),
+      call.authorizationDecisionId === undefined
+        ? undefined
+        : { decisionId: call.authorizationDecisionId }
     );
     return {
       messages: [

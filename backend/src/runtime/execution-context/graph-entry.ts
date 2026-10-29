@@ -12,6 +12,15 @@ interface CheckpointReader {
   getState(config: RunnableConfig): Promise<{ values: unknown }>;
 }
 
+/** Reads the candidate context before admission; graphs keep their own development switch. */
+export type GraphEntryContextReader = (input: unknown, config: RunnableConfig) => ExecutionContext;
+
+function readEntryContext(input: unknown, config: RunnableConfig): ExecutionContext {
+  return process.env.NODE_ENV === "development" && process.env.EXECUTION_CONTEXT_DEV_ENABLED === "true"
+    ? readDevelopmentExecutionContext(input, config)
+    : readExecutionContext(input, config, "production");
+}
+
 const ENTRY_OWNED_KEYS = new Set([
   "execution_context", "taskId", "task_id", "stepId", "step_id",
   "toolCallId", "tool_call_id", "toolExecutionId", "tool_execution_id",
@@ -30,7 +39,11 @@ function entryConfig(config: unknown): RunnableConfig {
   };
 }
 
-export function createGraphEntryContextResolver(graph: CheckpointReader, admission: GraphTaskAdmission) {
+export function createGraphEntryContextResolver(
+  graph: CheckpointReader,
+  admission: GraphTaskAdmission,
+  readContext: GraphEntryContextReader = readEntryContext,
+) {
   return async (input: unknown, config: unknown): Promise<ExecutionContext> => {
     const prepared = entryConfig(config);
     prepared.signal?.throwIfAborted();
@@ -39,9 +52,7 @@ export function createGraphEntryContextResolver(graph: CheckpointReader, admissi
       ...prepared,
       configurable: { ...prepared.configurable, task_id: candidateTaskId },
     };
-    const candidate = process.env.NODE_ENV === "development" && process.env.EXECUTION_CONTEXT_DEV_ENABLED === "true"
-      ? readDevelopmentExecutionContext(input, candidateConfig)
-      : readExecutionContext(input, candidateConfig, "production");
+    const candidate = readContext(input, candidateConfig);
     const isResume = input === null || input === undefined || isCommand(input);
     let resumeTaskId: string | undefined;
     if (isResume) {

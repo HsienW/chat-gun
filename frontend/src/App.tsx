@@ -1,10 +1,30 @@
 import { useStream } from '@langchain/langgraph-sdk/react';
 import type { Message } from '@langchain/langgraph-sdk';
-import { useState, useEffect, useRef, useCallback, useMemo, useReducer } from 'react';
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+  useReducer,
+  type Dispatch,
+  type SetStateAction,
+} from 'react';
+
+import { House } from 'lucide-react';
 
 import { WelcomeScreen } from '@/components/WelcomeScreen';
 import { ChatMessagesView } from '@/components/ChatMessagesView';
 import { ChatSettings } from '@/components/ChatSettings';
+import { HomeScreen } from '@/components/HomeScreen';
+import { LeaveConfirmDialog } from '@/components/LeaveConfirmDialog';
+import { ModeSwitcher } from '@/components/ModeSwitcher';
+import {
+  getEntryDefinition,
+  resolveEntryAssistant,
+  type EntryId,
+  type EntryState,
+} from '@/lib/entries';
 import {
   extractAgentRuntimeEvents,
   extractClarificationInterruptId,
@@ -35,13 +55,13 @@ import {
 } from '@/lib/stream-activity-state';
 import type { StreamActivityState } from '@/lib/stream-activity-state';
 import type { ProcessedImageAttachment } from '@/lib/image-upload';
-import { AgentId, DEFAULT_AGENT } from '@/types/agents';
+import { AgentId } from '@/types/agents';
 import {
   formatErrorEnvelope,
   parseErrorEnvelope,
   parseRateLimitError,
 } from '@/types/errors';
-import { getAgentById, isValidAgentId } from '@/lib/agents';
+import { getAgentById } from '@/lib/agents';
 import {
   classifyStreamError,
   isStreamAbortError,
@@ -51,6 +71,24 @@ import {
   parseIdentityFailure,
   type IdentityFailure,
 } from '@/lib/identity-lifecycle';
+import { CommercePanel } from '@/components/commerce/CommercePanel';
+import {
+  createToolConfirmationResume,
+  parseCommerceCard,
+  parseOperationSnapshot,
+  parseToolConfirmationInterrupt,
+  type ToolConfirmationDecision,
+  type ToolConfirmationRequest,
+} from '@/lib/commerce-cards';
+import type {
+  ConfirmationSubmission,
+  ConfirmationSubmitError,
+} from '@/lib/commerce-labels';
+import {
+  commerceReducer,
+  createInitialCommerceState,
+  type TrackedOperation,
+} from '@/lib/commerce-state';
 
 const STREAM_ERROR_MESSAGE_ID = 'stream-error';
 const WEATHER_CLARIFICATION_AI_MESSAGE_ID = 'weather-clarification-interrupt-ai';
@@ -111,6 +149,16 @@ function findArchiveMessageId(
   })?.id;
 }
 
+function toConfirmationSubmitError(error: unknown): ConfirmationSubmitError {
+  const envelope =
+    parseErrorEnvelope(error) ||
+    parseErrorEnvelope(error instanceof Error ? error.message : String(error));
+  return {
+    kind: classifyStreamError(error),
+    ...(envelope ? { code: envelope.error.code } : {}),
+  };
+}
+
 function getCurrentFinalAssistantMessageId(messages: Message[]): string | undefined {
   const lastMessage = messages[messages.length - 1];
   return lastMessage?.type === 'ai' ? lastMessage.id : undefined;
@@ -143,22 +191,119 @@ function createWeatherClarificationDisplayMessages(
   ] as Message[];
 }
 
+const WORKSPACE_LABELS = {
+  home: '回首頁',
+  homeLockedHint: '回覆進行中或審批送出中無法離開，請先取消',
+} as const;
+
+/** Session-wide state that survives entry switches (spec: rate limit and identity). */
+interface SessionGuards {
+  rateLimitRetryAfter: number | null;
+  setRateLimitRetryAfter: Dispatch<SetStateAction<number | null>>;
+  setIdentityFailure: (failure: IdentityFailure | undefined) => void;
+}
+
+interface ChatWorkspaceProps extends SessionGuards {
+  entry: EntryId;
+  /** `next === entry` starts a new session in the same entry. */
+  onNavigate: (next: EntryState) => void;
+}
+
 export default function App() {
+  const [entry, setEntry] = useState<EntryState>('home');
+  const [sessionKey, setSessionKey] = useState(0);
+  const [rateLimitRetryAfter, setRateLimitRetryAfter] = useState<number | null>(null);
+  const [identityFailure, setIdentityFailure] = useState<IdentityFailure | undefined>();
+
+  const isRateLimited = rateLimitRetryAfter !== null;
+
+  useEffect(() => {
+    if (!isRateLimited) return;
+
+    const interval = window.setInterval(() => {
+      setRateLimitRetryAfter((current) => {
+        if (current === null || current <= 1) return null;
+        return current - 1;
+      });
+    }, 1_000);
+
+    return () => window.clearInterval(interval);
+  }, [isRateLimited]);
+
+  // Every entry visit is a new session: remounting resets the stream, thread and
+  // all workspace state through one path (design D3/D9).
+  const navigate = useCallback((next: EntryState) => {
+    setEntry(next);
+    if (next !== 'home') setSessionKey((key) => key + 1);
+  }, []);
+
+  return (
+    <div className="flex h-screen bg-background text-foreground font-sans antialiased">
+      <main className="flex-1 flex flex-col max-w-4xl mx-auto w-full min-h-0 pb-16">
+        <ChatSettings
+          identityFailure={identityFailure}
+          accountStatus={identityFailure?.code === 'IDENTITY_ACCOUNT_SUSPENDED'
+            ? 'suspended'
+            : identityFailure?.code === 'IDENTITY_DELETION_PENDING'
+              ? 'deletion_pending'
+              : undefined}
+          sessionStatus={identityFailure?.code === 'IDENTITY_SESSION_EXPIRED'
+            ? 'expired'
+            : identityFailure?.code === 'IDENTITY_REVOKED_CREDENTIAL'
+              ? 'revoked'
+              : undefined}
+        />
+        {entry === 'home' ? (
+          <HomeScreen onSelectEntry={navigate} />
+        ) : (
+          <ChatWorkspace
+            key={sessionKey}
+            entry={entry}
+            onNavigate={navigate}
+            rateLimitRetryAfter={rateLimitRetryAfter}
+            setRateLimitRetryAfter={setRateLimitRetryAfter}
+            setIdentityFailure={setIdentityFailure}
+          />
+        )}
+      </main>
+    </div>
+  );
+}
+
+function ChatWorkspace({
+  entry,
+  onNavigate,
+  rateLimitRetryAfter,
+  setRateLimitRetryAfter,
+  setIdentityFailure,
+}: ChatWorkspaceProps) {
   const [streamActivityState, dispatchStreamActivity] = useReducer(
     streamActivityReducer,
     undefined,
     createInitialStreamActivityState
   );
-  const [selectedAgentId, setSelectedAgentId] = useState(DEFAULT_AGENT);
+  const [deepResearchEnabled, setDeepResearchEnabled] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState<EntryState | null>(null);
   const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
-  const [rateLimitRetryAfter, setRateLimitRetryAfter] = useState<number | null>(null);
   const [cancelledMessage, setCancelledMessage] = useState<Message | null>(null);
-  const [identityFailure, setIdentityFailure] = useState<IdentityFailure | undefined>();
   const [weatherClarificationMessages, setWeatherClarificationMessages] =
     useState<Message[] | null>(null);
   const [isDispatching, setIsDispatching] = useState(false);
+  const [commerceState, dispatchCommerce] = useReducer(
+    commerceReducer,
+    undefined,
+    createInitialCommerceState
+  );
+  const [confirmationSubmission, setConfirmationSubmission] = useState<
+    ConfirmationSubmission | undefined
+  >();
+  const [lastConfirmationRequest, setLastConfirmationRequest] = useState<
+    ToolConfirmationRequest | undefined
+  >();
+  const confirmationSubmissionRef = useRef<ConfirmationSubmission | undefined>(undefined);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const selectedAgentIdRef = useRef(selectedAgentId);
+  const targetAgentId = resolveEntryAssistant(entry, deepResearchEnabled);
+  const targetAgentIdRef = useRef(targetAgentId);
   const messagesRef = useRef<Message[]>([]);
   const streamActivityStateRef = useRef(streamActivityState);
   const clarificationResumePendingRef = useRef(false);
@@ -176,6 +321,14 @@ export default function App() {
     setIsDispatching(false);
   }, []);
 
+  const updateConfirmationSubmission = useCallback(
+    (submission: ConfirmationSubmission | undefined) => {
+      confirmationSubmissionRef.current = submission;
+      setConfirmationSubmission(submission);
+    },
+    []
+  );
+
   const beginDispatch = useCallback((): boolean => {
     if (dispatchingRef.current) return false;
     dispatchingRef.current = true;
@@ -184,67 +337,24 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    selectedAgentIdRef.current = selectedAgentId;
-  }, [selectedAgentId]);
+    targetAgentIdRef.current = targetAgentId;
+  }, [targetAgentId]);
 
   useEffect(() => {
     streamActivityStateRef.current = streamActivityState;
   }, [streamActivityState]);
 
-  const isRateLimited = rateLimitRetryAfter !== null;
-
-  useEffect(() => {
-    if (!isRateLimited) return;
-
-    const interval = window.setInterval(() => {
-      setRateLimitRetryAfter((current) => {
-        if (current === null || current <= 1) return null;
-        return current - 1;
-      });
-    }, 1_000);
-
-    return () => window.clearInterval(interval);
-  }, [isRateLimited]);
-
-  const validateAgentId = useCallback((agentId: string): string => {
-    if (isValidAgentId(agentId)) {
-      return agentId;
-    }
-    console.warn(`Invalid agent ID: ${agentId}, falling back to default`);
-    return DEFAULT_AGENT;
-  }, []);
-
-  const handleAgentSwitch = useCallback(
-    (newAgentId: string) => {
-      const validAgentId = validateAgentId(newAgentId);
-      if (validAgentId !== selectedAgentId) {
-        setSelectedAgentId(validAgentId as AgentId);
-        dispatchStreamActivity({
-          type: 'resetForAgentOrSubmit',
-          clearHistorical: true,
-        });
-        setCancelledMessage(null);
-        setWeatherClarificationMessages(null);
-        clarificationResumePendingRef.current = false;
-        clarificationInterruptIdRef.current = undefined;
-        releaseDispatch();
-        activeRunHintRef.current = undefined;
-        runtimeEventBufferRef.current = new BoundedRuntimeEventBuffer();
-      }
-    },
-    [releaseDispatch, selectedAgentId, validateAgentId]
-  );
-
-  const handleAgentChange = useCallback(
-    (agentId: string) => {
-      const validAgentId = validateAgentId(agentId);
-      setSelectedAgentId(validAgentId as AgentId);
-    },
-    [validateAgentId]
-  );
-
   const handleStreamError = useCallback((error: unknown) => {
     releaseDispatch();
+    const submission = confirmationSubmissionRef.current;
+    if (submission?.status === 'submitting') {
+      // The decision is not assumed to have taken effect; the card stays open.
+      updateConfirmationSubmission({
+        approvalId: submission.approvalId,
+        status: 'failed',
+        error: toConfirmationSubmitError(error),
+      });
+    }
     if (clarificationResumePendingRef.current) {
       setWeatherClarificationMessages(null);
     }
@@ -277,11 +387,15 @@ export default function App() {
       archiveMessageId: STREAM_ERROR_MESSAGE_ID,
     });
     console.error('LangGraph stream error:', error);
-  }, [releaseDispatch]);
+  }, [releaseDispatch, setIdentityFailure, setRateLimitRetryAfter, updateConfirmationSubmission]);
 
   const handleStreamFinish = useCallback((event: unknown) => {
     void event;
     releaseDispatch();
+    // From here the server thread state decides what the operation shows.
+    if (confirmationSubmissionRef.current?.status === 'submitting') {
+      updateConfirmationSubmission(undefined);
+    }
     if (clarificationResumePendingRef.current) {
       setWeatherClarificationMessages(null);
     }
@@ -291,7 +405,7 @@ export default function App() {
       messagesLengthAtTerminal: messagesRef.current.length,
       archiveMessageId: getCurrentFinalAssistantMessageId(messagesRef.current),
     });
-  }, [releaseDispatch]);
+  }, [releaseDispatch, updateConfirmationSubmission]);
 
   const handleStreamUpdate = useCallback((event: Record<string, unknown>) => {
     releaseDispatch();
@@ -325,7 +439,7 @@ export default function App() {
       setWeatherClarificationMessages(null);
     }
 
-    const currentAgent = getAgentById(selectedAgentIdRef.current);
+    const currentAgent = getAgentById(targetAgentIdRef.current);
     if (!currentAgent?.showActivityTimeline) return;
 
     const versionedEvents = extractIncomingRuntimeEventResults(event).flatMap(
@@ -356,10 +470,21 @@ export default function App() {
         return buffered.events.map(runtimeEnvelopeToAgentRuntimeEvent);
       }
     );
-    const processedEvents = [
-      ...extractAgentRuntimeEvents(event),
-      ...versionedEvents,
-    ].map(runtimeEventToProcessedEvent);
+    const runtimeEvents = [...extractAgentRuntimeEvents(event), ...versionedEvents];
+    const cards = runtimeEvents.flatMap((runtimeEvent) =>
+      runtimeEvent.type === 'agent.card.emit'
+        ? [
+            {
+              card: parseCommerceCard(runtimeEvent.cardType, runtimeEvent.payload),
+              runId: runtimeEvent.correlation?.runId,
+            },
+          ]
+        : []
+    );
+    if (cards.length > 0) {
+      dispatchCommerce({ type: 'cardsReceived', cards });
+    }
+    const processedEvents = runtimeEvents.map(runtimeEventToProcessedEvent);
 
     if (processedEvents.length > 0) {
       dispatchStreamActivity({
@@ -379,7 +504,7 @@ export default function App() {
     reasoning_model: string;
   }>({
     apiUrl: getLangGraphApiUrl(),
-    assistantId: selectedAgentId,
+    assistantId: targetAgentId,
     messagesKey: 'messages',
     onError: handleStreamError,
     onFinish: handleStreamFinish,
@@ -390,6 +515,93 @@ export default function App() {
   useEffect(() => {
     messagesRef.current = thread.messages;
   }, [thread.messages]);
+
+  // The server thread state is authoritative, including after a reload.
+  const threadHeadValues = thread.history?.at(-1)?.values;
+  useEffect(() => {
+    const operations = parseOperationSnapshot(threadHeadValues);
+    if (operations.length > 0) {
+      dispatchCommerce({ type: 'snapshotReceived', operations });
+    }
+  }, [threadHeadValues]);
+
+  const serverConfirmationRequest = useMemo(
+    () => parseToolConfirmationInterrupt(thread.interrupt?.value),
+    [thread.interrupt]
+  );
+  useEffect(() => {
+    if (serverConfirmationRequest) setLastConfirmationRequest(serverConfirmationRequest);
+  }, [serverConfirmationRequest]);
+  // The interrupt is hidden while a run streams; keep the last one so the card
+  // stays in place. It only renders for an operation still awaiting approval.
+  const confirmationRequest = serverConfirmationRequest ?? lastConfirmationRequest;
+
+  const handleConfirmationDecision = useCallback(
+    (request: ToolConfirmationRequest, decision: ToolConfirmationDecision) => {
+      if (rateLimitRetryAfter !== null) return;
+      if (!beginDispatch()) return;
+      dispatchStreamActivity({ type: 'resetForAgentOrSubmit' });
+      dispatchStreamActivity({ type: 'streamStarted' });
+      setStreamErrorMessage(null);
+      setCancelledMessage(null);
+      updateConfirmationSubmission({ approvalId: request.approvalId, status: 'submitting' });
+
+      try {
+        thread.submit(
+          null,
+          withInteractionRequestMetadata(
+            { command: { resume: createToolConfirmationResume(request, decision) } },
+            createInteractionRequestMetadata(activeRunHintRef.current)
+          )
+        );
+      } catch (error) {
+        releaseDispatch();
+        updateConfirmationSubmission({
+          approvalId: request.approvalId,
+          status: 'failed',
+          error: toConfirmationSubmitError(error),
+        });
+      }
+    },
+    [beginDispatch, rateLimitRetryAfter, releaseDispatch, thread, updateConfirmationSubmission]
+  );
+
+  const handleConfirmationCancel = useCallback(
+    (operation: TrackedOperation) => {
+      if (rateLimitRetryAfter !== null) return;
+      const approvalId = operation.card.operationRef.operationId;
+      if (!approvalId || !beginDispatch()) return;
+      dispatchStreamActivity({ type: 'resetForAgentOrSubmit' });
+      dispatchStreamActivity({ type: 'streamStarted' });
+      setStreamErrorMessage(null);
+      setCancelledMessage(null);
+      updateConfirmationSubmission({ approvalId, status: 'submitting' });
+
+      try {
+        // The backend withdraws by its checkpoint; targetRunId is only compared (design §6.2).
+        thread.submit(
+          {
+            kind: 'cancel',
+            ...(operation.approvalRunId ? { targetRunId: operation.approvalRunId } : {}),
+          },
+          withInteractionRequestMetadata(
+            {},
+            createInteractionRequestMetadata(activeRunHintRef.current, undefined, {
+              inputKind: 'cancel',
+            })
+          )
+        );
+      } catch (error) {
+        releaseDispatch();
+        updateConfirmationSubmission({
+          approvalId,
+          status: 'failed',
+          error: toConfirmationSubmitError(error),
+        });
+      }
+    },
+    [beginDispatch, rateLimitRetryAfter, releaseDispatch, thread, updateConfirmationSubmission]
+  );
 
   useEffect(() => {
     const pendingArchive = streamActivityState.pendingArchive;
@@ -414,18 +626,18 @@ export default function App() {
       submittedInputValue: string,
       effort: string,
       model: string,
-      agentId: string,
       attachments: ProcessedImageAttachment[]
     ) => {
       if (weatherClarificationMessages || rateLimitRetryAfter !== null) return;
 
-      const validAgentId = validateAgentId(agentId);
       if (!submittedInputValue.trim() && attachments.length === 0) return;
       if (!beginDispatch()) return;
 
-      handleAgentSwitch(validAgentId);
+      // Toggling deep research only changes the target; it never resets the
+      // workspace, so archived activity and the thread stay (design D4).
       dispatchStreamActivity({ type: 'resetForAgentOrSubmit' });
       dispatchStreamActivity({ type: 'streamStarted' });
+      dispatchCommerce({ type: 'turnStarted' });
       setStreamErrorMessage(null);
       setRateLimitRetryAfter(null);
       setCancelledMessage(null);
@@ -470,8 +682,8 @@ export default function App() {
       );
 
       try {
-        if (validAgentId === AgentId.DEEP_RESEARCHER) {
-          const runConfig = getAgentRunConfig(validAgentId, effort);
+        if (targetAgentId === AgentId.DEEP_RESEARCHER) {
+          const runConfig = getAgentRunConfig(targetAgentId, effort);
 
           thread.submit(
             {
@@ -491,10 +703,11 @@ export default function App() {
       }
     },
     [
-      validateAgentId,
       beginDispatch,
-      handleAgentSwitch,
       rateLimitRetryAfter,
+      setIdentityFailure,
+      setRateLimitRetryAfter,
+      targetAgentId,
       thread,
       weatherClarificationMessages,
       releaseDispatch,
@@ -530,7 +743,7 @@ export default function App() {
         throw error;
       }
     },
-    [beginDispatch, rateLimitRetryAfter, releaseDispatch, thread]
+    [beginDispatch, rateLimitRetryAfter, releaseDispatch, setRateLimitRetryAfter, thread]
   );
 
   const handleCancel = useCallback(() => {
@@ -608,55 +821,108 @@ export default function App() {
     }
   }, [displayMessages.length]);
 
+  const entryDefinition = getEntryDefinition(entry);
+  const isRunActive =
+    thread.isLoading || isDispatching || confirmationSubmission?.status === 'submitting';
+  const isAwaitingClarification = weatherClarificationMessages !== null;
+  // A waiting or failed approval keeps its card open until the server decides.
+  const hasPendingApproval = Object.values(commerceState.operations).some(
+    ({ card }) => card.state.known && card.state.value === 'awaiting_approval'
+  );
+
+  const requestNavigation = useCallback(
+    (next: EntryState) => {
+      if (isRunActive) return;
+      if (hasPendingApproval) {
+        setPendingNavigation(next);
+        return;
+      }
+      onNavigate(next);
+    },
+    [hasPendingApproval, isRunActive, onNavigate]
+  );
+  const confirmNavigation = useCallback(() => {
+    if (pendingNavigation === null) return;
+    onNavigate(pendingNavigation);
+  }, [onNavigate, pendingNavigation]);
+  const cancelNavigation = useCallback(() => setPendingNavigation(null), []);
+  const startNewConversation = useCallback(
+    () => requestNavigation(entry),
+    [entry, requestNavigation]
+  );
+
+  const deepResearch = entryDefinition.supportsDeepResearch
+    ? {
+        enabled: deepResearchEnabled,
+        locked: isRunActive || isAwaitingClarification,
+        onChange: setDeepResearchEnabled,
+      }
+    : undefined;
+
   return (
-    <div className="flex h-screen bg-background text-foreground font-sans antialiased">
-      <main className="flex-1 flex flex-col max-w-4xl mx-auto w-full min-h-0 pb-16">
-        <ChatSettings
-          identityFailure={identityFailure}
-          accountStatus={identityFailure?.code === 'IDENTITY_ACCOUNT_SUSPENDED'
-            ? 'suspended'
-            : identityFailure?.code === 'IDENTITY_DELETION_PENDING'
-              ? 'deletion_pending'
-              : undefined}
-          sessionStatus={identityFailure?.code === 'IDENTITY_SESSION_EXPIRED'
-            ? 'expired'
-            : identityFailure?.code === 'IDENTITY_REVOKED_CREDENTIAL'
-              ? 'revoked'
-              : undefined}
-        />
-        <div
-          className={`flex-1 min-h-0 ${
-            displayMessages.length === 0 ? 'flex' : ''
-          }`}
+    <>
+      <div className="fixed top-4 left-4 z-50 flex items-center gap-2">
+        <ModeSwitcher current={entry} locked={isRunActive} onSelect={requestNavigation} />
+        <button
+          type="button"
+          disabled={isRunActive}
+          title={isRunActive ? WORKSPACE_LABELS.homeLockedHint : undefined}
+          aria-label={WORKSPACE_LABELS.home}
+          onClick={() => requestNavigation('home')}
+          className="rounded-lg p-2 text-[#E7D9C1] hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
         >
-          {displayMessages.length === 0 ? (
-            <WelcomeScreen
-              handleSubmit={handleSubmit}
-              isLoading={thread.isLoading || isDispatching}
-              onCancel={handleCancel}
-              selectedAgent={selectedAgentId}
-              onAgentChange={handleAgentChange}
-            />
-          ) : (
-            <ChatMessagesView
-              messages={displayMessages}
-              isLoading={isChatLoading}
-              scrollAreaRef={scrollAreaRef}
-              onSubmit={handleSubmit}
-              onCancel={handleCancel}
-              liveActivityEvents={
-                isTerminalStreamLifecycle(streamActivityState.lifecycle)
-                  ? []
-                  : streamActivityState.liveActivityEvents
-              }
-              historicalActivities={streamActivityState.historicalActivities}
-              selectedAgentId={selectedAgentId}
-              onAgentChange={handleAgentChange}
-              onClarificationResume={handleClarificationResume}
-            />
-          )}
-        </div>
-      </main>
-    </div>
+          <House className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </div>
+      {pendingNavigation !== null && (
+        <LeaveConfirmDialog onConfirm={confirmNavigation} onCancel={cancelNavigation} />
+      )}
+      <div
+        className={`flex-1 min-h-0 ${
+          displayMessages.length === 0 ? 'flex' : ''
+        }`}
+      >
+        {displayMessages.length === 0 ? (
+          <WelcomeScreen
+            entry={entryDefinition}
+            handleSubmit={handleSubmit}
+            isLoading={thread.isLoading || isDispatching}
+            onCancel={handleCancel}
+            targetAgentId={targetAgentId}
+            deepResearch={deepResearch}
+            onNewConversation={startNewConversation}
+            newConversationDisabled={isRunActive}
+          />
+        ) : (
+          <ChatMessagesView
+            messages={displayMessages}
+            isLoading={isChatLoading}
+            scrollAreaRef={scrollAreaRef}
+            onSubmit={handleSubmit}
+            onCancel={handleCancel}
+            liveActivityEvents={
+              isTerminalStreamLifecycle(streamActivityState.lifecycle)
+                ? []
+                : streamActivityState.liveActivityEvents
+            }
+            historicalActivities={streamActivityState.historicalActivities}
+            targetAgentId={targetAgentId}
+            deepResearch={deepResearch}
+            onNewConversation={startNewConversation}
+            newConversationDisabled={isRunActive}
+            onClarificationResume={handleClarificationResume}
+            commercePanel={
+              <CommercePanel
+                state={commerceState}
+                confirmationRequest={confirmationRequest}
+                submission={confirmationSubmission}
+                onDecision={handleConfirmationDecision}
+                onCancelRequest={handleConfirmationCancel}
+              />
+            }
+          />
+        )}
+      </div>
+    </>
   );
 }

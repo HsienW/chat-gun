@@ -20,7 +20,7 @@ import {
   messageContentToDisplayText,
 } from '@/types/messages';
 import { ToolCall } from '@/types/tools';
-import type { ProcessedImageAttachment } from '@/lib/image-upload';
+import type { DeepResearchToggle, SubmitHandler } from '@/components/InputForm';
 import type {
   ClarificationReplyPayload,
   ClarificationResumeValue,
@@ -360,7 +360,7 @@ interface AiMessageBubbleProps {
   mdComponents: typeof mdComponents;
   handleCopy: (text: string, messageId: string) => void;
   copiedMessageId: string | null;
-  selectedAgentId: string;
+  targetAgentId: string;
   allMessages: Message[];
   onClarificationReply: (payload: ClarificationReplyPayload) => void;
   onClarificationCancel: () => void;
@@ -376,7 +376,7 @@ const AiMessageBubble = React.memo(function AiMessageBubble({
   mdComponents,
   handleCopy,
   copiedMessageId,
-  selectedAgentId,
+  targetAgentId,
   allMessages,
   onClarificationReply,
   onClarificationCancel,
@@ -401,14 +401,14 @@ const AiMessageBubble = React.memo(function AiMessageBubble({
     isLastGroup && isOverallLoading ? liveActivity : historicalActivity;
   const isLiveActivityForThisBubble = isLastGroup && isOverallLoading;
 
-  // 取得目前 agent configuration
+  // Live activity follows the current target; archived activity stays visible
+  // after the deep research toggle changes the target.
   const currentAgent = AVAILABLE_AGENTS.find(
-    (agent) => agent.id === selectedAgentId
+    (agent) => agent.id === targetAgentId
   );
-  const shouldShowActivity =
-    currentAgent?.showActivityTimeline &&
-    (isLiveActivityForThisBubble ||
-      (activityForThisBubble && activityForThisBubble.length > 0));
+  const shouldShowActivity = isLiveActivityForThisBubble
+    ? currentAgent?.showActivityTimeline
+    : Boolean(activityForThisBubble && activityForThisBubble.length > 0);
 
   // 檢查是否要對 DeepResearcher 隱藏 tool messages
   const shouldHideToolMessages = false;
@@ -496,7 +496,7 @@ const AiMessageBubble = React.memo(function AiMessageBubble({
         <Button
           variant="ghost"
           size="sm"
-          className="h-6 w-6 p-0 self-start mt-2 hover:bg-[#7A1E1E]/25 text-[#E7D9C1]/60 hover:text-[#E7D9C1]"
+          className="h-6 w-6 p-0 self-start mt-2 hover:bg-muted text-[#E7D9C1]/60 hover:text-[#E7D9C1]"
           onClick={() =>
             handleCopy(combinedTextContent, group.primaryMessage.id!)
           }
@@ -516,19 +516,17 @@ interface ChatMessagesViewProps {
   messages: Message[];
   isLoading: boolean;
   scrollAreaRef: React.RefObject<HTMLDivElement | null>;
-  onSubmit: (
-    inputValue: string,
-    effort: string,
-    model: string,
-    agentId: string,
-    attachments: ProcessedImageAttachment[]
-  ) => void;
+  onSubmit: SubmitHandler;
   onCancel: () => void;
   liveActivityEvents: ProcessedEvent[];
   historicalActivities: Record<string, ProcessedEvent[]>;
-  selectedAgentId: string;
-  onAgentChange: (agentId: string) => void;
+  targetAgentId: string;
+  deepResearch?: DeepResearchToggle;
+  onNewConversation: () => void;
+  newConversationDisabled: boolean;
   onClarificationResume?: (resumeValue: ClarificationResumeValue) => void;
+  /** Structured commerce cards and approvals, rendered after the messages. */
+  commercePanel?: React.ReactNode;
 }
 
 export function ChatMessagesView({
@@ -539,9 +537,12 @@ export function ChatMessagesView({
   onCancel,
   liveActivityEvents,
   historicalActivities,
-  selectedAgentId,
-  onAgentChange,
+  targetAgentId,
+  deepResearch,
+  onNewConversation,
+  newConversationDisabled,
   onClarificationResume,
+  commercePanel,
 }: ChatMessagesViewProps) {
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -611,7 +612,7 @@ export function ChatMessagesView({
                       mdComponents={mdComponents}
                       handleCopy={handleCopy}
                       copiedMessageId={copiedMessageId}
-                      selectedAgentId={selectedAgentId}
+                      targetAgentId={targetAgentId}
                       allMessages={messages}
                       onClarificationReply={handleClarificationReply}
                       onClarificationCancel={handleClarificationCancel}
@@ -621,13 +622,14 @@ export function ChatMessagesView({
               </div>
             );
           })}
+          {commercePanel}
           {isLoading &&
             (messageGroups.length === 0 ||
               messageGroups[messageGroups.length - 1].type === 'human') && (
               <div className="flex items-start gap-3 mt-3">
                 {(() => {
                   const currentAgent = AVAILABLE_AGENTS.find(
-                    (agent) => agent.id === selectedAgentId
+                    (agent) => agent.id === targetAgentId
                   );
                   const shouldShowActivity = currentAgent?.showActivityTimeline;
 
@@ -669,8 +671,10 @@ export function ChatMessagesView({
           isLoading={isLoading}
           onCancel={onCancel}
           hasHistory={messages.length > 0}
-          selectedAgent={selectedAgentId}
-          onAgentChange={onAgentChange}
+          targetAgentId={targetAgentId}
+          deepResearch={deepResearch}
+          onNewConversation={onNewConversation}
+          newConversationDisabled={newConversationDisabled}
         />
       </div>
     </div>

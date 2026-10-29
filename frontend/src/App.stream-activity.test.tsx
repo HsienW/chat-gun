@@ -34,13 +34,16 @@ vi.mock('@/components/WelcomeScreen', () => ({
       input: string,
       effort: string,
       model: string,
-      agentId: string,
       attachments: unknown[]
     ) => void;
     isLoading: boolean;
     onCancel: () => void;
+    deepResearch?: { onChange: (enabled: boolean) => void };
   }) => (
     <div data-testid="welcome-screen">
+      <button type="button" onClick={() => props.deepResearch?.onChange(true)}>
+        deep-research-on
+      </button>
       <div data-testid="welcome-loading">{props.isLoading ? 'loading' : 'idle'}</div>
       <button type="button" onClick={props.onCancel}>
         cancel
@@ -48,7 +51,7 @@ vi.mock('@/components/WelcomeScreen', () => ({
       <button
         type="button"
         onClick={() =>
-          props.handleSubmit('next question', 'standard', 'test-model', 'deep_researcher', [])
+          props.handleSubmit('next question', 'standard', 'test-model', [])
         }
       >
         submit
@@ -71,13 +74,16 @@ vi.mock('@/components/ChatMessagesView', () => ({
       input: string,
       effort: string,
       model: string,
-      agentId: string,
       attachments: unknown[]
     ) => void;
     liveActivityEvents: Array<{ title: string }>;
     historicalActivities: Record<string, Array<{ title: string }>>;
+    deepResearch?: { onChange: (enabled: boolean) => void };
   }) => (
     <div data-testid="chat-view">
+      <button type="button" onClick={() => props.deepResearch?.onChange(true)}>
+        deep-research-on
+      </button>
       <div data-testid="activity-bubble">{props.isLoading ? 'loading' : 'idle'}</div>
       <div data-testid="live-activity">
         {props.liveActivityEvents.map((event) => event.title).join('|')}
@@ -100,7 +106,7 @@ vi.mock('@/components/ChatMessagesView', () => ({
       <button
         type="button"
         onClick={() =>
-          props.onSubmit('next question', 'standard', 'test-model', 'deep_researcher', [])
+          props.onSubmit('next question', 'standard', 'test-model', [])
         }
       >
         submit-next
@@ -131,6 +137,13 @@ vi.mock('@/lib/agent-run-config', () => ({
 }));
 
 import App from './App';
+
+function renderApp() {
+  const result = render(<App />);
+  fireEvent.click(screen.getByRole('button', { name: /Gun Chat/ }));
+  fireEvent.click(screen.getByText('deep-research-on'));
+  return result;
+}
 
 const humanMessage = {
   type: 'human',
@@ -240,7 +253,7 @@ describe('App stream activity state', () => {
   });
 
   it('archives finished activity to the final assistant message when the id is already available', () => {
-    const { rerender } = render(<App />);
+    const { rerender } = renderApp();
 
     startStream();
     emitPlanEvent('Plan');
@@ -259,7 +272,7 @@ describe('App stream activity state', () => {
   });
 
   it('originates per-submit metadata and carries the latest authoritative run hint', () => {
-    render(<App />);
+    renderApp();
 
     act(() => {
       mocks.options?.onUpdateEvent?.({
@@ -300,7 +313,7 @@ describe('App stream activity state', () => {
   });
 
   it('resolves pending archive when the final assistant message id appears after finish', () => {
-    const { rerender } = render(<App />);
+    const { rerender } = renderApp();
 
     startStream();
     emitPlanEvent('Plan');
@@ -321,7 +334,7 @@ describe('App stream activity state', () => {
   });
 
   it('resumes weather clarification with Command(resume) and blocks regular submit', () => {
-    render(<App />);
+    renderApp();
 
     emitWeatherClarificationInterrupt();
     expect(screen.getByText(/Springfield, Illinois, United States/)).toBeInTheDocument();
@@ -356,7 +369,7 @@ describe('App stream activity state', () => {
   });
 
   it('resumes cancellation with a structured cancel signal', () => {
-    render(<App />);
+    renderApp();
 
     emitWeatherClarificationInterrupt();
     fireEvent.click(screen.getByText('resume-cancel'));
@@ -380,7 +393,7 @@ describe('App stream activity state', () => {
   });
 
   it('clears stale clarification once on the first non-interrupt resume event', () => {
-    render(<App />);
+    renderApp();
 
     emitWeatherClarificationInterrupt();
     fireEvent.click(screen.getByText('resume-candidate'));
@@ -396,7 +409,7 @@ describe('App stream activity state', () => {
   });
 
   it('clears stale clarification when a resume finishes without an update event', () => {
-    render(<App />);
+    renderApp();
 
     emitWeatherClarificationInterrupt();
     fireEvent.click(screen.getByText('resume-candidate'));
@@ -409,7 +422,7 @@ describe('App stream activity state', () => {
   });
 
   it('keeps error terminal activity archived once and ignores late events', () => {
-    const { rerender } = render(<App />);
+    const { rerender } = renderApp();
 
     startStream();
     emitPlanEvent('Plan');
@@ -438,7 +451,7 @@ describe('App stream activity state', () => {
   it('shows a rate limit countdown and restores submit when it expires', () => {
     vi.useFakeTimers();
     try {
-      render(<App />);
+      renderApp();
 
       act(() => {
         mocks.options?.onError?.({
@@ -474,7 +487,7 @@ describe('App stream activity state', () => {
   });
 
   it('keeps non-429 errors on the existing error display path', () => {
-    render(<App />);
+    renderApp();
 
     act(() => {
       mocks.options?.onError?.({
@@ -492,7 +505,7 @@ describe('App stream activity state', () => {
   });
 
   it('keeps cancelled activity archived once and ignores late events', () => {
-    const { rerender } = render(<App />);
+    const { rerender } = renderApp();
 
     startStream();
     emitPlanEvent('Plan');
@@ -511,7 +524,7 @@ describe('App stream activity state', () => {
   });
 
   it('blocks a same-tick double submit with a synchronous guard', () => {
-    render(<App />);
+    renderApp();
 
     fireEvent.click(screen.getByText('submit-next'));
     fireEvent.click(screen.getByText('submit-next'));
@@ -520,7 +533,7 @@ describe('App stream activity state', () => {
   });
 
   it('deduplicates versioned events and releases bounded out-of-order events', () => {
-    render(<App />);
+    renderApp();
     startStream();
     const second = createVersionedEvent({
       eventId: 'event-2',
@@ -544,7 +557,7 @@ describe('App stream activity state', () => {
 
   it('degrades unsupported major versions without crashing', () => {
     const observation = vi.spyOn(console, 'info').mockImplementation(() => undefined);
-    render(<App />);
+    renderApp();
     startStream();
 
     emitVersionedEvent(createVersionedEvent({ schemaVersion: '2.0.0' }));
@@ -560,7 +573,7 @@ describe('App stream activity state', () => {
   });
 
   it('drops a versioned event from a stale run after supersession', () => {
-    render(<App />);
+    renderApp();
     startStream();
     act(() => {
       mocks.options?.onUpdateEvent?.({

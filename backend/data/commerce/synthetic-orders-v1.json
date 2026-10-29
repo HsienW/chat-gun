@@ -1,0 +1,64 @@
+{
+  "provenance": {
+    "synthetic": true,
+    "datasetId": "synthetic-orders",
+    "datasetVersion": "v1",
+    "generatedAt": "2026-10-24",
+    "dataClassification": "commerce:internal-synthetic",
+    "description": "Synthetic orders for the mock order provider. No real customer, payment or address data."
+  },
+  "orders": [
+    {
+      "orderId": "ORD-1001",
+      "tenantId": "synthetic-tenant",
+      "ownerPrincipalId": "synthetic-shopper-a",
+      "status": "delivered",
+      "refundWindowEndsAt": "2099-12-31T23:59:59.000Z",
+      "lineItems": [
+        { "lineItemId": "LI-1001-1", "sku": "SKU-KETTLE-01", "quantity": 1 }
+      ]
+    },
+    {
+      "orderId": "ORD-1002",
+      "tenantId": "synthetic-tenant",
+      "ownerPrincipalId": "synthetic-shopper-a",
+      "status": "delivered",
+      "refundWindowEndsAt": "2099-12-31T23:59:59.000Z",
+      "lineItems": [
+        { "lineItemId": "LI-1002-1", "sku": "SKU-MUG-02", "quantity": 4 },
+        { "lineItemId": "LI-1002-2", "sku": "SKU-TEAPOT-03", "quantity": 1 },
+        { "lineItemId": "LI-1002-3", "sku": "SKU-COASTER-04", "quantity": 6 }
+      ]
+    },
+    {
+      "orderId": "ORD-1003",
+      "tenantId": "synthetic-tenant",
+      "ownerPrincipalId": "synthetic-shopper-a",
+      "status": "delivered",
+      "refundWindowEndsAt": "2020-01-31T23:59:59.000Z",
+      "lineItems": [
+        { "lineItemId": "LI-1003-1", "sku": "SKU-BLENDER-05", "quantity": 1 }
+      ]
+    },
+    {
+      "orderId": "ORD-1004",
+      "tenantId": "synthetic-tenant",
+      "ownerPrincipalId": "synthetic-shopper-a",
+      "status": "processing",
+      "refundWindowEndsAt": "2099-12-31T23:59:59.000Z",
+      "lineItems": [
+        { "lineItemId": "LI-1004-1", "sku": "SKU-TOASTER-06", "quantity": 1 }
+      ]
+    },
+    {
+      "orderId": "ORD-2001",
+      "tenantId": "synthetic-tenant",
+      "ownerPrincipalId": "synthetic-shopper-b",
+      "status": "delivered",
+      "refundWindowEndsAt": "2099-12-31T23:59:59.000Z",
+      "lineItems": [
+        { "lineItemId": "LI-2001-1", "sku": "SKU-KETTLE-01", "quantity": 2 }
+      ]
+    }
+  ]
+}

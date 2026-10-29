@@ -1,18 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
   AlertTriangle,
-  Bot,
   Brain,
-  Calculator,
   Cpu,
   ImagePlus,
-  MessageCircle,
   Search,
   Send,
   SquarePen,
   StopCircle,
   X,
-  Wrench,
   Zap,
 } from 'lucide-react';
 
@@ -25,7 +21,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { getAgentById, getVisibleAgents } from '@/lib/agents';
 import { FRONTEND_ERROR_MESSAGES } from '@/lib/error-messages';
 import {
   getImageUploadConfig,
@@ -38,19 +33,35 @@ import { isValidModelId } from '@/lib/models';
 import { AgentId } from '@/types/agents';
 import { AVAILABLE_MODELS, DEFAULT_MODEL } from '@/types/models';
 
+export type SubmitHandler = (
+  inputValue: string,
+  effort: string,
+  model: string,
+  attachments: ProcessedImageAttachment[]
+) => void;
+
+/** The explicit, user-controlled deep research switch of Gun Chat. */
+export interface DeepResearchToggle {
+  enabled: boolean;
+  locked: boolean;
+  onChange: (enabled: boolean) => void;
+}
+
+const DEEP_RESEARCH_LABELS = {
+  label: '深度研究',
+  lockedHint: '回覆進行中或等待澄清時無法切換深度研究',
+} as const;
+
 interface InputFormProps {
-  onSubmit: (
-    inputValue: string,
-    effort: string,
-    model: string,
-    agentId: string,
-    attachments: ProcessedImageAttachment[]
-  ) => void;
+  onSubmit: SubmitHandler;
   onCancel: () => void;
   isLoading: boolean;
   hasHistory: boolean;
-  selectedAgent: string;
-  onAgentChange: (agentId: string) => void;
+  /** The assistant the next message goes to, derived from the entry and the toggle. */
+  targetAgentId: string;
+  deepResearch?: DeepResearchToggle;
+  onNewConversation: () => void;
+  newConversationDisabled: boolean;
 }
 
 export const InputForm: React.FC<InputFormProps> = ({
@@ -58,8 +69,10 @@ export const InputForm: React.FC<InputFormProps> = ({
   onCancel,
   isLoading,
   hasHistory,
-  selectedAgent,
-  onAgentChange,
+  targetAgentId,
+  deepResearch,
+  onNewConversation,
+  newConversationDisabled,
 }) => {
   const [internalInputValue, setInternalInputValue] = useState('');
   const [effort, setEffort] = useState('medium');
@@ -72,8 +85,8 @@ export const InputForm: React.FC<InputFormProps> = ({
   const imageItemsRef = useRef<ImageUploadItem[]>([]);
   const activeUploadCountRef = useRef(0);
   const unmountedRef = useRef(false);
-  const supportsImageUpload = selectedAgent === AgentId.DEEP_RESEARCHER;
-  const visibleAgents = getVisibleAgents();
+  const supportsImageUpload = targetAgentId === AgentId.DEEP_RESEARCHER;
+  const deepResearchHintId = useId();
 
   useEffect(() => {
     unmountedRef.current = false;
@@ -185,7 +198,7 @@ export const InputForm: React.FC<InputFormProps> = ({
       .map((item) => item.attachment)
       .filter((attachment): attachment is ProcessedImageAttachment => Boolean(attachment));
     if (!internalInputValue.trim() && completedAttachments.length === 0) return;
-    onSubmit(internalInputValue, effort, model, selectedAgent, completedAttachments);
+    onSubmit(internalInputValue, effort, model, completedAttachments);
     setInternalInputValue('');
     imageItemsRef.current = [];
     setImageItems([]);
@@ -214,23 +227,7 @@ export const InputForm: React.FC<InputFormProps> = ({
   const canSubmitContent = internalInputValue.trim().length > 0 || completedAttachmentCount > 0;
   const isSubmitDisabled =
     !canSubmitContent || isLoading || hasPendingUploads || hasFailedUploads;
-  const selectedAgentInfo = getAgentById(selectedAgent);
-  const showEffortSelector = selectedAgent === AgentId.DEEP_RESEARCHER;
-
-  const getAgentIcon = (iconName: string) => {
-    switch (iconName) {
-      case 'search':
-        return <Search className="h-4 w-4 mr-2" />;
-      case 'message-circle':
-        return <MessageCircle className="h-4 w-4 mr-2" />;
-      case 'calculator':
-        return <Calculator className="h-4 w-4 mr-2" />;
-      case 'wrench':
-        return <Wrench className="h-4 w-4 mr-2" />;
-      default:
-        return <Bot className="h-4 w-4 mr-2" />;
-    }
-  };
+  const showEffortSelector = targetAgentId === AgentId.DEEP_RESEARCHER;
 
   const getModelIcon = (iconName: string, iconColor: string) => {
     switch (iconName) {
@@ -248,7 +245,7 @@ export const InputForm: React.FC<InputFormProps> = ({
   const selectContentClass =
     'bg-card border-border text-[#E7D9C1] cursor-pointer';
   const selectItemClass =
-    'hover:bg-[#7A1E1E]/25 focus:bg-[#7A1E1E]/25 cursor-pointer';
+    'hover:bg-muted focus:bg-muted cursor-pointer';
 
   return (
     <form onSubmit={handleInternalSubmit} className="flex flex-col gap-2 p-3">
@@ -279,13 +276,6 @@ export const InputForm: React.FC<InputFormProps> = ({
         </div>
       )}
 
-      {selectedAgentInfo && (
-        <div className="flex items-center gap-2 text-xs text-[#E7D9C1]/70 px-2">
-          <Bot className="h-3 w-3" />
-          使用 {selectedAgentInfo.name}: {selectedAgentInfo.description}
-        </div>
-      )}
-
       {supportsImageUpload && imageItems.length > 0 && (
         <div className="grid grid-cols-2 gap-2 px-2 sm:grid-cols-3">
           {imageItems.map((item) => (
@@ -295,7 +285,7 @@ export const InputForm: React.FC<InputFormProps> = ({
             >
               <button
                 type="button"
-                className="absolute right-1 top-1 rounded-full bg-black/60 p-1 text-[#F8F1E7] hover:bg-[#7A1E1E]"
+                className="absolute right-1 top-1 rounded-full bg-black/60 p-1 text-[#F8F1E7] hover:bg-muted"
                 onClick={() => removeImageItem(item.id)}
                 aria-label={FRONTEND_ERROR_MESSAGES.imageUpload.removeImageLabel(item.file.name)}
               >
@@ -349,7 +339,7 @@ export const InputForm: React.FC<InputFormProps> = ({
               type="button"
               variant="ghost"
               size="icon"
-              className="text-[#E7D9C1] hover:text-white hover:bg-[#7A1E1E]/25 p-2 cursor-pointer rounded-full transition-all duration-200"
+              className="text-[#E7D9C1] hover:text-white hover:bg-muted p-2 cursor-pointer rounded-full transition-all duration-200"
               disabled={isLoading || imageItems.length >= uploadConfig.maxFiles}
               onClick={() => fileInputRef.current?.click()}
               title={FRONTEND_ERROR_MESSAGES.imageUpload.uploadButtonTitle(uploadConfig.maxFiles)}
@@ -364,7 +354,7 @@ export const InputForm: React.FC<InputFormProps> = ({
               type="button"
               variant="ghost"
               size="icon"
-              className="text-[#E7D9C1] hover:text-white hover:bg-[#7A1E1E]/25 p-2 cursor-pointer rounded-full transition-all duration-200"
+              className="text-[#E7D9C1] hover:text-white hover:bg-muted p-2 cursor-pointer rounded-full transition-all duration-200"
               onClick={onCancel}
             >
               <StopCircle className="h-5 w-5" />
@@ -377,7 +367,7 @@ export const InputForm: React.FC<InputFormProps> = ({
               className={`${
                 isSubmitDisabled
                   ? 'text-[#E7D9C1]/35'
-                  : 'text-[#E7D9C1] hover:text-white hover:bg-[#7A1E1E]/25'
+                  : 'text-[#E7D9C1] hover:text-white hover:bg-muted'
               } p-2 cursor-pointer rounded-full transition-all duration-200 text-base`}
               disabled={isSubmitDisabled}
             >
@@ -389,33 +379,29 @@ export const InputForm: React.FC<InputFormProps> = ({
 
       <div className="flex items-center justify-between gap-2">
         <div className="flex flex-row flex-wrap gap-2">
-          {/* 暫時只開放 Deep Research；其他 Agent 程式碼保留，後續功能成熟後再逐步開放選項。 */}
-          {!hasHistory && visibleAgents.length > 1 && (
-            <div className={controlClass}>
-              <div className="flex flex-row items-center text-sm">
-                <Bot className="h-4 w-4 mr-2" />
-                Agent
-              </div>
-              <Select value={selectedAgent} onValueChange={onAgentChange}>
-                <SelectTrigger className="w-[150px] bg-transparent border-none cursor-pointer">
-                  <SelectValue placeholder="Agent" />
-                </SelectTrigger>
-                <SelectContent className={selectContentClass}>
-                  {visibleAgents.map((agent) => (
-                    <SelectItem
-                      key={agent.id}
-                      value={agent.id}
-                      className={selectItemClass}
-                    >
-                      <div className="flex items-center">
-                        {getAgentIcon(agent.icon)}
-                        {agent.name}
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+          {deepResearch && (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={deepResearch.enabled}
+              aria-describedby={deepResearch.locked ? deepResearchHintId : undefined}
+              disabled={deepResearch.locked}
+              title={deepResearch.locked ? DEEP_RESEARCH_LABELS.lockedHint : undefined}
+              onClick={() => deepResearch.onChange(!deepResearch.enabled)}
+              className={`flex items-center gap-2 rounded-xl rounded-t-sm border px-3 py-2 text-sm shadow-sm transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 ${
+                deepResearch.enabled
+                  ? 'border-[#9F3434] bg-[#7A1E1E]/40 text-[#F8F1E7]'
+                  : 'border-border bg-card/90 text-[#E7D9C1] hover:bg-muted'
+              }`}
+            >
+              <Search className="h-4 w-4" aria-hidden="true" />
+              {DEEP_RESEARCH_LABELS.label}
+              {deepResearch.locked && (
+                <span id={deepResearchHintId} className="sr-only">
+                  {DEEP_RESEARCH_LABELS.lockedHint}
+                </span>
+              )}
+            </button>
           )}
 
           {showEffortSelector && !hasHistory && (
@@ -472,9 +458,11 @@ export const InputForm: React.FC<InputFormProps> = ({
 
         {hasHistory && (
           <Button
-            className="bg-card border border-border text-[#E7D9C1] hover:bg-[#7A1E1E]/25 cursor-pointer rounded-xl rounded-t-sm"
+            className="bg-card border border-border text-[#E7D9C1] hover:bg-muted cursor-pointer rounded-xl rounded-t-sm"
             variant="default"
-            onClick={() => window.location.reload()}
+            type="button"
+            disabled={newConversationDisabled}
+            onClick={onNewConversation}
           >
             <SquarePen size={16} />
             新對話

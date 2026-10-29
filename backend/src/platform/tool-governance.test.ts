@@ -401,6 +401,44 @@ describe("GovernanceExecutor.executeTyped", () => {
     expect(executeTyped).toHaveBeenCalledWith({ value: "valid" }, undefined);
   });
 
+  it("keeps the legacy tool contract for deduplicated outcomes", async () => {
+    vi.stubEnv("TOOL_AUDIT_ENABLED", "false");
+    const invokeWith = async (outcome: unknown) => {
+      const [governedTool] = applyToolGovernance(
+        [createEchoTool("raw-result")],
+        undefined,
+        {
+          createExecutor: () => ({
+            executeTyped: vi.fn().mockResolvedValue(outcome),
+          }),
+        }
+      );
+      return governedTool.invoke({ value: "valid" });
+    };
+
+    await expect(
+      invokeWith({
+        type: "deduplicated",
+        reason: "committed_result_reused",
+        original: { businessEffectId: "effect-1" },
+        result: "reused-result",
+      })
+    ).resolves.toBe("reused-result");
+    const legacyClaimText = await invokeWith({
+      type: "rejected_before_dispatch",
+      errorCode: "SIDE_EFFECT_CLAIM_NOT_ACQUIRED",
+    });
+    for (const reason of ["in_flight_duplicate", "original_outcome_unknown"]) {
+      await expect(
+        invokeWith({
+          type: "deduplicated",
+          reason,
+          original: { businessEffectId: "effect-1" },
+        })
+      ).resolves.toBe(legacyClaimText);
+    }
+  });
+
   it("returns succeeded with the governed result", async () => {
     const executor = new GovernanceExecutor(
       createEchoTool("ok"),

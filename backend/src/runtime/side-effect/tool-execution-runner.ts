@@ -24,12 +24,15 @@ import {
 } from "../retry/retry-policy.js";
 import type {
   BusinessEffectLedger,
+  BusinessEffectRecord,
   PrepareSideEffectResult,
   ToolExecutionRecord,
   ToolExecutionStatus,
 } from "./business-effect-ledger.js";
 import {
   getToolExecutionTerminationCause,
+  type DeduplicatedOriginal,
+  type DeduplicationReason,
   type GovernedToolExecutor,
   type GovernedToolOutcome,
   type ToolExecutionTerminationCause,
@@ -42,8 +45,9 @@ import {
   type TrustedScope,
 } from "./identity.js";
 import { decideReconciliationAction } from "./reconciler.js";
+import type { ReconciliationTaskStore } from "./reconciliation-task-store.js";
 import type { ResultReferenceStore } from "./result-reference-store.js";
-import type { SideEffectToolDescriptor } from "./side-effect-descriptor.js";
+import type { ReconciliationResult, SideEffectToolDescriptor } from "./side-effect-descriptor.js";
 import type { ExecutionProfileEvidence } from "../tool-dispatch/execution-profile.js";
 
 export type ToolExecutionRunResult<TResult> =
@@ -52,6 +56,8 @@ export type ToolExecutionRunResult<TResult> =
       source: "live" | "cache" | "reconciled";
       result: TResult;
       toolExecutionId?: string;
+      /** Set when a committed result of another submission was reused. */
+      reusedFrom?: DeduplicatedOriginal;
     }
   | { type: "conflict"; errorCode: "SIDE_EFFECT_REPLAY_CONFLICT" }
   | {
@@ -65,6 +71,11 @@ export type ToolExecutionRunResult<TResult> =
         | "SIDE_EFFECT_PERSISTENCE_UNCERTAIN"
         | "SIDE_EFFECT_OUTPUT_VALIDATION_FAILED";
       toolExecutionId?: string;
+      /** Set when the claim was not acquired because the same effect is held. */
+      duplicateOf?: {
+        reason: Exclude<DeduplicationReason, "committed_result_reused">;
+        original: DeduplicatedOriginal;
+      };
     }
   | {
       type: "failed";
@@ -146,9 +157,14 @@ async function waitForBackoff(
   });
 }
 
+// Only the runtime produces deduplicated outcomes; a tool returning one breaks
+// the executor contract and is treated as a failure, never as success.
+const UNEXPECTED_DEDUPLICATED_OUTCOME = "TOOL_UNEXPECTED_DEDUPLICATED_OUTCOME";
+
 function errorCodeOf<TResult>(
   outcome: Exclude<GovernedToolOutcome<TResult>, { type: "succeeded" | "cancelled" }>
 ): string {
+  if (outcome.type === "deduplicated") return UNEXPECTED_DEDUPLICATED_OUTCOME;
   return outcome.type === "confirmation_required"
     ? "REQUIRES_CONFIRMATION"
     : outcome.errorCode;
@@ -168,13 +184,49 @@ function dispatchStateOf<TResult>(
   return "after";
 }
 
+const PERSISTENCE_UNCERTAIN = "SIDE_EFFECT_PERSISTENCE_UNCERTAIN";
+
+function isPersistenceUncertain<TResult>(result: ToolExecutionRunResult<TResult>): boolean {
+  return result.type === "deferred" && result.errorCode === PERSISTENCE_UNCERTAIN;
+}
+
 function outcomeErrorCode<TResult>(
   outcome: GovernedToolOutcome<TResult>
 ): string | undefined {
   if (outcome.type === "confirmation_required") return "REQUIRES_CONFIRMATION";
+  if (outcome.type === "deduplicated") return UNEXPECTED_DEDUPLICATED_OUTCOME;
   return outcome.type === "succeeded" || outcome.type === "cancelled"
     ? undefined
     : outcome.errorCode;
+}
+
+/**
+ * A submission held off by the same business effect. The duplicate reason is
+ * attached only while the original is in flight or has an unknown outcome.
+ */
+function claimNotAcquired<TResult>(
+  toolExecutionId: string,
+  original?: BusinessEffectRecord
+): ToolExecutionRunResult<TResult> {
+  const reason =
+    original?.commitState === "prepared" && original.releasedAt === undefined
+      ? "in_flight_duplicate"
+      : original?.commitState === "unknown"
+        ? "original_outcome_unknown"
+        : undefined;
+  return {
+    type: "deferred",
+    errorCode: "SIDE_EFFECT_CLAIM_NOT_ACQUIRED",
+    toolExecutionId,
+    ...(reason && original
+      ? {
+          duplicateOf: {
+            reason,
+            original: { businessEffectId: original.businessEffectId },
+          },
+        }
+      : {}),
+  };
 }
 
 function assertDescriptorMatchesIdentity<TInput, TResult>(
@@ -220,7 +272,9 @@ export class ToolExecutionRunner {
     private readonly ledger: BusinessEffectLedger,
     private readonly resultStore: ResultReferenceStore,
     observability: Partial<ToolExecutionRunnerObservability> = {},
-    private readonly timing: ToolExecutionRunnerTiming = defaultTiming
+    private readonly timing: ToolExecutionRunnerTiming = defaultTiming,
+    /** Opt-in: an outcome that stays unknown after reconciliation opens a durable task. */
+    private readonly reconciliationTasks?: ReconciliationTaskStore
   ) {
     this.observability = { ...defaultObservability, ...observability };
   }
@@ -351,6 +405,16 @@ export class ToolExecutionRunner {
       return this.resolveExistingExecution(existingExecution, input);
     }
 
+    // Authorization and cancellation are settled before the claim so that a
+    // rejected or cancelled call never leaves a business effect behind.
+    const preauthorization = await this.authorizeBeforeClaim(input);
+    if (preauthorization.type === "rejected") {
+      return preauthorization.result;
+    }
+    if (input.signal?.aborted) {
+      return { type: "cancelled", dispatchState: "before" };
+    }
+
     const businessEffectKey = hashBusinessEffectKey(
       input.descriptor.deriveBusinessEffectKey(input.input, input.scope)
     );
@@ -370,6 +434,9 @@ export class ToolExecutionRunner {
       callIndex: input.identity.callIndex,
       toolName: input.descriptor.toolName,
       toolVersion: input.descriptor.toolVersion,
+      ...(preauthorization.type === "authorized"
+        ? { decisionId: preauthorization.decisionId }
+        : {}),
     });
     if (prepareResult.type === "unavailable") {
       return { type: "deferred", errorCode: prepareResult.errorCode };
@@ -381,11 +448,10 @@ export class ToolExecutionRunner {
       return this.resolvePreparedCommitted(prepareResult, input);
     }
     if (prepareResult.type === "not_claimed") {
-      return {
-        type: "deferred",
-        errorCode: "SIDE_EFFECT_CLAIM_NOT_ACQUIRED",
-        toolExecutionId: prepareResult.execution.toolExecutionId,
-      };
+      return claimNotAcquired(
+        prepareResult.execution.toolExecutionId,
+        prepareResult.businessEffect
+      );
     }
 
     const correlation = {
@@ -414,11 +480,39 @@ export class ToolExecutionRunner {
         nextStatus: "executing",
       });
     } catch {
-      return {
-        type: "deferred",
-        errorCode: "SIDE_EFFECT_LEDGER_UNAVAILABLE",
-        toolExecutionId: prepareResult.execution.toolExecutionId,
-      };
+      return this.releaseOrUncertain(
+        input,
+        prepareResult.execution.toolExecutionId,
+        prepareResult.businessEffect.businessEffectId,
+        "prepared",
+        "rejected_before_dispatch",
+        {
+          type: "deferred",
+          errorCode: "SIDE_EFFECT_LEDGER_UNAVAILABLE",
+          toolExecutionId: prepareResult.execution.toolExecutionId,
+        }
+      );
+    }
+    if (preauthorization.type === "authorized") {
+      try {
+        await this.ledger.linkAuthorizationDecision({
+          toolExecutionId: prepareResult.execution.toolExecutionId,
+          decisionId: preauthorization.decisionId,
+        });
+      } catch {
+        return this.releaseOrUncertain(
+          input,
+          prepareResult.execution.toolExecutionId,
+          prepareResult.businessEffect.businessEffectId,
+          "executing",
+          "rejected_before_dispatch",
+          {
+            type: "deferred",
+            errorCode: "SIDE_EFFECT_LEDGER_UNAVAILABLE",
+            toolExecutionId: prepareResult.execution.toolExecutionId,
+          }
+        );
+      }
     }
 
     return this.observability.spanManager.withSpan(
@@ -445,6 +539,9 @@ export class ToolExecutionRunner {
     if (execution.requestHash !== input.requestHash) {
       return { type: "conflict", errorCode: "SIDE_EFFECT_REPLAY_CONFLICT" };
     }
+    if (execution.claimDisposition === "not_claimed") {
+      return this.resolveNotClaimedReplay(execution, input);
+    }
     if (execution.status !== "committed") {
       return {
         type: "deferred",
@@ -452,7 +549,157 @@ export class ToolExecutionRunner {
         toolExecutionId: execution.toolExecutionId,
       };
     }
+    if (
+      execution.terminationCause === "deduplicated" &&
+      execution.businessEffectId !== undefined
+    ) {
+      // Replay of a submission that reused another submission's result.
+      const snapshot = await this.ledger
+        .findBusinessEffectSnapshot(execution.businessEffectId)
+        .catch(() => null);
+      return this.resolveCommittedResult(execution, input, "cache", {
+        businessEffectId: execution.businessEffectId,
+        ...(snapshot?.committedExecution
+          ? { toolExecutionId: snapshot.committedExecution.toolExecutionId }
+          : {}),
+      });
+    }
     return this.resolveCommittedResult(execution, input, "cache");
+  }
+
+  /**
+   * A replayed submission that never claimed its effect is answered from the
+   * original effect's current state; it never triggers reconciliation.
+   */
+  private async resolveNotClaimedReplay<TInput, TResult>(
+    execution: ToolExecutionRecord,
+    input: ToolExecutionRunInput<TInput, TResult> & {
+      descriptor: SideEffectToolDescriptor<TInput, TResult>;
+    }
+  ): Promise<ToolExecutionRunResult<TResult>> {
+    if (execution.businessEffectId === undefined) {
+      return claimNotAcquired(execution.toolExecutionId);
+    }
+    let snapshot;
+    try {
+      snapshot = await this.ledger.findBusinessEffectSnapshot(
+        execution.businessEffectId
+      );
+    } catch {
+      return {
+        type: "deferred",
+        errorCode: "SIDE_EFFECT_LEDGER_UNAVAILABLE",
+        toolExecutionId: execution.toolExecutionId,
+      };
+    }
+    if (snapshot?.committedExecution) {
+      return this.resolveCommittedResult(
+        snapshot.committedExecution,
+        input,
+        "cache",
+        {
+          businessEffectId: snapshot.businessEffect.businessEffectId,
+          toolExecutionId: snapshot.committedExecution.toolExecutionId,
+        }
+      );
+    }
+    if (
+      snapshot?.businessEffect.commitState === "prepared" &&
+      snapshot.businessEffect.releasedAt !== undefined
+    ) {
+      return {
+        type: "failed",
+        errorCode: "SIDE_EFFECT_NOT_COMMITTED",
+        toolExecutionId: execution.toolExecutionId,
+      };
+    }
+    return claimNotAcquired(execution.toolExecutionId, snapshot?.businessEffect);
+  }
+
+  private async authorizeBeforeClaim<TInput, TResult>(
+    input: ToolExecutionRunInput<TInput, TResult>
+  ): Promise<
+    | { type: "not_required" }
+    | { type: "authorized"; decisionId: string }
+    | { type: "rejected"; result: ToolExecutionRunResult<TResult> }
+  > {
+    if (input.executor.authorizeTyped === undefined) {
+      return { type: "not_required" };
+    }
+    const unavailable = {
+      type: "rejected" as const,
+      result: { type: "failed" as const, errorCode: "AUTHORIZATION_UNAVAILABLE" },
+    };
+    if (input.executor.executeAuthorizedTyped === undefined) {
+      return unavailable;
+    }
+    let authorizationOutcome;
+    const authorizationStartedAt = performance.now();
+    try {
+      authorizationOutcome = await input.executor.authorizeTyped(
+        input.input,
+        this.createExecutionConfig(input)
+      );
+    } catch {
+      return unavailable;
+    } finally {
+      await this.recordLatency(
+        "tool.authorization.wait",
+        authorizationStartedAt,
+        input
+      );
+    }
+    if (authorizationOutcome.decisionId === undefined) {
+      return unavailable;
+    }
+    if (authorizationOutcome.type === "denied_by_authorization") {
+      return {
+        type: "rejected",
+        result: {
+          type: "failed",
+          errorCode: authorizationOutcome.errorCode,
+          decisionId: authorizationOutcome.decisionId,
+        },
+      };
+    }
+    if (authorizationOutcome.type === "confirmation_required") {
+      return {
+        type: "rejected",
+        result: {
+          type: "failed",
+          errorCode: "REQUIRES_CONFIRMATION",
+          decisionId: authorizationOutcome.decisionId,
+        },
+      };
+    }
+    return { type: "authorized", decisionId: authorizationOutcome.decisionId };
+  }
+
+  private createExecutionConfig<TInput, TResult>(
+    input: ToolExecutionRunInput<TInput, TResult>,
+    toolExecutionId?: string
+  ) {
+    const toolCallId = input.identity.logicalToolCallId ?? input.identity.toolCallId;
+    const legacyExecutionConfig = {
+      signal: input.signal,
+      configurable: {
+        ...(input.requestId ? { requestId: input.requestId } : {}),
+        ...(input.threadId ? { threadId: input.threadId } : {}),
+        runId: input.identity.runId,
+        ...(input.taskId ? { taskId: input.taskId } : {}),
+        stepId: input.identity.stepId,
+        ...(toolExecutionId ? { toolExecutionId } : {}),
+        toolCallId,
+      },
+    };
+    return input.executionContext
+      ? withExecutionContext(legacyExecutionConfig, {
+          ...input.executionContext,
+          stepId: input.identity.stepId,
+          ...(toolExecutionId ? { toolExecutionId } : {}),
+          toolCallId,
+        })
+      : legacyExecutionConfig;
   }
 
   private resolvePreparedCommitted<TInput, TResult>(
@@ -461,7 +708,12 @@ export class ToolExecutionRunner {
       descriptor: SideEffectToolDescriptor<TInput, TResult>;
     }
   ): Promise<ToolExecutionRunResult<TResult>> {
-    return this.resolveCommittedResult(prepareResult.execution, input, "cache");
+    return this.resolveCommittedResult(prepareResult.execution, input, "cache", {
+      businessEffectId: prepareResult.businessEffect.businessEffectId,
+      ...(prepareResult.originalExecutionId
+        ? { toolExecutionId: prepareResult.originalExecutionId }
+        : {}),
+    });
   }
 
   private async resolveCommittedResult<TInput, TResult>(
@@ -469,7 +721,8 @@ export class ToolExecutionRunner {
     input: ToolExecutionRunInput<TInput, TResult> & {
       descriptor: SideEffectToolDescriptor<TInput, TResult>;
     },
-    source: "cache" | "reconciled"
+    source: "cache" | "reconciled",
+    reusedFrom?: DeduplicatedOriginal
   ): Promise<ToolExecutionRunResult<TResult>> {
     if (!execution.resultRef) {
       return {
@@ -497,6 +750,7 @@ export class ToolExecutionRunner {
           source,
           result,
           toolExecutionId: execution.toolExecutionId,
+          ...(reusedFrom ? { reusedFrom } : {}),
         }
       : {
           type: "deferred",
@@ -517,123 +771,87 @@ export class ToolExecutionRunner {
     let executionAttempt = 0;
     let retryBudget = input.retryBudget;
 
+    // Every exit that is definitely not committed releases the claim here.
+    const release = async (
+      result: ToolExecutionRunResult<TResult>,
+      terminationCause: ToolExecutionTerminationCause,
+      expectedStatus: ToolExecutionStatus = "executing"
+    ): Promise<ToolExecutionRunResult<TResult>> =>
+      this.releaseOrUncertain(input, toolExecutionId, businessEffectId, expectedStatus, terminationCause, result);
+
     while (true) {
-      const legacyExecutionConfig = {
-        signal: input.signal,
-        configurable: {
-          ...(input.requestId ? { requestId: input.requestId } : {}),
-          ...(input.threadId ? { threadId: input.threadId } : {}),
-          runId: input.identity.runId,
-          ...(input.taskId ? { taskId: input.taskId } : {}),
-          stepId: input.identity.stepId,
-          toolExecutionId,
-          toolCallId:
-            input.identity.logicalToolCallId ?? input.identity.toolCallId,
-        },
-      };
-      const executionConfig = input.executionContext
-        ? withExecutionContext(legacyExecutionConfig, {
-            ...input.executionContext,
-            stepId: input.identity.stepId,
-            toolExecutionId,
-            toolCallId: input.identity.logicalToolCallId ?? input.identity.toolCallId,
-          })
-        : legacyExecutionConfig;
+      const executionConfig = this.createExecutionConfig(input, toolExecutionId);
       let executeAttempt = input.executor.executeTyped.bind(input.executor);
-      if (input.executor.authorizeTyped !== undefined) {
-        if (input.executor.executeAuthorizedTyped === undefined) {
-          await this.transitionOrDefer(
-            toolExecutionId,
-            "executing",
-            "failed",
-            "failed_not_committed"
-          );
-          return {
-            type: "failed",
-            errorCode: "AUTHORIZATION_UNAVAILABLE",
-            toolExecutionId,
-          };
-        }
+      if (
+        input.executor.authorizeTyped !== undefined &&
+        input.executor.executeAuthorizedTyped !== undefined
+      ) {
+        // The first attempt was authorized before the claim; retries
+        // re-authorize because the decision may have changed meanwhile.
+        if (executionAttempt > 0) {
+          let authorizationOutcome;
+          const authorizationStartedAt = performance.now();
+          try {
+            authorizationOutcome = await input.executor.authorizeTyped(
+              input.input,
+              executionConfig
+            );
+          } catch {
+            return release(
+              { type: "failed", errorCode: "AUTHORIZATION_UNAVAILABLE", toolExecutionId },
+              "failed_not_committed"
+            );
+          } finally {
+            await this.recordLatency(
+              "tool.authorization.wait",
+              authorizationStartedAt,
+              input
+            );
+          }
 
-        let authorizationOutcome;
-        const authorizationStartedAt = performance.now();
-        try {
-          authorizationOutcome = await input.executor.authorizeTyped(
-            input.input,
-            executionConfig
-          );
-        } catch {
-          await this.transitionOrDefer(
-            toolExecutionId,
-            "executing",
-            "failed",
-            "failed_not_committed"
-          );
-          return {
-            type: "failed",
-            errorCode: "AUTHORIZATION_UNAVAILABLE",
-            toolExecutionId,
-          };
-        } finally {
-          await this.recordLatency(
-            "tool.authorization.wait",
-            authorizationStartedAt,
-            input
-          );
-        }
-
-        if (authorizationOutcome.decisionId === undefined) {
-          await this.transitionOrDefer(
-            toolExecutionId,
-            "executing",
-            "failed",
-            "failed_not_committed"
-          );
-          return {
-            type: "failed",
-            errorCode: "AUTHORIZATION_UNAVAILABLE",
-            toolExecutionId,
-          };
-        }
-        try {
-          await this.ledger.linkAuthorizationDecision({
-            toolExecutionId,
-            decisionId: authorizationOutcome.decisionId,
-          });
-        } catch {
-          return {
-            type: "deferred",
-            errorCode: "SIDE_EFFECT_LEDGER_UNAVAILABLE",
-            toolExecutionId,
-          };
-        }
-        if (authorizationOutcome.type === "denied_by_authorization") {
-          await this.transitionOrDefer(
-            toolExecutionId,
-            "executing",
-            "failed",
-            getToolExecutionTerminationCause(authorizationOutcome)
-          );
-          return {
-            type: "failed",
-            errorCode: authorizationOutcome.errorCode,
-            toolExecutionId,
-            decisionId: authorizationOutcome.decisionId,
-          };
-        }
-        if (authorizationOutcome.type === "confirmation_required") {
-          await this.transitionOrDefer(
-            toolExecutionId,
-            "executing",
-            "failed",
-            getToolExecutionTerminationCause(authorizationOutcome)
-          );
-          return {
-            type: "failed",
-            errorCode: "REQUIRES_CONFIRMATION",
-            toolExecutionId,
-            decisionId: authorizationOutcome.decisionId,
-          };
+          if (authorizationOutcome.decisionId === undefined) {
+            return release(
+              { type: "failed", errorCode: "AUTHORIZATION_UNAVAILABLE", toolExecutionId },
+              "failed_not_committed"
+            );
+          }
+          try {
+            await this.ledger.linkAuthorizationDecision({
+              toolExecutionId,
+              decisionId: authorizationOutcome.decisionId,
+            });
+          } catch {
+            return release(
+              {
+                type: "deferred",
+                errorCode: "SIDE_EFFECT_LEDGER_UNAVAILABLE",
+                toolExecutionId,
+              },
+              "rejected_before_dispatch"
+            );
+          }
+          if (authorizationOutcome.type === "denied_by_authorization") {
+            return release(
+              {
+                type: "failed",
+                errorCode: authorizationOutcome.errorCode,
+                toolExecutionId,
+                decisionId: authorizationOutcome.decisionId,
+              },
+              getToolExecutionTerminationCause(authorizationOutcome)
+            );
+          }
+          if (authorizationOutcome.type === "confirmation_required") {
+            return release(
+              {
+                type: "failed",
+                errorCode: "REQUIRES_CONFIRMATION",
+                toolExecutionId,
+                decisionId: authorizationOutcome.decisionId,
+              },
+              getToolExecutionTerminationCause(authorizationOutcome)
+            );
+          }
         }
         executeAttempt = input.executor.executeAuthorizedTyped.bind(
           input.executor
@@ -649,11 +867,14 @@ export class ToolExecutionRunner {
       try {
         await this.ledger.recordAttempt(attemptIdentity);
       } catch {
-        return {
-          type: "deferred",
-          errorCode: "SIDE_EFFECT_LEDGER_UNAVAILABLE",
-          toolExecutionId,
-        };
+        return release(
+          {
+            type: "deferred",
+            errorCode: "SIDE_EFFECT_LEDGER_UNAVAILABLE",
+            toolExecutionId,
+          },
+          "rejected_before_dispatch"
+        );
       }
 
       const executionStartedAt = performance.now();
@@ -677,11 +898,14 @@ export class ToolExecutionRunner {
             : {}),
         });
       } catch {
-        return {
-          type: "deferred",
-          errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN",
+        return this.recoverUncertainPersistence(
+          input,
           toolExecutionId,
-        };
+          businessEffectId,
+          businessEffectKey,
+          "executing",
+          "prepared"
+        );
       }
 
       const metric = {
@@ -699,7 +923,7 @@ export class ToolExecutionRunner {
           : this.observability.recordMetric("tool.side_effect.outcome", metric)
       );
       if (outcome.type === "succeeded") {
-        return this.persistCommittedResult(
+        const committed = await this.persistCommittedResult(
           input,
           toolExecutionId,
           businessEffectId,
@@ -708,43 +932,44 @@ export class ToolExecutionRunner {
           outcome.result,
           "live"
         );
+        return isPersistenceUncertain(committed)
+          ? this.recoverUncertainPersistence(
+              input,
+              toolExecutionId,
+              businessEffectId,
+              businessEffectKey,
+              "executing",
+              "prepared"
+            )
+          : committed;
       }
       if (outcome.type === "rejected_before_dispatch") {
-        await this.transitionOrDefer(
-          toolExecutionId,
-          "executing",
-          "failed",
+        return release(
+          { type: "failed", errorCode: outcome.errorCode, toolExecutionId },
           getToolExecutionTerminationCause(outcome)
         );
-        return { type: "failed", errorCode: outcome.errorCode, toolExecutionId };
       }
       if (outcome.type === "denied_by_authorization") {
-        await this.transitionOrDefer(
-          toolExecutionId,
-          "executing",
-          "failed",
+        return release(
+          {
+            type: "failed",
+            errorCode: outcome.errorCode,
+            toolExecutionId,
+            decisionId: outcome.decisionId,
+          },
           getToolExecutionTerminationCause(outcome)
         );
-        return {
-          type: "failed",
-          errorCode: outcome.errorCode,
-          toolExecutionId,
-          decisionId: outcome.decisionId,
-        };
       }
       if (outcome.type === "confirmation_required") {
-        await this.transitionOrDefer(
-          toolExecutionId,
-          "executing",
-          "failed",
+        return release(
+          {
+            type: "failed",
+            errorCode: "REQUIRES_CONFIRMATION",
+            toolExecutionId,
+            decisionId: outcome.decisionId,
+          },
           getToolExecutionTerminationCause(outcome)
         );
-        return {
-          type: "failed",
-          errorCode: "REQUIRES_CONFIRMATION",
-          toolExecutionId,
-          decisionId: outcome.decisionId,
-        };
       }
       if (outcome.type === "failed_not_committed") {
         const classifiedError = classifyError({
@@ -767,34 +992,25 @@ export class ToolExecutionRunner {
             normalizeRetryAfterMs(outcome.retryAfterMs)
           );
           if (didWait) continue;
-          await this.transitionOrDefer(
-            toolExecutionId,
-            "executing",
-            "failed",
+          return release(
+            { type: "failed", errorCode: "USER_CANCELLED", toolExecutionId },
             "cancelled_before_dispatch"
           );
-          return { type: "failed", errorCode: "USER_CANCELLED", toolExecutionId };
         }
-        await this.transitionOrDefer(
-          toolExecutionId,
-          "executing",
-          "failed",
+        return release(
+          { type: "failed", errorCode: outcome.errorCode, toolExecutionId },
           getToolExecutionTerminationCause(outcome)
         );
-        return { type: "failed", errorCode: outcome.errorCode, toolExecutionId };
       }
       if (outcome.type === "cancelled" && outcome.dispatchState === "before") {
-        await this.transitionOrDefer(
-          toolExecutionId,
-          "executing",
-          "failed",
+        return release(
+          {
+            type: "cancelled",
+            dispatchState: outcome.dispatchState,
+            toolExecutionId,
+          },
           getToolExecutionTerminationCause(outcome)
         );
-        return {
-          type: "cancelled",
-          dispatchState: outcome.dispatchState,
-          toolExecutionId,
-        };
       }
 
       const unknownTransition = await this.markUnknown(
@@ -802,18 +1018,22 @@ export class ToolExecutionRunner {
         businessEffectId
       );
       if (!unknownTransition) {
-        return {
-          type: "deferred",
-          errorCode: "SIDE_EFFECT_PERSISTENCE_UNCERTAIN",
+        return this.recoverUncertainPersistence(
+          input,
           toolExecutionId,
-        };
+          businessEffectId,
+          businessEffectKey,
+          "executing",
+          "prepared"
+        );
       }
       const reconciled = await this.reconcile(
         input,
         toolExecutionId,
         businessEffectId,
         businessEffectKey,
-        retryBudget
+        retryBudget,
+        outcomeErrorCode(outcome) ?? "SIDE_EFFECT_RECONCILIATION_REQUIRED"
       );
       if (reconciled.type === "retry") {
         retryBudget = reconciled.retryBudget;
@@ -823,13 +1043,10 @@ export class ToolExecutionRunner {
           retryBudget?.attempts ?? executionAttempt
         );
         if (didWait) continue;
-        await this.transitionOrDefer(
-          toolExecutionId,
-          "executing",
-          "failed",
+        return release(
+          { type: "failed", errorCode: "USER_CANCELLED", toolExecutionId },
           "cancelled_before_dispatch"
         );
-        return { type: "failed", errorCode: "USER_CANCELLED", toolExecutionId };
       }
       return reconciled.result;
     }
@@ -842,7 +1059,8 @@ export class ToolExecutionRunner {
     toolExecutionId: string,
     businessEffectId: string,
     businessEffectKey: ReturnType<typeof hashBusinessEffectKey>,
-    retryBudget: RetryBudget | undefined
+    retryBudget: RetryBudget | undefined,
+    dispatchErrorCode: string
   ): Promise<
     | { type: "retry"; retryBudget: RetryBudget | undefined }
     | { type: "done"; result: ToolExecutionRunResult<TResult> }
@@ -854,6 +1072,7 @@ export class ToolExecutionRunner {
         "manual_intervention_required",
         "ambiguous_after_dispatch"
       );
+      await this.openReconciliationTask(input, toolExecutionId, businessEffectId, dispatchErrorCode);
       return {
         type: "done",
         result: {
@@ -882,19 +1101,18 @@ export class ToolExecutionRunner {
       : false;
     const action = decideReconciliationAction(reconciliation, canRetry);
     if (action === "retry") {
-      const executionReady = await this.transitionOrDefer(
-        toolExecutionId,
-        "unknown",
-        "executing"
-      );
-      const effectReady = await this.transitionBusinessEffectOrFalse(
+      const ready = await this.transitionEffectAndExecutionOrFalse({
         businessEffectId,
-        "unknown",
-        "prepared"
-      );
-      if (executionReady && effectReady) {
+        expectedEffectState: "unknown",
+        nextEffectState: "prepared",
+        toolExecutionId,
+        expectedExecutionStatus: "unknown",
+        nextExecutionStatus: "executing",
+      });
+      if (ready) {
         return { type: "retry", retryBudget };
       }
+      await this.openReconciliationTask(input, toolExecutionId, businessEffectId, PERSISTENCE_UNCERTAIN);
       return {
         type: "done",
         result: {
@@ -906,6 +1124,12 @@ export class ToolExecutionRunner {
     }
     if (action === "commit" && reconciliation.state === "committed") {
       if (reconciliation.result === undefined) {
+        await this.openReconciliationTask(
+          input,
+          toolExecutionId,
+          businessEffectId,
+          "SIDE_EFFECT_COMMITTED_RESULT_UNAVAILABLE"
+        );
         return {
           type: "done",
           result: {
@@ -917,15 +1141,22 @@ export class ToolExecutionRunner {
       }
       return {
         type: "done",
-        result: await this.persistCommittedResult(
+        result: await this.persistReconciledResult(
           input,
           toolExecutionId,
           businessEffectId,
           "unknown",
           "unknown",
-          reconciliation.result,
-          "reconciled"
+          reconciliation.result
         ),
+      };
+    }
+    if (reconciliation.state === "not_committed") {
+      // Confirmed not committed and no automatic retry: release the claim so
+      // that only a new, re-authorized submission can run the effect.
+      return {
+        type: "done",
+        result: await this.releaseNotCommitted(input, toolExecutionId, businessEffectId, "unknown", "unknown"),
       };
     }
     await this.transitionOrDefer(
@@ -933,6 +1164,12 @@ export class ToolExecutionRunner {
       "unknown",
       "manual_intervention_required",
       "ambiguous_after_dispatch"
+    );
+    await this.openReconciliationTask(
+      input,
+      toolExecutionId,
+      businessEffectId,
+      (reconciliation.state === "unknown" ? reconciliation.reason : undefined) ?? dispatchErrorCode
     );
     return {
       type: "done",
@@ -942,6 +1179,188 @@ export class ToolExecutionRunner {
         toolExecutionId,
       },
     };
+  }
+
+  /**
+   * A ledger write after dispatch failed (design §6.6, version 10). With the
+   * opt-in the reconciler decides once: committed is written again, not
+   * committed is released, anything else stays unknown with a task. Without
+   * it the result stays SIDE_EFFECT_PERSISTENCE_UNCERTAIN as before.
+   */
+  private async recoverUncertainPersistence<TInput, TResult>(
+    input: ToolExecutionRunInput<TInput, TResult> & {
+      descriptor: SideEffectToolDescriptor<TInput, TResult>;
+    },
+    toolExecutionId: string,
+    businessEffectId: string,
+    businessEffectKey: ReturnType<typeof hashBusinessEffectKey>,
+    expectedExecutionStatus: ToolExecutionStatus,
+    expectedEffectState: "prepared" | "unknown"
+  ): Promise<ToolExecutionRunResult<TResult>> {
+    const uncertain: ToolExecutionRunResult<TResult> = {
+      type: "deferred",
+      errorCode: PERSISTENCE_UNCERTAIN,
+      toolExecutionId,
+    };
+    if (this.reconciliationTasks === undefined) return uncertain;
+    let reconciliation: ReconciliationResult<TResult> | undefined;
+    if (input.descriptor.reconcile) {
+      const reconciliationStartedAt = performance.now();
+      try {
+        reconciliation = await input.descriptor.reconcile.reconcile({
+          toolExecutionId,
+          businessEffectKey,
+        });
+      } catch {
+        reconciliation = undefined;
+      } finally {
+        await this.recordLatency("tool.reconcile", reconciliationStartedAt, input);
+      }
+    }
+    if (reconciliation?.state === "committed" && reconciliation.result !== undefined) {
+      return this.persistReconciledResult(
+        input,
+        toolExecutionId,
+        businessEffectId,
+        expectedExecutionStatus,
+        expectedEffectState,
+        reconciliation.result
+      );
+    }
+    if (reconciliation?.state === "not_committed") {
+      return this.releaseNotCommitted(
+        input,
+        toolExecutionId,
+        businessEffectId,
+        expectedExecutionStatus,
+        expectedEffectState
+      );
+    }
+    await this.openReconciliationTask(
+      input,
+      toolExecutionId,
+      businessEffectId,
+      (reconciliation?.state === "unknown" ? reconciliation.reason : undefined) ?? PERSISTENCE_UNCERTAIN
+    );
+    return uncertain;
+  }
+
+  /** Writes a reconciled result once; a write that fails again stays unknown with a task. */
+  private async persistReconciledResult<TInput, TResult>(
+    input: ToolExecutionRunInput<TInput, TResult> & {
+      descriptor: SideEffectToolDescriptor<TInput, TResult>;
+    },
+    toolExecutionId: string,
+    businessEffectId: string,
+    expectedExecutionStatus: ToolExecutionStatus,
+    expectedEffectState: "prepared" | "unknown",
+    result: TResult
+  ): Promise<ToolExecutionRunResult<TResult>> {
+    const persisted = await this.persistCommittedResult(
+      input,
+      toolExecutionId,
+      businessEffectId,
+      expectedExecutionStatus,
+      expectedEffectState,
+      result,
+      "reconciled"
+    );
+    if (isPersistenceUncertain(persisted)) {
+      await this.openReconciliationTask(input, toolExecutionId, businessEffectId, PERSISTENCE_UNCERTAIN);
+    }
+    return persisted;
+  }
+
+  /**
+   * Releases a claim held by an execution that never committed. A release that
+   * cannot be written leaves the claim held, so the exit stays uncertain with a
+   * task instead of reporting it as closed (design §6.8).
+   */
+  private async releaseOrUncertain<TInput, TResult>(
+    input: ToolExecutionRunInput<TInput, TResult>,
+    toolExecutionId: string,
+    businessEffectId: string,
+    expectedExecutionStatus: ToolExecutionStatus,
+    terminationCause: ToolExecutionTerminationCause,
+    result: ToolExecutionRunResult<TResult>
+  ): Promise<ToolExecutionRunResult<TResult>> {
+    const released = await this.releaseOrFalse(
+      toolExecutionId,
+      businessEffectId,
+      expectedExecutionStatus,
+      terminationCause
+    );
+    if (released) return result;
+    await this.openReconciliationTask(input, toolExecutionId, businessEffectId, PERSISTENCE_UNCERTAIN);
+    return { type: "deferred", errorCode: PERSISTENCE_UNCERTAIN, toolExecutionId };
+  }
+
+  /** Releases a claim confirmed not committed; a release that cannot be written stays unknown with a task. */
+  private async releaseNotCommitted<TInput, TResult>(
+    input: ToolExecutionRunInput<TInput, TResult>,
+    toolExecutionId: string,
+    businessEffectId: string,
+    expectedExecutionStatus: ToolExecutionStatus,
+    expectedEffectState: "prepared" | "unknown"
+  ): Promise<ToolExecutionRunResult<TResult>> {
+    const released = await this.releaseOrFalse(
+      toolExecutionId,
+      businessEffectId,
+      expectedExecutionStatus,
+      "failed_not_committed",
+      expectedEffectState
+    );
+    if (released) {
+      return { type: "failed", errorCode: "SIDE_EFFECT_NOT_COMMITTED", toolExecutionId };
+    }
+    await this.openReconciliationTask(input, toolExecutionId, businessEffectId, PERSISTENCE_UNCERTAIN);
+    return { type: "deferred", errorCode: PERSISTENCE_UNCERTAIN, toolExecutionId };
+  }
+
+  /**
+   * The outcome stays unknown whatever happens here: a task that cannot be
+   * stored is audited as RECONCILIATION_TASK_PERSISTENCE_FAILED, never turned
+   * into success or failure (design §6.6).
+   */
+  private async openReconciliationTask<TInput, TResult>(
+    input: ToolExecutionRunInput<TInput, TResult>,
+    toolExecutionId: string,
+    businessEffectId: string,
+    reasonCode: string
+  ): Promise<void> {
+    if (this.reconciliationTasks === undefined) return;
+    const payload = {
+      resourceType: "business_effect",
+      resourceId: businessEffectId,
+      runId: input.identity.runId,
+      toolExecutionId,
+      businessEffectId,
+      reasonCode,
+    };
+    try {
+      const task = await this.reconciliationTasks.open({
+        tenantId: input.scope.tenantId,
+        scopeId: input.scope.scopeId,
+        businessEffectId,
+        toolExecutionId,
+        reasonCode,
+      });
+      await ignoreObservabilityFailure(() =>
+        this.observability.auditLogger.record(
+          "tool.side_effect.reconciliation_task_opened",
+          { ...payload, reconciliationTaskId: task.reconciliationTaskId, created: task.created },
+          input.executionContext
+        )
+      );
+    } catch {
+      await ignoreObservabilityFailure(() =>
+        this.observability.auditLogger.record(
+          "tool.side_effect.reconciliation_task_persistence_failed",
+          { ...payload, errorCode: "RECONCILIATION_TASK_PERSISTENCE_FAILED" },
+          input.executionContext
+        )
+      );
+    }
   }
 
   private async persistCommittedResult<TInput, TResult>(
@@ -992,6 +1411,8 @@ export class ToolExecutionRunner {
           replayKey,
           businessEffectKey,
           toolExecutionId,
+          // A result confirmed by reconciliation is marked as such (design §6.6).
+          source,
           ...(reference.externalSystemNamespace
             ? { externalSystemNamespace: reference.externalSystemNamespace }
             : {}),
@@ -1033,21 +1454,50 @@ export class ToolExecutionRunner {
     }
   }
 
-  private async markUnknown(
+  private markUnknown(
     toolExecutionId: string,
     businessEffectId: string
   ): Promise<boolean> {
-    const executionUpdated = await this.transitionOrDefer(
-      toolExecutionId,
-      "executing",
-      "unknown"
-    );
-    const effectUpdated = await this.transitionBusinessEffectOrFalse(
+    return this.transitionEffectAndExecutionOrFalse({
       businessEffectId,
-      "prepared",
-      "unknown"
-    );
-    return executionUpdated && effectUpdated;
+      expectedEffectState: "prepared",
+      nextEffectState: "unknown",
+      toolExecutionId,
+      expectedExecutionStatus: "executing",
+      nextExecutionStatus: "unknown",
+    });
+  }
+
+  private async transitionEffectAndExecutionOrFalse(
+    input: Parameters<BusinessEffectLedger["transitionBusinessEffectAndExecution"]>[0]
+  ): Promise<boolean> {
+    try {
+      await this.ledger.transitionBusinessEffectAndExecution(input);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async releaseOrFalse(
+    toolExecutionId: string,
+    businessEffectId: string,
+    expectedExecutionStatus: ToolExecutionStatus,
+    terminationCause: ToolExecutionTerminationCause,
+    expectedEffectState: "prepared" | "unknown" = "prepared"
+  ): Promise<boolean> {
+    try {
+      await this.ledger.releaseClaim({
+        businessEffectId,
+        expectedEffectState,
+        toolExecutionId,
+        expectedExecutionStatus,
+        terminationCause,
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async transitionOrDefer(
@@ -1062,23 +1512,6 @@ export class ToolExecutionRunner {
         expectedStatus,
         nextStatus,
         ...(terminationCause ? { terminationCause } : {}),
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  private async transitionBusinessEffectOrFalse(
-    businessEffectId: string,
-    expectedState: "prepared" | "unknown",
-    nextState: "prepared" | "unknown"
-  ): Promise<boolean> {
-    try {
-      await this.ledger.transitionBusinessEffect({
-        businessEffectId,
-        expectedState,
-        nextState,
       });
       return true;
     } catch {
