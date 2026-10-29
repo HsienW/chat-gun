@@ -22,12 +22,13 @@
   <a href="https://opentelemetry.io/"><img src="https://img.shields.io/badge/OpenTelemetry-Observability-8A7600" alt="OpenTelemetry" /></a>
   <a href="https://github.com/comet-ml/opik"><img src="https://img.shields.io/badge/Opik-Tracing_%26_Evaluation-6F4CFF" alt="Opik" /></a>
   <a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://img.shields.io/badge/qwen--plus-Generation-1E3A8A" alt="qwen-plus" /></a>
-  <a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://img.shields.io/badge/text--embedding--v4-Embedding_1024d-0EA5E9" alt="text-embedding-v4" /></a>
+  <a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://img.shields.io/badge/text--embedding--v4-Embedding-0EA5E9" alt="text-embedding-v4" /></a>
   <a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://img.shields.io/badge/qwen3--rerank-Rerank-0EA5E9" alt="qwen3-rerank" /></a>
   <a href="https://www.postgresql.org/"><img src="https://img.shields.io/badge/PostgreSQL-16-336791" alt="PostgreSQL" /></a>
 </p>
 
 <p align="center">
+  <a href="#feature-demo">Feature Demo</a> ·
   <a href="#capabilities">Capabilities</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#business-scenario">Business Scenario</a> ·
@@ -40,9 +41,29 @@
 ---
 
 Chat Gun is a full-stack agent application composed of a Frontend, a BFF, and a LangGraph Runtime.
-- The lower layer is an agent platform: tools are dispatched through a single path, retrieved answers are traceable to their sources, operations that change external state must first receive human approval, and a logical idempotency key guarantees that duplicate submissions take effect only once.
-- The upper layer is AI business scenarios built on top of the platform capabilities. There are currently two entry points: **Gun Chat** handles general conversation and deep research, and **Gun Shop** is an AI customer service chain that runs from product lookup and policy Q&A to refund approval.
+- Agent platform: the underlying capabilities handle unified tool dispatch, make retrieved answers traceable, require human approval before operations that change external state, and use a logical idempotency key to ensure duplicate submissions take effect only once.
+- AI business scenarios: the application features built on top of the platform capabilities. There are currently two entry points: **Gun Chat** handles general conversation and deep research, and **Gun Shop** is an AI customer service chain that runs from product lookup and policy Q&A to refund approval.
 - All model calls, tool executions, and credential resolution happen on the server; the browser communicates with the Runtime only through the BFF. The corpus and order data used by the business scenarios are synthetic, and the order tools are simulated; the mechanisms are real, while the business context used to demonstrate them is simulated.
+
+## Feature Demo
+
+<p align="center">
+  <img src="./assets/chat-gun-demo.webp" alt="Chat Gun demo" width="1280" />
+</p>
+
+<p align="center">
+  <img src="./assets/chat-gun-01.png" alt="Entry screen" width="1280" />
+</p>
+
+<p align="center">
+  <img src="./assets/chat-gun-02.png" alt="Entry screen" width="1280" />
+</p>
+
+<p align="center">
+  <img src="./assets/chat-gun-03.png" alt="Entry screen" width="1280" />
+</p>
+
+**Screens for other operations are in [Operation Screens](./docs/gun-shop.md#操作畫面) (Traditional Chinese).**
 
 ## Capabilities
 
@@ -76,30 +97,10 @@ A business scenario built with the Agent platform's capabilities, adding no new 
 - **Order operation states:** awaiting approval, executing, confirmed, deduplicated, failed, cancelled before taking effect, outcome unknown, approval rejected, and approval expired — nine states that are mutually distinguishable in the interface; undo is not provided. Deterministic test 10／10 (including approval rejected, expired, and cancelled before taking effect). See [operation states](./docs/gun-shop.md#gun-shop-流程走查) (Traditional Chinese) and the [order idempotency integration test](./backend/src/agents/shopping-assistant/order-idempotency.integration.test.ts).
 - **Simulation boundary:** product and policy answers come only from the synthetic corpus and carry citations; refunds and cancellations act on a simulated order system and never touch real transactions. See [Scope and Limitations](./docs/scope-and-limitations.md) (Traditional Chinese).
 
-## Demo
-
-<p align="center">
-  <img src="./assets/chat-gun-demo.webp" alt="Chat Gun demo" width="1280" />
-</p>
-
-<p align="center">
-  <img src="./assets/chat-gun-01.png" alt="Entry screen" width="1280" />
-</p>
-
-<p align="center">
-  <img src="./assets/chat-gun-02.png" alt="Entry screen" width="1280" />
-</p>
-
-<p align="center">
-  <img src="./assets/chat-gun-03.png" alt="Entry screen" width="1280" />
-</p>
-
-**Screens for other operations are in [Operation Screens](./docs/gun-shop.md#操作畫面) (Traditional Chinese).**
-
 ## Quick Start
 
 > 📌
-> The defaults are for local development only. Before any public deployment, enable Authentication, configure an explicit CORS allowlist, manage Secrets and database credentials properly, and configure shared Rate limiting, TLS, and a Reverse Proxy according to your deployment architecture. If Agent runs need to resume across restarts or multiple instances, switch to a durable checkpointer.
+> The current defaults are for local development only. Before any public deployment, enable Authentication, configure an explicit CORS allowlist, manage Secrets and database credentials properly, and configure shared Rate limiting, TLS, and a Reverse Proxy according to your deployment architecture. If Agent runs need to resume across restarts or multiple instances, switch to a durable checkpointer.
 
 - Node >= 22
 - npm >= 10.8.x
