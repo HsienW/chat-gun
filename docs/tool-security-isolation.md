@@ -1,3 +1,5 @@
+[← 回到 README](../README.md)
+
 # Tool 與 MCP 安全設定
 
 <p>
@@ -127,3 +129,7 @@ BRAVE_API_KEY=your_brave_api_key
 - Tool／MCP output 是不可信資料，不應直接當成 system instruction、HTML 或 shell command。
 - 第三方 Tool output 可能包含個資或 credential；送入 log、trace 或 hosted observability 前應先做欄位 allowlist 與 redaction。
 - Tool permission 不應只由模型決定。高風險或有副作用的操作應在可信的 API／service boundary 再做 authorization。
+
+## 工具用法
+
+工具清單、SDK 擴充方式與 MCP 啟用設定見 [Tools 與 MCP](./tools-and-mcp.md)。
