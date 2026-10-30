@@ -211,8 +211,10 @@ CCR 與 Codex MUST 只經 adapter 調用 Qwen，參數遵循相同 ADAPTER_LAUNC
 #### Scenario: 讀取違規
 - WHEN stream-json 路徑指向 .env*、Master 授權容器、其他 change Runtime、workspace 外、node_modules／dist／build／coverage 或 Git ignored 檔案
 - THEN evidence gate MUST 回報 read_scope_violation，effective verdict 為 INCOMPLETE
-- AND 本 change Runtime 只可讀取 latestArtifactRefs／requiredInputRefs 明確引用者
+- AND 本 change Runtime 只可讀取自身 current-state.json 與 latestArtifactRefs／requiredInputRefs 明確引用者
+- AND 其他 change 的 current-state.json MUST 維持 read_scope_violation
 - AND current-state.json realpath MUST 位於 workspace 內
+- AND capture MUST 以 observed.readScopeFindings 記錄每筆判定的 tool、規則與路徑，不保存檔案內容，含 secret 的路徑或篩選條件 MUST 遮蔽
 
 #### Scenario: 讀取範圍不可證明
 - WHEN 參數未知／型別錯誤、Git ignore 驗證失敗、路徑含 wildcard，或目錄搜尋未符合下列放行條件
@@ -228,6 +230,12 @@ CCR 與 Codex MUST 只經 adapter 調用 Qwen，參數遵循相同 ADAPTER_LAUNC
 #### Scenario: 唯讀工具清單
 - WHEN 工具為 web_search、websearch、read_mcp_resource，或 Qwen 0.25.3 不提供的 read_many_files
 - THEN MUST 回報 tool_readonly_not_proven，不通過 evidence gate
+
+#### Scenario: Secret 掃描不把程式碼當憑證
+- WHEN 憑證欄位的值只有變數插值（可含 scheme 字樣），例如 authorization 的 Bearer 模板，或 sk-test- 後只有英文字詞與數字區段的測試假值
+- THEN MUST NOT 判為 secret
+- WHEN 值含實際字面內容、shell 預設值，或 sk- 後為隨機或混合區段
+- THEN MUST 繼續判為 secret，且 MUST NOT 依檔名或路徑略過掃描
 
 #### Scenario: Qwen 版本
 - GIVEN adapter 的 stream-json 解析與工具契約依 Qwen 0.25.3 查證
