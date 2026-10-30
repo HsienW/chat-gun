@@ -61,6 +61,7 @@ async function createAuthorizedWorkspace({ state = {}, authorization = {} } = {}
       from: "Codex",
       to: "CCR",
       status: "IN_PROGRESS",
+      authorizationRef: "master-authorization.json#master-auth-example-change-001",
     },
     ...state,
   });
@@ -540,3 +541,59 @@ test("共享 Claude hook 只攔截檔案寫入工具與 Bash，不攔截 MCP", a
       ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write"],
   );
 });
+
+test("容器授權依 key 匹配，損壞 entry 不得部分採用", async () => {
+  const { workspaceRoot } = await createAuthorizedWorkspace();
+  const file = path.join(workspaceRoot, ".agent-runtime/master-authorization.json");
+  const entry = JSON.parse(await readFile(file, "utf8"));
+  const container = { schemaVersion: "2", authorizations: { [entry.authorizationId]: entry } };
+  await writeFile(file, JSON.stringify(container));
+  assert.equal((await evaluateCcrToolUse(writeEvent(workspaceRoot, "tools/qwen-capture-adapter.mjs"), { workspaceRoot })).decision, "allow");
+  container.authorizations.broken = { authorizationId: "broken" };
+  await writeFile(file, JSON.stringify(container));
+  assert.equal((await evaluateCcrToolUse(writeEvent(workspaceRoot, "tools/qwen-capture-adapter.mjs"), { workspaceRoot })).decision, "deny");
+});
+
+test("有效授權也不得透過 Bash 碰觸授權檔或執行 GC", async () => {
+  const { workspaceRoot } = await createAuthorizedWorkspace();
+  for (const command of ["echo x > .agent-runtime/master-authorization.json", "node tools/master-auth-gc.mjs --apply"]) {
+    assert.equal((await evaluateCcrToolUse({ tool_name: "Bash", tool_input: { command } }, { workspaceRoot })).decision, "deny");
+  }
+});
+
+test("不同 change 的多筆有效授權重疊時拒絕，不重疊時只取目標授權", async () => {
+  const { workspaceRoot } = await createAuthorizedWorkspace();
+  const file = path.join(workspaceRoot, ".agent-runtime/master-authorization.json");
+  const first = JSON.parse(await readFile(file, "utf8"));
+  const second = { ...first, authorizationId: "second", changeId: "second-change" };
+  const state = JSON.parse(await readFile(path.join(workspaceRoot, ".agent-runtime/example-change/current-state.json"), "utf8"));
+  state.changeId = second.changeId;
+  state.latestHandoff.authorizationRef = "master-authorization.json#second";
+  await mkdir(path.join(workspaceRoot, ".agent-runtime/second-change"));
+  await writeFile(path.join(workspaceRoot, ".agent-runtime/second-change/current-state.json"), JSON.stringify(state));
+  const container = { schemaVersion: "2", authorizations: { [first.authorizationId]: first, second } };
+  await writeFile(file, JSON.stringify(container));
+  const evaluate = () => evaluateCcrToolUse(writeEvent(workspaceRoot, "tools/qwen-capture-adapter.mjs"), { workspaceRoot });
+  assert.match((await evaluate()).reason, /ambiguous_authorization/);
+  second.writeScope = ["other/"];
+  await writeFile(file, JSON.stringify(container));
+  assert.equal((await evaluate()).decision, "allow");
+});
+
+for (const ref of [undefined, "master-authorization.json", "master-authorization.json#missing"]) {
+  test(`授權引用 ${ref} 必須拒絕`, async () => {
+    const { workspaceRoot } = await createAuthorizedWorkspace();
+    const file = path.join(workspaceRoot, ".agent-runtime/example-change/current-state.json");
+    const state = JSON.parse(await readFile(file, "utf8"));
+    state.latestHandoff.authorizationRef = ref;
+    await writeFile(file, JSON.stringify(state));
+    assert.equal((await evaluateCcrToolUse(writeEvent(workspaceRoot, "tools/qwen-capture-adapter.mjs"), { workspaceRoot })).decision, "deny");
+  });
+}
+
+for (const tool_name of ["Write", "Edit", "MultiEdit"]) {
+  test(`${tool_name} 不得寫入授權容器`, async () => {
+    const { workspaceRoot } = await createAuthorizedWorkspace();
+    assert.equal((await evaluateCcrToolUse({ tool_name, tool_input: { file_path: ".agent-runtime/master-authorization.json" } }, { workspaceRoot })).decision, "deny");
+  });
+}

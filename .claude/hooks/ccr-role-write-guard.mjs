@@ -1,3 +1,4 @@
+import { loadAuthorizationContainer, activeAuthorizations, withinWriteScope } from "../../tools/master-authorization.mjs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,9 +19,8 @@ const CURRENT_STATE_REQUIRED_FIELDS = [
   "updatedAt",
   "terminalStatus",
 ];
-const CCR_RUNTIME_ARTIFACT_PATTERN = /^(?:coordinator-result(?:-[\w.-]+)?|readiness-result|handoff(?:-[\w.-]+)?)\.json$/u;
+const CCR_RUNTIME_ARTIFACT_PATTERN = /^(?:(?:coordinator-result(?:-[\w.-]+)?|readiness-result|handoff(?:-[\w.-]+)?)\.json|review-prompt-[a-z0-9-]+\.md)$/u;
 const MASTER_AUTHORIZATION_PATH = ".agent-runtime/master-authorization.json";
-const ACTIVE_HANDOFF_STATUSES = new Set(["PENDING", "ACCEPTED", "IN_PROGRESS"]);
 const CCR_GUARD_PROTECTED_PATHS = [
   ".claude/hooks/",
   ".claude/settings.json",
@@ -28,69 +28,51 @@ const CCR_GUARD_PROTECTED_PATHS = [
   MASTER_AUTHORIZATION_PATH,
 ];
 
+// 只放行 CCR 以 CLIHost 身分啟動 Qwen adapter；prompt 必須來自該 Change 的 artifacts。
+const ADAPTER_LAUNCH_PATTERN = /^node tools\/qwen-capture-adapter\.mjs --change-id ([\w.-]+) --run-id ([\w.-]+) --artifact-id ([a-z0-9-]+) --stage (review-plan|review-result) --output-format stream-json --expected-auth-type [\w-]+ --expected-model [\w.-]+ --expected-base-url https:\/\/[\w.\/-]+ -- qwen --approval-mode plan --auth-type [\w-]+ --model [\w.-]+ --openai-base-url https:\/\/[\w.\/-]+ -o stream-json -p "\$\(cat \.agent-runtime\/\1\/artifacts\/review-prompt-[a-z0-9-]+\.md\)"$/u;
+
+async function resolveCcrAdapterLaunch(command, workspaceRoot) {
+  if (typeof command !== "string") {
+    return null;
+  }
+  const match = command.trim().match(ADAPTER_LAUNCH_PATTERN);
+  if (!match || match[1].includes("..")) {
+    return null;
+  }
+  const [, changeId, runId, , stage] = match;
+  const stateResult = await readCurrentState(workspaceRoot, changeId);
+  if (stateResult.status !== "valid") {
+    return null;
+  }
+  const state = stateResult.value;
+  const phases = stage === "review-plan" ? ["PLAN_REVIEW"] : ["READY_FOR_REVIEW", "REVIEWING"];
+  if (
+      state.runId !== runId ||
+      state.currentOwner !== "Qwen" ||
+      !phases.includes(state.currentPhase) ||
+      state.terminalStatus !== "NON_TERMINAL"
+  ) {
+    return null;
+  }
+  return { changeId, stage };
+}
+
 function isProtectedGuardPath(relativeTarget) {
+  relativeTarget = relativeTarget.toLowerCase();
   return CCR_GUARD_PROTECTED_PATHS.some((entry) =>
       entry.endsWith("/") ? relativeTarget.startsWith(entry) : relativeTarget === entry,
   );
 }
 
-function isSafeScopeEntry(entry) {
-  return typeof entry === "string" && entry !== "" && !entry.includes("..") &&
-      !entry.startsWith("/") && !/^[A-Za-z]:/u.test(entry);
-}
-
-function isWithinWriteScope(relativeTarget, writeScope) {
-  return writeScope.every(isSafeScopeEntry) && writeScope.some((entry) =>
-      entry.endsWith("/") ? relativeTarget.startsWith(entry) : relativeTarget === entry,
-  );
-}
-
-async function resolveCcrImplementerGrant(workspaceRoot, now = Date.now()) {
-  let authorization;
-  try {
-    authorization = parseJsonObject(
-        await readFile(path.join(workspaceRoot, ...MASTER_AUTHORIZATION_PATH.split("/")), "utf8"),
-    );
-  } catch {
-    return null;
-  }
-  const expiresAt = Date.parse(authorization?.expiresAt);
-  if (
-      !authorization ||
-      authorization.rolePolicyVersion !== "2" ||
-      authorization.grantedBy !== "Master" ||
-      authorization.grantee !== "CCR" ||
-      authorization.actingRole !== "implementation_secondary" ||
-      !Array.isArray(authorization.grants) ||
-      !authorization.grants.includes("secondary_takeover") ||
-      typeof authorization.changeId !== "string" ||
-      !/^[\w.-]+$/u.test(authorization.changeId) ||
-      authorization.changeId.includes("..") ||
-      !Array.isArray(authorization.writeScope) ||
-      authorization.writeScope.length === 0 ||
-      Number.isNaN(expiresAt) ||
-      expiresAt <= now
-  ) {
-    return null;
-  }
-
-  const stateResult = await readCurrentState(workspaceRoot, authorization.changeId);
-  if (stateResult.status !== "valid") {
-    return null;
-  }
-  const state = stateResult.value;
-  const handoff = isRecord(state.latestHandoff) ? state.latestHandoff : {};
-  if (
-      state.runId !== authorization.runId ||
-      state.currentOwner !== "CCR" ||
-      state.terminalStatus !== "NON_TERMINAL" ||
-      handoff.handoffId !== authorization.handoffId ||
-      handoff.to !== "CCR" ||
-      !ACTIVE_HANDOFF_STATUSES.has(handoff.status)
-  ) {
-    return null;
-  }
-  return authorization;
+async function resolveCcrImplementerGrant(workspaceRoot, relativeTarget, now = Date.now()) {
+  const container = await loadAuthorizationContainer(workspaceRoot);
+  if (container.status !== "valid") return null;
+  const matches = (await activeAuthorizations(workspaceRoot, container.entries, now)).filter(entry =>
+    entry.grantee === "CCR" && entry.actingRole === "implementation_secondary" &&
+    entry.grants.includes("secondary_takeover") &&
+    (relativeTarget === undefined || withinWriteScope(relativeTarget, entry.writeScope)));
+  if (relativeTarget !== undefined && matches.length > 1) return { ambiguous: true };
+  return matches[0] ?? null;
 }
 
 function allow(reason) {
@@ -219,8 +201,9 @@ async function evaluateFileWrite(toolName, toolInput, workspaceRoot) {
     return deny("CCR 不得修改自身寫入守門、宿主設定或 Master 授權。");
   }
 
-  const implementerGrant = await resolveCcrImplementerGrant(workspaceRoot);
-  if (implementerGrant && isWithinWriteScope(target.relativeTarget, implementerGrant.writeScope)) {
+  const implementerGrant = await resolveCcrImplementerGrant(workspaceRoot, target.relativeTarget);
+  if (implementerGrant?.ambiguous) return deny("ambiguous_authorization");
+  if (implementerGrant) {
     return allow(`CCR 以 implementation_secondary 執行 ${implementerGrant.handoffId}（Master 授權 ${implementerGrant.authorizationId}）。`);
   }
 
@@ -300,6 +283,13 @@ export async function evaluateCcrToolUse(event, { workspaceRoot } = {}) {
   const toolName = event.tool_name;
 
   if (toolName === "Bash") {
+    if (/master-authorization|master-auth-gc/iu.test(event.tool_input.command ?? "")) {
+      return deny("Agent 不得透過 Bash 存取授權檔或執行 Master GC。");
+    }
+    const adapterLaunch = await resolveCcrAdapterLaunch(event.tool_input.command, resolvedWorkspaceRoot);
+    if (adapterLaunch) {
+      return allow(`CCR 以 CLIHost 身分啟動 ${adapterLaunch.changeId} 的 Qwen ${adapterLaunch.stage}。`);
+    }
     const implementerGrant = await resolveCcrImplementerGrant(resolvedWorkspaceRoot);
     return implementerGrant
         ? allow(`CCR 以 implementation_secondary 執行 ${implementerGrant.handoffId}；Shell 交由一般權限確認。`)
