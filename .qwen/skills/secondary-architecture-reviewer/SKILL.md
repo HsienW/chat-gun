@@ -159,3 +159,35 @@ APPROVE | REQUEST_CHANGES | COMMENT_ONLY | INCOMPLETE
 ## Residual Risks
 ## Positive Notes
 ```
+
+## 結構化 review_result
+
+完成 `review-plan` 或 `review-result` 時，在 Markdown 之後輸出一個標記為 `json` 的程式碼區塊，全文只能有這一個 `kind` 為 `review_result` 的區塊。`artifactId`、`changeId`、`runId`、`stage` 使用 Coordinator 提供的值，不得自行編造。頂層與 `payload` 不得增加或改名欄位。
+
+```json
+{
+  "schemaVersion": "1.0.0",
+  "artifactId": "<Coordinator 提供>",
+  "changeId": "<Coordinator 提供>",
+  "runId": "<Coordinator 提供>",
+  "producer": "Qwen",
+  "stage": "review-plan 或 review-result",
+  "kind": "review_result",
+  "status": "success",
+  "createdAt": "<目前時間 ISO-8601>",
+  "summary": "<一句話摘要>",
+  "inputRefs": [],
+  "outputRefs": [],
+  "verification": { "executed": [], "passed": [], "failed": [], "notExecuted": [] },
+  "risks": [{ "severity": "Low", "description": "<severity 只能是 Low、Medium、High、Critical>" }],
+  "payload": {
+    "verdict": "APPROVE、REQUEST_CHANGES、COMMENT_ONLY、INCOMPLETE 擇一",
+    "findings": { "blocker": [], "major": [], "minor": [] },
+    "residualRisks": [],
+    "positiveNotes": [],
+    "crossLayerContractCheck": {}
+  }
+}
+```
+
+沒有風險時 `risks` 為空陣列。adapter 直接取用 Subagent 的回傳值：父工作階段不得轉述、摘要或複製 `review_result`，只回覆審查已完成；內容不一致的副本會讓該次審查失敗。
