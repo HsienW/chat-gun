@@ -197,7 +197,7 @@ AND MUST 說明權限衝突
 
 GIVEN `.qwen/settings.json` 和 `.qwen/agents/secondary-architecture-reviewer.md`
 WHEN 本 Change 完成
-THEN Qwen 的 Tool 白名單 MUST 仍僅限 read_file、read_many_files、grep_search、glob、list_directory、skill
+THEN Qwen 的 Tool 白名單 MUST 僅限 read_file、grep_search、glob、list_directory、skill
 AND MUST NOT 新增任何寫入類 Tool
 
 ### Requirement: 多調用方、互斥與讀取稽核
@@ -215,12 +215,28 @@ CCR 與 Codex MUST 只經 adapter 調用 Qwen，參數遵循相同 ADAPTER_LAUNC
 - AND current-state.json realpath MUST 位於 workspace 內
 
 #### Scenario: 讀取範圍不可證明
-- WHEN 參數未知／型別錯誤、Git ignore 驗證失敗，或 wildcard／目錄搜尋缺少可證明的實際檔案集合
+- WHEN 參數未知／型別錯誤、Git ignore 驗證失敗、路徑含 wildcard，或目錄搜尋未符合下列放行條件
 - THEN MUST 回報 read_scope_not_proven，effective verdict 為 INCOMPLETE
 - AND observed.readPaths 僅保存相對路徑，secret／外部路徑遮蔽，不保存內容
 
+#### Scenario: 目錄搜尋放行
+- GIVEN 所有 Qwen settings 層級都可解析，且沒有關閉 context.fileFiltering.respectGitIgnore 或 tools.useRipgrep
+- WHEN grep_search 或 glob 搜尋 workspace 內未被禁止的目錄，或省略 path（視為 workspace 根目錄）
+- THEN MUST NOT 僅因目標是目錄而回報 read_scope_not_proven
+- AND 篩選條件指向 .env*、.agent-runtime、node_modules／dist／build／coverage／.git、`..` 或絕對路徑時 MUST 回報 read_scope_violation
+
 #### Scenario: 唯讀工具清單
-- WHEN 工具為 web_search、websearch 或 read_mcp_resource
-- THEN MUST 不通過 evidence gate
-- WHEN read_many_files 提供合法明確 paths
-- THEN MUST 與 read_file 一樣稽核，不得僅因名稱誤判
+- WHEN 工具為 web_search、websearch、read_mcp_resource，或 Qwen 0.25.3 不提供的 read_many_files
+- THEN MUST 回報 tool_readonly_not_proven，不通過 evidence gate
+
+#### Scenario: Qwen 版本
+- GIVEN adapter 的 stream-json 解析與工具契約依 Qwen 0.25.3 查證
+- WHEN stream-json 回報的版本不是 0.25.3
+- THEN MUST 回報 qwen_version_unverified，effective verdict 為 INCOMPLETE
+
+#### Scenario: Windows 啟動
+- GIVEN 平台為 Windows，且啟動命令為 qwen
+- WHEN adapter 啟動 Qwen
+- THEN MUST 不經 shell，解析為 node 與 cli-entry.js
+- AND QWEN_CLI_ENTRY 有設定時 MUST 為唯一候選
+- AND 找不到可讀的 cli-entry.js 時 MUST 讓啟動失敗，並在 capture 記錄 spawnError
