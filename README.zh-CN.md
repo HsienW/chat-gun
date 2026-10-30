@@ -80,7 +80,7 @@ Chat Gun 是一套由 Frontend、BFF 与 LangGraph Runtime 组成的全栈 Agent
 - **Multimodal input**：接受 PNG、JPEG 与 WebP 图片，经 vision model 分析后纳入回答或研究流程。
 - **Model providers**：支持 Qwen、OpenAI-compatible 与 CCR-compatible endpoints，由 LLM Gateway 统一处理模型能力检查与调用。
 - **Native Tools 与 MCP**：内置计算、网络搜索（Tavily）、网页抓取、天气、知识库检索与模拟订单操作；可选择加载 Filesystem 与 Brave Search MCP Server。见 [Tools 与 MCP](./docs/tools-and-mcp.md)（繁中）。
-- **Agent／Tool SDK**：以版本化 manifest 声明输入输出、副作用类别、所需权限与执行条件；工具只授予声明它的 Agent。见 [`@gun-ai/harness-sdk`](https://www.npmjs.com/package/@gun-ai/harness-sdk)。
+- **Agent / Tool SDK**：以版本化 manifest 声明输入输出、副作用类别、所需权限与执行条件；工具只授予声明它的 Agent。见 [`@gun-ai/harness-sdk`](https://www.npmjs.com/package/@gun-ai/harness-sdk)。
 
 ### Agent 平台: Runtime 治理
 - **检索与拒答：**PostgreSQL + pgvector 向量索引，经 `qwen3-rerank` 与证据门槛后绑定引用，无依据时明确拒答。Recall@5 1.000、MRR 0.917、引用准确率 1.000、误拒率 0.100（test split）。见[知识库检索](./docs/retrieval.md)（繁中）与[评测](./docs/evaluation.md#檢索品質)（繁中）。
@@ -94,7 +94,7 @@ Chat Gun 是一套由 Frontend、BFF 与 LangGraph Runtime 组成的全栈 Agent
 使用 Agent 平台的能力搭建的业务场景，不新增 Runtime 机制。它的数字同时是平台保证的端到端验证。
 
 - **售后客服链路：**意图分流 → 商品卡片 → 政策问答（带引用）→ 退款申请 → 人工审批 → 幂等执行 → 状态卡片。live 意图路由准确率 1.000（18 轮）、禁止结果 0。见[流程走查](./docs/gun-shop.md#gun-shop-流程走查)（繁中）与[流程评测](./docs/evaluation.md#流程評測)（繁中）。
-- **订单操作状态：**等待审批、执行中、已确认、已去重、失败、生效前已取消、结果未知、审批被拒、审批逾期，九种状态在界面上互相可辨识；不提供 undo。deterministic test 10／10（含审批被拒、逾期、生效前取消）。见[操作状态](./docs/gun-shop.md#gun-shop-流程走查)（繁中）与[订单幂等集成测试](./backend/src/agents/shopping-assistant/order-idempotency.integration.test.ts)。
+- **订单操作状态：**等待审批、执行中、已确认、已去重、失败、生效前已取消、结果未知、审批被拒、审批逾期，九种状态在界面上互相可辨识；不提供 undo。deterministic test 10 / 10（含审批被拒、逾期、生效前取消）。见[操作状态](./docs/gun-shop.md#gun-shop-流程走查)（繁中）与[订单幂等集成测试](./backend/src/agents/shopping-assistant/order-idempotency.integration.test.ts)。
 - **模拟边界：**商品与政策答案只来自合成语料并带引用；退款与取消作用在模拟订单系统，不触及真实交易。见[范围与限制](./docs/scope-and-limitations.md)（繁中）。
 
 ## 快速开始
@@ -125,7 +125,7 @@ docker compose up --build
 
 - 打开 <http://localhost:8123/app/>，首页即为 Gun Chat 与 Gun Shop 两个入口。在 Gun Shop 输入一个退款需求，就能看到审批卡片与之后的状态卡片。
 
-- 本机导入使用主机 port `5433`／`5434`；容器内的知识库连接必须使用 `knowledge-postgres:5432`，不要把主机的 `KNOWLEDGE_DATABASE_URL` 传入容器。本地三终端启动、PowerShell 命令与测试入口见[快速开始](./docs/getting-started.md)（繁中）。
+- 本机导入使用主机 port `5433` / `5434`；容器内的知识库连接必须使用 `knowledge-postgres:5432`，不要把主机的 `KNOWLEDGE_DATABASE_URL` 传入容器。本地三终端启动、PowerShell 命令与测试入口见[快速开始](./docs/getting-started.md)（繁中）。
 
 ## 业务场景
 
@@ -238,10 +238,10 @@ flowchart LR
 | `vector_rerank` | 1.000 | 0.917 | 1.000 | 1.000 | 0.100 |
 
 **流程评测（业务实现）：**
-- deterministic test 10／10；live 意图路由准确率 1.000（18 轮，`qwen3.7-plus`）、禁止结果 0。
-- 数据集 `chain-eval-v1`（15 题）、订单数据 `synthetic-orders-v1`（合成）、prompt `shopping-intent-v1`／`shopping-policy-answer-v1`。
+- deterministic test 10 / 10；live 意图路由准确率 1.000（18 轮，`qwen3.7-plus`）、禁止结果 0。
+- 数据集 `chain-eval-v1`（15 题）、订单数据 `synthetic-orders-v1`（合成）、prompt `shopping-intent-v1` / `shopping-policy-answer-v1`。
 
-**已知限制：** live test split 3／10 通过，其余 7 题为同一现象（订单操作返回空结果），尚未修正。同一组案例在 deterministic 层全部通过。
+**已知限制：** live test split 3 / 10 通过，其余 7 题为同一现象（订单操作返回空结果），尚未修正。同一组案例在 deterministic 层全部通过。
 
 完整结果、执行次数、dev split、延迟、指标定义、忠实度未发布的原因、方法学与重跑方式见[评测](./docs/evaluation.md)（繁中）。
 
