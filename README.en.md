@@ -80,7 +80,7 @@ Chat Gun is a full-stack agent application composed of a Frontend, a BFF, and a 
 - **Multimodal input**: accepts PNG, JPEG, and WebP images, which are analyzed by a vision model and incorporated into the answer or research flow.
 - **Model providers**: supports Qwen, OpenAI-compatible, and CCR-compatible endpoints; the LLM Gateway handles model capability checks and calls in one place.
 - **Native Tools and MCP**: built-in calculation, web search (Tavily), web page extraction, weather, knowledge base retrieval, and simulated order operations; Filesystem and Brave Search MCP Servers can optionally be loaded. See [Tools and MCP](./docs/tools-and-mcp.md) (Traditional Chinese).
-- **Agent／Tool SDK**: a versioned manifest declares inputs and outputs, side-effect class, required permissions, and execution conditions; a tool is granted only to the Agent that declares it. See [`@gun-ai/harness-sdk`](https://www.npmjs.com/package/@gun-ai/harness-sdk).
+- **Agent / Tool SDK**: a versioned manifest declares inputs and outputs, side-effect class, required permissions, and execution conditions; a tool is granted only to the Agent that declares it. See [`@gun-ai/harness-sdk`](https://www.npmjs.com/package/@gun-ai/harness-sdk).
 
 ### Agent Platform: Runtime Governance
 - **Retrieval and refusal:** PostgreSQL + pgvector provides the vector index; citations are bound after `qwen3-rerank` and evidence thresholds, with explicit refusal when evidence is insufficient. Recall@5 1.000, MRR 0.917, citation accuracy 1.000, false refusal rate 0.100 (test split). See [knowledge base retrieval](./docs/retrieval.md) (Traditional Chinese) and [evaluation](./docs/evaluation.md#檢索品質) (Traditional Chinese).
@@ -94,7 +94,7 @@ Chat Gun is a full-stack agent application composed of a Frontend, a BFF, and a 
 A business scenario built with the Agent platform's capabilities, adding no new Runtime mechanisms. Its numbers also serve as end-to-end verification of the platform guarantees.
 
 - **After-sales customer service chain:** intent routing → product cards → policy Q&A (with citations) → refund request → human approval → idempotent execution → status card. Live intent routing accuracy 1.000 (18 turns), prohibited outcomes 0. See the [flow walkthrough](./docs/gun-shop.md#gun-shop-流程走查) (Traditional Chinese) and [flow evaluation](./docs/evaluation.md#流程評測) (Traditional Chinese).
-- **Order operation states:** awaiting approval, executing, confirmed, deduplicated, failed, cancelled before taking effect, outcome unknown, approval rejected, and approval expired — nine states that are mutually distinguishable in the interface; undo is not provided. Deterministic test 10／10 (including approval rejected, expired, and cancelled before taking effect). See [operation states](./docs/gun-shop.md#gun-shop-流程走查) (Traditional Chinese) and the [order idempotency integration test](./backend/src/agents/shopping-assistant/order-idempotency.integration.test.ts).
+- **Order operation states:** awaiting approval, executing, confirmed, deduplicated, failed, cancelled before taking effect, outcome unknown, approval rejected, and approval expired — nine states that are mutually distinguishable in the interface; undo is not provided. Deterministic test 10 / 10 (including approval rejected, expired, and cancelled before taking effect). See [operation states](./docs/gun-shop.md#gun-shop-流程走查) (Traditional Chinese) and the [order idempotency integration test](./backend/src/agents/shopping-assistant/order-idempotency.integration.test.ts).
 - **Simulation boundary:** product and policy answers come only from the synthetic corpus and carry citations; refunds and cancellations act on a simulated order system and never touch real transactions. See [Scope and Limitations](./docs/scope-and-limitations.md) (Traditional Chinese).
 
 ## Quick Start
@@ -125,7 +125,7 @@ docker compose up --build
 
 - Open <http://localhost:8123/app/>; the home page shows the two entry points, Gun Chat and Gun Shop. Enter a refund request in Gun Shop to see the approval card and the status card that follows.
 
-- Local ingestion uses host ports `5433`／`5434`; the knowledge base connection inside containers must use `knowledge-postgres:5432`, so do not pass the host `KNOWLEDGE_DATABASE_URL` into the container. For the local three-terminal startup, PowerShell commands, and test entry points, see [Quick Start](./docs/getting-started.md) (Traditional Chinese).
+- Local ingestion uses host ports `5433` / `5434`; the knowledge base connection inside containers must use `knowledge-postgres:5432`, so do not pass the host `KNOWLEDGE_DATABASE_URL` into the container. For the local three-terminal startup, PowerShell commands, and test entry points, see [Quick Start](./docs/getting-started.md) (Traditional Chinese).
 
 ## Business Scenario
 
@@ -238,10 +238,10 @@ Only the **test split** is listed below
 | `vector_rerank` | 1.000 | 0.917 | 1.000 | 1.000 | 0.100 |
 
 **Flow evaluation (business implementation):**
-- Deterministic test 10／10; live intent routing accuracy 1.000 (18 turns, `qwen3.7-plus`), prohibited outcomes 0.
-- Dataset `chain-eval-v1` (15 questions), order data `synthetic-orders-v1` (synthetic), prompts `shopping-intent-v1`／`shopping-policy-answer-v1`.
+- Deterministic test 10 / 10; live intent routing accuracy 1.000 (18 turns, `qwen3.7-plus`), prohibited outcomes 0.
+- Dataset `chain-eval-v1` (15 questions), order data `synthetic-orders-v1` (synthetic), prompts `shopping-intent-v1` / `shopping-policy-answer-v1`.
 
-**Known limitation:** the live test split passes 3／10; the remaining 7 questions share the same symptom (order operations return an empty result) and have not been fixed yet. The same set of cases all pass at the deterministic layer.
+**Known limitation:** the live test split passes 3 / 10; the remaining 7 questions share the same symptom (order operations return an empty result) and have not been fixed yet. The same set of cases all pass at the deterministic layer.
 
 For full results, run counts, the dev split, latency, metric definitions, why faithfulness is not published, methodology, and how to rerun, see [Evaluation](./docs/evaluation.md) (Traditional Chinese).
 
