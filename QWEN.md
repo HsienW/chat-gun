@@ -56,7 +56,7 @@ Research、Plan、Review 階段必須使用唯讀模式。
 
 Qwen Reviewer 的強制邊界：
 - Qwen 主工作階段可暫時保留 `auto-edit` 與寫入工具能力，但這只是宿主能力，不是 Reviewer 角色授權。
-- Write 僅限寫入 `.agent-runtime/<change-id>/artifacts/` 路徑，不得寫入其他任何位置。
+- 不得使用 Write／Edit 或任何寫入工具，包括 `.agent-runtime/<change-id>/artifacts/`；由 adapter 保存輸出。
 - 必須使用 `secondary-architecture-reviewer` Subagent。
 - Reviewer Subagent 必須維持 `approvalMode: plan`，不得以 `auto-edit` 或 `yolo` 執行。
 - 只允許讀檔、批次讀檔、搜尋、Glob、列目錄與載入 Skill。
@@ -318,4 +318,5 @@ Qwen 可唯讀存取目前 Change 的 `current-state.json`，以及目前 Handof
 - 同一份審查資料必須同時序列化為符合 `agent-result.schema.json` 的 `review_result` JSON；`producer` 為 `Qwen`，`kind` 為 `review_result`。
 - Markdown 與 JSON 的 Verdict、Findings、驗證結果與殘餘風險必須語意一致，不得分別維護互相漂移的結論。
 - Qwen MUST NOT 使用 Write 或 Edit 保存 `review_result`；只能將 JSON 輸出至 stdout／聊天回應。
-- `review_result` 保存、Schema 驗證與 `current-state.json` 更新由 `qwen-capture-adapter.mjs`、CLIHost 或人工負責。
+- `review_result` 保存、Schema 驗證與 `current-state.json` 更新由 `qwen-capture-adapter.mjs`（可由 Master、CCR 或 Codex 以 CLIHost 身分啟動）、CLIHost 或人工負責。CCR／Codex 不得直接啟動 qwen；adapter 失敗不得繞過。每個 change 使用獨佔 review.lock，讀取範圍違規或無法證明時 effective verdict 為 INCOMPLETE。
+- 不得讀取 `.env*`、Master 授權容器、其他 change Runtime、workspace 外檔案或 node_modules／dist／build／coverage。Runtime 檔案只可讀取本 change 被 latestArtifactRefs／requiredInputRefs 明確引用者。

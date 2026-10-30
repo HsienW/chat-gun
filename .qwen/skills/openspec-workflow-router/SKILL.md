@@ -53,3 +53,6 @@ At the start of every task in this repository:
 4. If the stage is ambiguous, ask one concise Traditional Chinese question.
 
 For review stages, emit a schema-valid `review_result` to stdout. Human or CLIHost validation and persistence must complete before CurrentState advances.
+
+## 多調用方讀取邊界
+CCR 與 Codex 均只能透過 qwen-capture-adapter 調用 Qwen。Qwen 不得讀取 Master 授權容器、.env*、其他 change Runtime 或 workspace 外路徑；本 change Runtime 只可讀取明確引用者。read_scope_violation／read_scope_not_proven 使 effective verdict 為 INCOMPLETE。不得寫入任何結果或繞過 review.lock。

@@ -59,3 +59,6 @@ Qwen review 結論：
 - **Output**：`artifacts/readiness-result.json` 與 archive-change Handoff。
 - **State Transition**：`READY_FOR_READINESS_CHECK` → `READY_FOR_ARCHIVE`；需修正時 → `IMPLEMENTING`／Codex。
 - **Validation**：前三個 Gate 為 true、blockers 為空且 Requirements 有證據後，CCR 才可設定 readinessConfirmed。
+
+## 授權快照 Gate
+驗收者不得是 implementation_result 的 producer，除非依 Handoff 的 master-authorization.json#<id> 精準取得當次有效 self_acceptance 授權。inputRefs 使用 .agent-runtime/master-authorization.json 作為 relativePath，另帶 authorizationId 與 authorizationSnapshot（相同 ID、normalizedJson、sha256）。用 tools/master-authorization.mjs 的 authorizationSnapshot／verifyAuthorizationSnapshot 產生及核對。快照保留稽核，不取代 live 授權；不得聯集 scope 或執行 GC。

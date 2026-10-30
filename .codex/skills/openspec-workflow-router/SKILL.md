@@ -32,6 +32,14 @@ At the start of every task in this repository:
 
 ## Runtime Artifact Boundary
 
+### Authorization container and Qwen invocation
+
+- Select exactly the entry identified by the current Handoff `authorizationRef` (`master-authorization.json#<authorizationId>`). Validate the entire container against `openspec/specs/agent-role-policy/master-authorization.schema.json` first. Never substitute another entry or union scopes. Legacy single entries require authorizationId. A key mismatch or malformed entry rejects the entire container.
+- Check changeId/runId/handoffId, grantee/currentOwner, active Handoff status (PENDING/ACCEPTED/IN_PROGRESS), expiry, grant, actingRole and target writeScope. Reject overlapping active authorizations. `tools/master-authorization.mjs` provides the shared parser and referenced resolver. Expired/inactive entries need not be deleted. Only Master may run `tools/master-auth-gc.mjs`; agents must never run it or modify/delete authorization keys.
+- For self_acceptance, inputRefs must include authorizationId and authorizationSnapshot from `authorizationSnapshot(entry)` (canonical normalizedJson and SHA-256). Verify with `verifyAuthorizationSnapshot`; also verify the live authorization before acceptance. A historical snapshot does not grant new permission.
+- CCR and Codex invoke Qwen only through `tools/qwen-capture-adapter.mjs`, using the same launch contract as CCR's ADAPTER_LAUNCH_PATTERN. Verify currentOwner is Qwen and currentPhase is PLAN_REVIEW for review-plan or READY_FOR_REVIEW/REVIEWING for review-result. Lock, schema, evidence-gate or network failures must never fall back to direct qwen execution. If Bailian cannot be reached, report INCOMPLETE.
+- The adapter locks `.agent-runtime/<changeId>/review.lock`; stale locks require human inspection. read_scope_violation/read_scope_not_proven close the evidence gate. Use explicit readable paths; wildcard/directory searches without resolved read evidence remain INCOMPLETE.
+
 Before reading an ArtifactReference, verify changeId/runId, reject `..` and absolute paths, require an `openspec/changes/` or `.agent-runtime/` prefix, confirm the file exists, and stop if it contains a Secret or Credential. Never glob or recursively scan `.agent-runtime/`.
 
 Each stage reference defines Input, Output, and State Transition. Structured JSON is the machine-readable source; Markdown is an equivalent human-readable projection.

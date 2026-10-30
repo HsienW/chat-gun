@@ -122,15 +122,18 @@ Qwen 的 review-plan 或 review-result 階段 MUST 由 `qwen-capture-adapter.mjs
 node tools/qwen-capture-adapter.mjs \
   --change-id <change-id> \
   --run-id <run-id> \
+  --artifact-id <unique-artifact-id> \
   --stage review-result \
-  -- qwen <review-arguments>
+  --output-format stream-json \
+  --expected-auth-type <auth-type> --expected-model <model> --expected-base-url <https-base-url> \
+  -- qwen --approval-mode plan --auth-type <auth-type> --model <model> --openai-base-url <https-base-url> -o stream-json -p "$(cat .agent-runtime/<change-id>/artifacts/review-prompt-<id>.md)"
 ```
 
 Adapter 負責：
 1. 啟動 Qwen process 並擷取 stdout。
 2. 從 markdown／JSON 輸出中提取 review_result。
 3. 驗證 review_result 符合 `agent-result.schema.json`（changeId、runId、stage、kind、producer）。
-4. 原子寫入 `.agent-runtime/<change-id>/artifacts/review-result.json`。
+4. 原子寫入 `.agent-runtime/<change-id>/artifacts/<artifact-id>.json` 與 capture 證據，不覆寫既有結果。
 5. 依 verdict 執行 CurrentState transition（phase、owner、gateStatus、handoff、blockers、nextActions）。
 6. 原子寫入 `.agent-runtime/<change-id>/current-state.json`。
 
@@ -153,3 +156,10 @@ Adapter 只接受符合 canonical `current-state.schema.json` 根層 schema 的 
 - 本專案常見邊界是 `frontend` / `bff` / `backend`，但具體仍以 change scope 為準。
 - 涉及 resolver / provider / tool / planner 時，必須避免 hard-coded mapping、keyword shortcut、phrase stripping 或特殊案例分支取代正式契約。
 - git commit / push 一律由人執行；agent 最多產生 commit message 建議。
+
+## 多調用方與授權容器補充
+CCR 與 Codex MUST 只經 adapter 調用 Qwen，使用相同 ADAPTER_LAUNCH_PATTERN。確認 owner 為 Qwen，review-plan phase 為 PLAN_REVIEW，review-result 為 READY_FOR_REVIEW／REVIEWING。須指定唯一 artifact-id、stream-json、expected-auth-type／expected-model／expected-base-url，及對應的 Qwen plan／provider 參數。adapter 或百煉連線失敗不得直接執行 qwen。
+
+adapter 在讀取 CurrentState 前以 wx 取得 review.lock（pid、startedAt、runId、artifactId），finally 釋放；已有 lock 回報 review_lock_held，由人工確認 stale lock。artifact 使用 <artifact-id>.json，不覆寫既有結果。observed.readPaths 只保存遮蔽的相對路徑；read_scope_violation／read_scope_not_proven 使 effective verdict 為 INCOMPLETE。
+
+契約 schema 現位於 openspec/specs/{current-state,handoff,agent-result}-contract/。Master 容器依 authorizationRef 的 ID 取單筆，不得聯集 scope；只有 Master 可執行 GC。self_acceptance inputRefs 保存 authorizationId 與 authorizationSnapshot（相同 ID、normalizedJson、sha256）。
