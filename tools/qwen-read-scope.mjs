@@ -37,7 +37,8 @@ function unsafeSearchFilter(filter, containsSecret) {
 }
 
 export async function auditReadScope(observed, { root, changeId, runId, currentState, containsSecret, searchFilteringProven = false }) {
-  const refs = new Set();
+  // AGENTS.md section 15 lets an agent read the current change's own state without a reference.
+  const refs = new Set([`.agent-runtime/${changeId}/current-state.json`]);
   const required = currentState.latestHandoff?.requiredInputRefs ?? [];
   for (const ref of [...Object.values(currentState.latestArtifactRefs), ...required]) {
     if (ref?.changeId === changeId && (!ref.runId || ref.runId === runId || required.includes(ref)) &&
@@ -46,54 +47,66 @@ export async function auditReadScope(observed, { root, changeId, runId, currentS
   }
   const reasons = new Set();
   const readPaths = new Set();
+  const findings = [];
   const canonicalRoot = await realpath(root);
   for (const tool of observed.tools) {
     const request = tool.readRequest;
     delete tool.readRequest;
     if (!request) continue;
-    if (!request.proven || request.ignoresDisabled) reasons.add("read_scope_not_proven");
-    if (request.search && unsafeSearchFilter(request.filter, containsSecret)) reasons.add("read_scope_violation");
+    // Findings name the rule and location so a closed gate can be diagnosed; they never hold file content.
+    const flag = (reason, rule, target = null, extra = {}) => {
+      reasons.add(reason);
+      findings.push({ toolUseId: tool.id, tool: tool.name, reason, rule, target, ...extra });
+    };
+    if (!request.proven) flag("read_scope_not_proven", "path_not_proven");
+    if (request.ignoresDisabled) flag("read_scope_not_proven", "ignore_filtering_disabled");
+    if (request.search && unsafeSearchFilter(request.filter, containsSecret)) {
+      const filter = typeof request.filter === "string" && request.filter.length <= 200 && !containsSecret(request.filter) ? request.filter : null;
+      flag("read_scope_violation", "unsafe_search_filter", null, { filter });
+    }
     const targets = [];
     for (const value of request.paths) {
-      if (containsSecret(value)) { reasons.add("read_scope_violation"); readPaths.add("[redacted]"); continue; }
+      if (containsSecret(value)) { flag("read_scope_violation", "secret_in_path"); readPaths.add("[redacted]"); continue; }
       const absolute = path.resolve(root, value.replaceAll("\\", "/"));
       const relative = path.relative(root, absolute).split(path.sep).join("/");
       if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative) ||
           (path.win32.isAbsolute(value) && !path.isAbsolute(value))) {
-        reasons.add("read_scope_violation"); readPaths.add("[outside-workspace]"); continue;
+        flag("read_scope_violation", "outside_workspace"); readPaths.add("[outside-workspace]"); continue;
       }
-      readPaths.add(relative || ".");
-      targets.push(relative || ".");
-      if (forbidden(relative, changeId, refs)) { reasons.add("read_scope_violation"); continue; }
+      const target = relative || ".";
+      readPaths.add(target);
+      targets.push(target);
+      if (forbidden(relative, changeId, refs)) { flag("read_scope_violation", "forbidden_path", target); continue; }
       // Wildcards can include unreferenced runtime files or secrets; without resolved tool paths
       // their read scope cannot be certified.
-      if (/[?*\[\]{}!]/u.test(relative)) { reasons.add("read_scope_not_proven"); continue; }
+      if (/[?*\[\]{}!]/u.test(relative)) { flag("read_scope_not_proven", "wildcard_path", target); continue; }
       try {
         const real = await realpath(absolute);
         const realRelative = path.relative(canonicalRoot, real).split(path.sep).join("/");
         if (realRelative === ".." || realRelative.startsWith("../") || path.isAbsolute(realRelative) || forbidden(realRelative, changeId, refs)) {
-          reasons.add("read_scope_violation"); continue;
+          flag("read_scope_violation", "resolved_path_forbidden", target); continue;
         }
         // Directory searches are certified only while Qwen's .gitignore filtering is proven active.
         if ((await stat(real)).isDirectory() && tool.name?.toLowerCase() !== "list_directory" &&
             !(request.search && searchFilteringProven)) {
-          reasons.add("read_scope_not_proven"); continue;
+          flag("read_scope_not_proven", "directory_search_not_proven", target); continue;
         }
         if (!refs.has(relative)) {
           // The workspace root cannot be ignored, yet git check-ignore --no-index can report "." as matched.
           for (const candidate of new Set([relative, realRelative].filter(Boolean))) {
             try {
               execFileSync("git", ["check-ignore", "--no-index", "--quiet", "--", candidate], { cwd: root, stdio: "pipe", windowsHide: true });
-              reasons.add("read_scope_violation");
+              flag("read_scope_violation", "git_ignored", target);
             } catch (error) {
-              if (error.status !== 1) reasons.add("read_scope_not_proven");
+              if (error.status !== 1) flag("read_scope_not_proven", "git_ignore_check_failed", target);
             }
           }
         }
-      } catch { reasons.add("read_scope_not_proven"); }
+      } catch { flag("read_scope_not_proven", "path_unresolved", target); }
     }
     if (targets.length) tool.readTargets = targets;
   }
   observed.readPaths = [...readPaths].sort();
+  observed.readScopeFindings = findings;
   return [...reasons];
 }

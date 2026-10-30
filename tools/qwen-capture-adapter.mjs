@@ -538,15 +538,17 @@ function assessEvidence(observed, reviewSource, format) {
 }
 
 const SECRET_PATTERNS = Object.freeze({
-  provider_key: /\bsk-[a-zA-Z0-9_-]{12,}/i,
+  // A readable sk-test- fixture (words and numbers only) is not a key; random or mixed segments still match.
+  provider_key: /\b[sS][kK]-(?!test-(?:[a-z]+|[0-9]+)(?:-(?:[a-z]+|[0-9]+))*(?![a-zA-Z0-9_-]))[a-zA-Z0-9_-]{12,}/,
   cloud_access_key: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/i,
   private_key: /-----BEGIN (?:[A-Z ]*PRIVATE KEY)-----/i,
   bearer_token: /\bBearer\s+[a-zA-Z0-9._~+/-]{8,}/i,
   jwt: /\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/i,
-  credential_assignment: /["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|client[_-]?secret|authorization|cookie)["']?\s*[:=]\s*["']?[^\s"',;}]{4,}/i,
+  // A value that is only a variable interpolation, optionally after a scheme word, holds no credential.
+  credential_assignment: /["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|client[_-]?secret|authorization|cookie)["']?\s*[:=]\s*(?!\\?["'`]?(?:[A-Za-z]+[ \t]+)?\$\{[A-Za-z_$][\w$.?]*\}\\?(?:["'`]|[\s,;)}]|$))["']?[^\s"',;}]{4,}/i,
 });
 
-function secretCategories(text) {
+export function secretCategories(text) {
   return Object.entries(SECRET_PATTERNS).filter(([, pattern]) => pattern.test(text ?? "")).map(([category]) => category);
 }
 

@@ -12,6 +12,7 @@ import {
   captureQwenReviewResult,
   extractJsonObjectFromOutput,
   resolveQwenCommand,
+  secretCategories,
   validateReviewResult,
 } from "./qwen-capture-adapter.mjs";
 
@@ -1718,6 +1719,67 @@ test("qwen resolves to node and its cli entry on Windows only", async (t) => {
   assert.deepEqual(await resolveQwenCommand("qwen", ["-p"], { platform: "linux", env: { PATH: root } }), { command: "qwen", commandArgs: ["-p"] });
   assert.deepEqual(await resolveQwenCommand("node", ["a.js"], { platform: "win32", env: { Path } }), { command: "node", commandArgs: ["a.js"] });
 });
+
+test("the current change's own state is readable and recorded as clean", async (t) => {
+  const f = await captureFixture(t);
+  await initGitRepo(f);
+  await writeFile(path.join(f.workspaceRoot, ".gitignore"), ".agent-runtime/\n");
+  const relativePath = `.agent-runtime/${f.review.changeId}/current-state.json`;
+  const evidence = await captureEvidence(f, withReviewerTool(f, "read_file", { file_path: relativePath }));
+  assert.equal(evidence.evidenceGate.passed, true, JSON.stringify(evidence.evidenceGate));
+  assert.deepEqual(evidence.observed.readScopeFindings, []);
+});
+
+test("read scope findings name the rule and tool without file content", async (t) => {
+  for (const [name, input, rule, target] of [
+    ["read_file", { file_path: ".agent-runtime/other/current-state.json" }, "forbidden_path", ".agent-runtime/other/current-state.json"],
+    ["grep_search", { pattern: "needle", glob: "{.env,other}" }, "unsafe_search_filter", null],
+    ["read_file", { file_path: "../outside" }, "outside_workspace", null],
+  ]) {
+    const f = await captureFixture(t);
+    await initGitRepo(f);
+    const evidence = await captureEvidence(f, withReviewerTool(f, name, input));
+    assert.ok(evidence.evidenceGate.reasons.includes("read_scope_violation"), JSON.stringify(evidence.evidenceGate));
+    const finding = evidence.observed.readScopeFindings.find(item => item.rule === rule);
+    assert.equal(finding.reason, "read_scope_violation");
+    assert.equal(finding.toolUseId, "search-test");
+    assert.equal(finding.tool, name);
+    assert.equal(finding.target, target);
+  }
+});
+
+test("a search filter holding a credential is not copied into the findings", async (t) => {
+  const f = await captureFixture(t);
+  await initGitRepo(f);
+  const secret = `sk-${"a1".repeat(10)}`;
+  const evidence = await captureEvidence(f, withReviewerTool(f, "glob", { pattern: secret }));
+  assert.equal(evidence.observed.readScopeFindings[0].filter, null);
+  assert.ok(!JSON.stringify(evidence.observed.readScopeFindings).includes(secret));
+});
+
+const AUTH = ["author", "ization"].join("");
+const BEARER = "Bea" + "rer";
+for (const [label, line, expected] of [
+  ["a template header", `headers: { ${AUTH}: \`${BEARER} \${options.credential}\` },`, []],
+  ["a double-quoted template", `"${AUTH}": "${BEARER} \${token}"`, []],
+  ["a JSON-escaped template", `\\"${AUTH}\\": \\"${BEARER} \${token}\\"`, []],
+  ["a bare template", `api_key = \`\${config.apiKey}\`;`, []],
+  ["a literal token", `${AUTH}: ${BEARER} abcdef0123456789`, ["bearer_token", "credential_assignment"]],
+  ["a literal token in a template", `${AUTH}: \`${BEARER} abcdef0123456789\``, ["bearer_token", "credential_assignment"]],
+  ["a literal assignment", `api_key=abcd${"1234"}`, ["credential_assignment"]],
+  ["a shell default", `password=\${DB_PASS:-hunter2222}`, ["credential_assignment"]],
+  ["a literal after an interpolation", `password: \`\${prefix}hunter2222\``, ["credential_assignment"]],
+  ["a real provider key", `sk-${"proj-Ab3dE5gH7jK9"}`, ["provider_key"]],
+  ["a hex provider key", `sk-${"0a1b2c3d4e5f6a7b8c9d"}`, ["provider_key"]],
+  ["an upper-case prefix", `SK-${"Ab3dE5gH7jK9mN1p"}`, ["provider_key"]],
+  ["a random key under the test prefix", `sk-${"test-a8f3k29xQ7mN1p"}`, ["provider_key"]],
+  ["a word fixture", `sk-${"test-credential-value-123456"}`, []],
+  ["a key embedded after a word fixture", `sk-${"test-credential-value-123456"} sk-${"proj-Ab3dE5gH7jK9"}`, ["provider_key"]],
+]) {
+  test(`secret rules for ${label}`, () => {
+    assert.deepEqual(secretCategories(line), expected);
+  });
+}
 
 test("a failed spawn records the error code", async (t) => {
   const f = await captureFixture(t);
