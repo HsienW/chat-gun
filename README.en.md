@@ -43,7 +43,7 @@
 Chat Gun is a full-stack agent application composed of a Frontend, a BFF, and a LangGraph Runtime.
 - Agent platform: the underlying capabilities handle unified tool dispatch, make retrieved answers traceable, require human approval before operations that change external state, and use a logical idempotency key to ensure duplicate submissions take effect only once.
 - AI business scenarios: the application features built on top of the platform capabilities. There are currently two entry points: **Gun Chat** handles general conversation and deep research, and **Gun Shop** is an AI customer service chain that runs from product lookup and policy Q&A to refund approval.
-- All model calls, tool executions, and credential resolution happen on the server; the browser communicates with the Runtime only through the BFF. The corpus and order data used by the business scenarios are synthetic, and the order tools are simulated; the mechanisms are real, while the business context used to demonstrate them is simulated.
+- All model calls, tool executions, and credential resolution happen on the server; the frontend communicates with the Runtime only through the BFF. The corpus and order data used by the business scenarios are synthetic, and the order tools are simulated; the mechanisms are real, while the business context used to demonstrate them is simulated.
 
 ## Feature Demo
 
@@ -159,7 +159,7 @@ The diagram below shows which layers a Chat Gun request passes through from the 
 
 ```mermaid
 flowchart LR
-  B["Browser"]
+  B["Frontend"]
   F["Frontend<br/>Vite + React 19"]
   G["BFF<br/>Auth · CORS · Rate limiting · Timeouts · State write guard"]
   L["LangGraph Agent Server"]

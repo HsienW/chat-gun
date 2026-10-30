@@ -43,7 +43,7 @@
 Chat Gun 是一套由 Frontend、BFF 與 LangGraph Runtime 組成的全端 Agent 應用。
 - Agent 平台：是底層能力，負責工具統一調度、檢索答案可回溯、會改變外部狀態的操作必須先經人工核准，並以邏輯冪等鍵保證重複送出只生效一次。
 - AI 業務場景：是上層功能，建立在平台能力之上，目前有兩個入口 **Gun Chat** 處理一般對話與深度研究，**Gun Shop** 是一條從商品查詢、政策問答到退款核准的 AI 智能客服鏈路。
-- 所有模型呼叫、工具執行與憑證解析都在 Server 端完成，瀏覽器只透過 BFF 與 Runtime 通訊。業務場景的語料與訂單資料為合成資料，訂單工具為模擬；機制是真實的，展示它們的業務情境是模擬的。
+- 所有模型呼叫、工具執行與憑證解析都在 Server 端完成，前端只透過 BFF 與 Runtime 通訊。業務場景的語料與訂單資料為合成資料，訂單工具為模擬；機制是真實的，展示它們的業務情境是模擬的。
 
 ## 功能演示
 
@@ -159,7 +159,7 @@ docker compose up --build
 
 ```mermaid
 flowchart LR
-  B["瀏覽器"]
+  B["前端"]
   F["Frontend<br/>Vite + React 19"]
   G["BFF<br/>認證 · CORS · 限流 · 逾時 · State 寫入防護"]
   L["LangGraph Agent Server"]
