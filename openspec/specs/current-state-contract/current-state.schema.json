@@ -1,0 +1,336 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chat-gun-react-agent/current-state.schema.json",
+  "title": "Current State Contract",
+  "description": "Change 的 Shared State 檔案（.agent-runtime/<change-id>/current-state.json），是階段、owner、Gate、Blocker 與 ArtifactReferences 的單一事實來源。",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "changeId",
+    "runId",
+    "currentPhase",
+    "currentOwner",
+    "attempt",
+    "latestArtifactRefs",
+    "latestHandoff",
+    "gateStatus",
+    "blockers",
+    "nextActions",
+    "updatedAt",
+    "terminalStatus"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "description": "Semver schema version。"
+    },
+    "changeId": {
+      "type": "string",
+      "description": "OpenSpec Change 名稱。"
+    },
+    "runId": {
+      "type": "string",
+      "description": "本次執行識別。"
+    },
+    "currentPhase": {
+      "type": "string",
+      "enum": [
+        "PLAN_DRAFT",
+        "PLAN_REVIEW",
+        "PLAN_APPROVED",
+        "READY_FOR_IMPLEMENTATION",
+        "IMPLEMENTING",
+        "READY_FOR_REVIEW",
+        "REVIEWING",
+        "CHANGES_REQUESTED",
+        "NEEDS_COORDINATOR_ARBITRATION",
+        "READY_FOR_READINESS_CHECK",
+        "READY_FOR_ARCHIVE",
+        "ARCHIVED_AWAITING_HUMAN_COMMIT",
+        "COMPLETED",
+        "FAILED",
+        "INCOMPLETE"
+      ],
+      "description": "目前 Workflow Phase。"
+    },
+    "currentOwner": {
+      "type": "string",
+      "enum": [
+        "CCR",
+        "Codex",
+        "Qwen",
+        "Human"
+      ],
+      "description": "目前持有寫入權的 Agent。"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "目前 Phase 的嘗試次數。"
+    },
+    "latestArtifactRefs": {
+      "type": "object",
+      "description": "各類最新 Artifact 的 Reference。key 為 artifact 類別名稱。",
+      "additionalProperties": {
+        "$ref": "#/$defs/ArtifactReference"
+      }
+    },
+    "latestHandoff": {
+      "$ref": "#/$defs/HandoffReference"
+    },
+    "gateStatus": {
+      "$ref": "#/$defs/GateStatus"
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Blocker"
+      }
+    },
+    "nextActions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "人類可讀的建議下一步。"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "terminalStatus": {
+      "type": "string",
+      "enum": [
+        "NON_TERMINAL",
+        "TERMINAL"
+      ],
+      "description": "是否已進入不可再修改的 Terminal State。"
+    },
+    "rolePolicyVersion": {
+      "enum": [
+        "1",
+        "2"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "currentPhase": {
+            "const": "INCOMPLETE"
+          }
+        },
+        "required": [
+          "currentPhase"
+        ]
+      },
+      "then": {
+        "properties": {
+          "terminalStatus": {
+            "const": "NON_TERMINAL"
+          }
+        },
+        "required": [
+          "terminalStatus"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "ArtifactReference": {
+      "type": "object",
+      "allOf": [{
+        "if": { "properties": { "relativePath": { "const": ".agent-runtime/master-authorization.json" } }, "required": ["relativePath"] },
+        "then": { "required": ["authorizationId", "authorizationSnapshot"] }
+      }],
+      "required": [
+        "artifactId",
+        "changeId",
+        "relativePath"
+      ],
+      "properties": {
+        "artifactId": {
+          "type": "string"
+        },
+        "changeId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "coordinator_result",
+            "implementation_result",
+            "review_result",
+            "readiness_result",
+            "archive_result",
+            "handoff",
+            "proposal",
+            "design",
+            "tasks",
+            "spec",
+            "evidence"
+          ]
+        },
+        "relativePath": {
+          "type": "string"
+        },
+        "authorizationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authorizationSnapshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authorizationId",
+            "normalizedJson",
+            "sha256"
+          ],
+          "properties": {
+            "authorizationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "normalizedJson": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          }
+        }
+      },
+      "additionalProperties": false,
+      "dependentRequired": {
+        "authorizationId": [
+          "authorizationSnapshot"
+        ],
+        "authorizationSnapshot": [
+          "authorizationId"
+        ]
+      }
+    },
+    "HandoffReference": {
+      "type": "object",
+      "required": [
+        "handoffId",
+        "stage",
+        "from",
+        "to",
+        "status"
+      ],
+      "properties": {
+        "handoffId": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string",
+          "enum": [
+            "CCR",
+            "Codex",
+            "Qwen"
+          ]
+        },
+        "to": {
+          "type": "string",
+          "enum": [
+            "CCR",
+            "Codex",
+            "Qwen",
+            "Human"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "PENDING",
+            "ACCEPTED",
+            "IN_PROGRESS",
+            "COMPLETED",
+            "FAILED",
+            "REJECTED",
+            "EXPIRED"
+          ]
+        },
+        "authorizationRef": {
+          "type": "string",
+          "pattern": "^master-authorization\\.json#[A-Za-z0-9_.-]+$"
+        },
+        "requiredInputRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactReference"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "GateStatus": {
+      "type": "object",
+      "required": [
+        "proposalApproved",
+        "reviewPassed",
+        "implementationVerified",
+        "readinessConfirmed"
+      ],
+      "properties": {
+        "proposalApproved": {
+          "type": "boolean"
+        },
+        "reviewPassed": {
+          "type": "boolean"
+        },
+        "implementationVerified": {
+          "type": "boolean"
+        },
+        "readinessConfirmed": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Blocker": {
+      "type": "object",
+      "required": [
+        "severity",
+        "description",
+        "source",
+        "status"
+      ],
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": [
+            "Blocker"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "description": "來自哪個 review_result 的哪個 finding（artifactId + finding index）。"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "unresolved",
+            "accepted_risk",
+            "resolved"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -199,3 +199,28 @@ GIVEN `.qwen/settings.json` 和 `.qwen/agents/secondary-architecture-reviewer.md
 WHEN 本 Change 完成
 THEN Qwen 的 Tool 白名單 MUST 仍僅限 read_file、read_many_files、grep_search、glob、list_directory、skill
 AND MUST NOT 新增任何寫入類 Tool
+
+### Requirement: 多調用方、互斥與讀取稽核
+CCR 與 Codex MUST 只經 adapter 調用 Qwen，參數遵循相同 ADAPTER_LAUNCH_PATTERN；失敗不得改用直接 qwen。Qwen plan 隔離與唯讀邊界不變，不增加 Write／Edit／Shell 或 Pass 2。
+
+#### Scenario: 同 change 並行啟動
+- WHEN adapter 在讀取 CurrentState 前以 wx 取得 review.lock（pid/startedAt/runId/artifactId）
+- THEN 第二個啟動 MUST 回報 review_lock_held，不寫 artifact、不刪另一個 lock
+- AND 持鎖者 MUST 在 finally 釋放；stale lock 由人工確認清除
+
+#### Scenario: 讀取違規
+- WHEN stream-json 路徑指向 .env*、Master 授權容器、其他 change Runtime、workspace 外、node_modules／dist／build／coverage 或 Git ignored 檔案
+- THEN evidence gate MUST 回報 read_scope_violation，effective verdict 為 INCOMPLETE
+- AND 本 change Runtime 只可讀取 latestArtifactRefs／requiredInputRefs 明確引用者
+- AND current-state.json realpath MUST 位於 workspace 內
+
+#### Scenario: 讀取範圍不可證明
+- WHEN 參數未知／型別錯誤、Git ignore 驗證失敗，或 wildcard／目錄搜尋缺少可證明的實際檔案集合
+- THEN MUST 回報 read_scope_not_proven，effective verdict 為 INCOMPLETE
+- AND observed.readPaths 僅保存相對路徑，secret／外部路徑遮蔽，不保存內容
+
+#### Scenario: 唯讀工具清單
+- WHEN 工具為 web_search、websearch 或 read_mcp_resource
+- THEN MUST 不通過 evidence gate
+- WHEN read_many_files 提供合法明確 paths
+- THEN MUST 與 read_file 一樣稽核，不得僅因名稱誤判

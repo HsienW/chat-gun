@@ -1,0 +1,271 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chat-gun-react-agent/handoff.schema.json",
+  "title": "Structured Handoff Contract",
+  "description": "Agent 之間的結構化交接契約。只傳遞 ArtifactReference，不複製完整 Artifact 內容。",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "handoffId",
+    "changeId",
+    "runId",
+    "from",
+    "to",
+    "stage",
+    "reason",
+    "requiredInputRefs",
+    "expectedOutputKind",
+    "onSuccess",
+    "onFailure",
+    "requiresHumanApproval",
+    "status",
+    "createdAt"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "description": "Semver schema version。"
+    },
+    "handoffId": {
+      "type": "string",
+      "description": "此 Handoff 的唯一識別。"
+    },
+    "changeId": {
+      "type": "string",
+      "description": "OpenSpec Change 名稱。"
+    },
+    "runId": {
+      "type": "string",
+      "description": "本次執行識別。"
+    },
+    "from": {
+      "type": "string",
+      "enum": [
+        "CCR",
+        "Codex",
+        "Qwen"
+      ],
+      "description": "交接發起方。"
+    },
+    "to": {
+      "type": "string",
+      "enum": [
+        "CCR",
+        "Codex",
+        "Qwen",
+        "Human"
+      ],
+      "description": "交接接收方。"
+    },
+    "stage": {
+      "type": "string",
+      "description": "OpenSpec workflow stage。"
+    },
+    "reason": {
+      "type": "string",
+      "description": "交接原因（人類可讀）。"
+    },
+    "requiredInputRefs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ArtifactReference"
+      },
+      "description": "接收方需要讀取的所有上游 Artifact Reference。"
+    },
+    "expectedOutputKind": {
+      "type": "string",
+      "enum": [
+        "coordinator_result",
+        "implementation_result",
+        "review_result",
+        "readiness_result",
+        "archive_result"
+      ],
+      "description": "接收方應產生的 Artifact kind。"
+    },
+    "acceptanceCriteriaRefs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ArtifactReference"
+      },
+      "description": "驗收標準的 Artifact Reference（例如 spec.md）。"
+    },
+    "onSuccess": {
+      "$ref": "#/$defs/Route"
+    },
+    "onFailure": {
+      "$ref": "#/$defs/Route"
+    },
+    "onConflict": {
+      "$ref": "#/$defs/ConflictRoute"
+    },
+    "requiresHumanApproval": {
+      "type": "boolean",
+      "description": "是否需要人工批准後才能繼續。"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "PENDING",
+        "ACCEPTED",
+        "IN_PROGRESS",
+        "COMPLETED",
+        "FAILED",
+        "REJECTED",
+        "EXPIRED"
+      ],
+      "description": "Handoff 生命週期狀態。"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "rolePolicyVersion": {
+      "enum": [
+        "1",
+        "2"
+      ]
+    },
+    "authorizationRef": {
+      "type": "string",
+      "pattern": "^master-authorization\\.json#[A-Za-z0-9_.-]+$"
+    },
+    "actingRole": {
+      "enum": [
+        "implementation_secondary",
+        "planning_secondary"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ArtifactReference": {
+      "type": "object",
+      "allOf": [{
+        "if": { "properties": { "relativePath": { "const": ".agent-runtime/master-authorization.json" } }, "required": ["relativePath"] },
+        "then": { "required": ["authorizationId", "authorizationSnapshot"] }
+      }],
+      "required": [
+        "artifactId",
+        "changeId",
+        "relativePath"
+      ],
+      "properties": {
+        "artifactId": {
+          "type": "string"
+        },
+        "changeId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "coordinator_result",
+            "implementation_result",
+            "review_result",
+            "readiness_result",
+            "archive_result",
+            "handoff",
+            "proposal",
+            "design",
+            "tasks",
+            "spec",
+            "evidence"
+          ]
+        },
+        "relativePath": {
+          "type": "string"
+        },
+        "authorizationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authorizationSnapshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authorizationId",
+            "normalizedJson",
+            "sha256"
+          ],
+          "properties": {
+            "authorizationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "normalizedJson": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          }
+        }
+      },
+      "additionalProperties": false,
+      "dependentRequired": {
+        "authorizationId": [
+          "authorizationSnapshot"
+        ],
+        "authorizationSnapshot": [
+          "authorizationId"
+        ]
+      }
+    },
+    "Route": {
+      "type": "object",
+      "required": [
+        "nextStage",
+        "nextOwner"
+      ],
+      "properties": {
+        "nextStage": {
+          "type": "string"
+        },
+        "nextOwner": {
+          "type": "string",
+          "enum": [
+            "CCR",
+            "Codex",
+            "Qwen",
+            "Human"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConflictRoute": {
+      "type": "object",
+      "required": [
+        "strategy",
+        "nextOwner"
+      ],
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "coordinator_arbitration"
+          ]
+        },
+        "nextOwner": {
+          "type": "string",
+          "enum": [
+            "CCR"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
