@@ -5,6 +5,7 @@ import type { Pool } from "pg";
 import type { Queryable } from "../persistence/rows.js";
 import type { GovernedToolOutcome } from "./governed-outcome.js";
 import type { ExecutionProfileEvidence, ExecutionProfileTerminationCause } from "../tool-dispatch/execution-profile.js";
+import { parseStoredEgressDecision } from "../tool-dispatch/egress-reason.js";
 import type {
   BusinessEffectKey,
   ReplayKey,
@@ -242,7 +243,8 @@ interface ToolExecutionRow extends Record<string, unknown> {
   execution_profile_version: string | null;
   effective_capabilities: ExecutionProfileEvidence["effectiveCapabilities"] | null;
   secret_refs_used: string[] | null;
-  egress_decision: ExecutionProfileEvidence["egressDecision"];
+  // Rows written before the reason set was closed may hold any string.
+  egress_decision: unknown;
   termination_cause: ExecutionProfileTerminationCause | null;
   claim_disposition?: string | null;
 }
@@ -309,6 +311,7 @@ function mapClaimDisposition(
 }
 
 function mapToolExecution(row: ToolExecutionRow): ToolExecutionRecord {
+  const egressDecision = parseStoredEgressDecision(row.egress_decision);
   if (!isToolExecutionStatus(row.status)) {
     throw new Error(`Unknown tool execution status: ${row.status}`);
   }
@@ -332,7 +335,7 @@ function mapToolExecution(row: ToolExecutionRow): ToolExecutionRecord {
       ? { effectiveCapabilities: row.effective_capabilities }
       : {}),
     ...(row.secret_refs_used ? { secretRefsUsed: row.secret_refs_used } : {}),
-    ...(row.egress_decision ? { egressDecision: row.egress_decision } : {}),
+    ...(egressDecision ? { egressDecision } : {}),
     ...(row.termination_cause ? { terminationCause: row.termination_cause } : {}),
     ...(mapClaimDisposition(row.claim_disposition)
       ? { claimDisposition: mapClaimDisposition(row.claim_disposition) }
