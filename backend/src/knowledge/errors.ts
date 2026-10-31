@@ -1,3 +1,5 @@
+import type { ObservedEgressReasonCode } from "../runtime/tool-dispatch/egress-reason.js";
+
 export const KNOWLEDGE_ERROR_CODES = [
   "KB_EMBEDDING_UNSUPPORTED",
   "KB_RERANK_UNSUPPORTED",
@@ -16,6 +18,7 @@ export const KNOWLEDGE_ERROR_CODES = [
   "KB_CANCELLED",
   "SECRET_REFERENCE_UNRESOLVABLE",
   "EGRESS_DENIED",
+  "EGRESS_POLICY_UNAVAILABLE",
 ] as const;
 
 export type KnowledgeErrorCode = (typeof KNOWLEDGE_ERROR_CODES)[number];
@@ -31,7 +34,12 @@ export class KnowledgeError extends Error {
   readonly name = "KnowledgeError";
   readonly retryable: boolean;
 
-  constructor(readonly code: KnowledgeErrorCode, message: string = code) {
+  constructor(
+    readonly code: KnowledgeErrorCode,
+    message: string = code,
+    /** Present only for egress failures; never carries the destination. */
+    readonly egressReasonCode?: ObservedEgressReasonCode
+  ) {
     super(message);
     this.retryable = RETRYABLE_CODES.has(code);
   }

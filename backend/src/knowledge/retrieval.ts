@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 import type { ExecutionContext } from "../runtime/execution-context/execution-context.js";
+import {
+  egressPolicyErrorCodeSchema,
+  observedEgressReasonCodeSchema,
+} from "../runtime/tool-dispatch/egress-reason.js";
 import type { KnowledgeConfig } from "./config.js";
 import { isKnowledgeError, KnowledgeError } from "./errors.js";
 import type { KnowledgeModelGateway } from "./model-gateway.js";
@@ -20,7 +24,14 @@ const retrievalEvidenceSchema = z
     configVersion: z.string(),
     candidateCount: z.number().int().nonnegative(),
     passedCount: z.number().int().nonnegative(),
-    degradation: z.object({ reason: z.enum(["RERANK_UNAVAILABLE", "RERANK_PROVIDER_ERROR"]) }).strict().optional(),
+    degradation: z
+      .object({
+        reason: z.enum(["RERANK_UNAVAILABLE", "RERANK_PROVIDER_ERROR"]),
+        egressErrorCode: egressPolicyErrorCodeSchema.optional(),
+        egressReasonCode: observedEgressReasonCodeSchema.optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -196,6 +207,9 @@ export async function retrieveCandidates(request: KnowledgeSearchRequest): Promi
       mode = "vector_only_degraded";
       degradation = {
         reason: isKnowledgeError(error) && error.code === "KB_RERANK_UNSUPPORTED" ? "RERANK_UNAVAILABLE" : "RERANK_PROVIDER_ERROR",
+        ...(isKnowledgeError(error) && (error.code === "EGRESS_DENIED" || error.code === "EGRESS_POLICY_UNAVAILABLE")
+          ? { egressErrorCode: error.code, ...(error.egressReasonCode ? { egressReasonCode: error.egressReasonCode } : {}) }
+          : {}),
       };
     }
   }

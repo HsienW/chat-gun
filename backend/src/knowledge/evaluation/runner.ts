@@ -37,6 +37,8 @@ export type CaseResult =
       question?: string;
       retrievalMode: string;
       degradationReason?: string;
+      degradationEgressErrorCode?: string;
+      degradationEgressReasonCode?: string;
       kbOutcome: "evidence_found" | "no_source_found";
       evidence?: EvidenceBlock[];
       /** Ranked sources before the evidence threshold; Recall@5 and MRR measure the ranker. */
@@ -141,6 +143,8 @@ export async function evaluateCase(input: EvaluationRunInput, item: EvalCase): P
       question: item.input.question,
       retrievalMode: retrieved.mode,
       ...(retrieved.degradation ? { degradationReason: retrieved.degradation.reason } : {}),
+      ...(retrieved.degradation?.egressErrorCode ? { degradationEgressErrorCode: retrieved.degradation.egressErrorCode } : {}),
+      ...(retrieved.degradation?.egressReasonCode ? { degradationEgressReasonCode: retrieved.degradation.egressReasonCode } : {}),
       kbOutcome: result.outcome,
       ...(evidence ? { evidence } : {}),
       rankedSourceIds: rankedSourceIds.slice(0, CANDIDATE_SCORE_LIMIT),
