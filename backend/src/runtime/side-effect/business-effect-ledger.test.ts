@@ -157,6 +157,32 @@ describe("PgBusinessEffectLedger.prepare", () => {
     expect(JSON.stringify(executedValues[1])).toContain("env:BRAVE_API_KEY");
   });
 
+  it("reads a stored egress reason outside the known set as UNKNOWN", async () => {
+    const committedRow = {
+      ...toolExecutionRow("committed", "result-ref-1"),
+      termination_cause: "completed",
+      egress_decision: { decision: "deny", reasonCode: "LEGACY_REASON" },
+    };
+    const db = new FakeSideEffectDatabase(async (text) => {
+      if (text.includes("INSERT INTO business_effects")) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (text.includes("FROM business_effects")) {
+        return { rows: [businessEffectRow("committed")], rowCount: 1 };
+      }
+      if (text.includes("tool_executions")) {
+        return { rows: [committedRow], rowCount: 1 };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const ledger = new PgBusinessEffectLedger(db);
+
+    await expect(ledger.prepare({ ...prepareInput, decisionId: "decision-3" })).resolves.toMatchObject({
+      type: "existing_committed",
+      execution: { egressDecision: { decision: "deny", reasonCode: "UNKNOWN" } },
+    });
+  });
+
   it("does not claim an already committed business effect", async () => {
     let insertedValues: readonly unknown[] | undefined;
     const db = new FakeSideEffectDatabase(async (text, values) => {

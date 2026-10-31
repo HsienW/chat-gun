@@ -71,3 +71,36 @@ v2 MUST NOT 允許兩個 Agent 同時持有寫入權。角色交換 MUST 透過 
 - WHEN Master 授權 CCR 以 `implementation_secondary` 接手
 - THEN MUST 先由目前 owner 或 Master 將 `currentOwner` 轉為 `"CCR"`，並建立帶有 `rolePolicyVersion`、`actingRole` 與 `authorizationRef` 的 Handoff
 - AND 轉移完成前 CCR MUST NOT 寫入
+
+### Requirement: 多筆 Master 授權容器
+授權 MUST 符合相鄰 master-authorization.schema.json。schemaVersion "2" 的 authorizations 以 authorizationId 為 key。Handoff MUST 精準引用 master-authorization.json#<id>，比對 changeId/runId/handoffId、key/ID、grantee/currentOwner、active status、到期時間及 writeScope，不得替用其他 entry 或聯集 scope。
+
+#### Scenario: 有效引用與重疊
+- WHEN 指定 entry 有效且 Handoff 為 PENDING／ACCEPTED／IN_PROGRESS
+- THEN 只在其 writeScope 內允許寫入
+- AND 多筆有效授權涵蓋同一目標 MUST 拒絕（ambiguous_authorization）
+
+#### Scenario: 格式無效
+- WHEN key 不存在／不等於 ID、reference 缺失／格式錯誤、JSON 損壞、根層或 authorizations 非物件、任一 entry 型別不符
+- THEN MUST 整份拒絕，不得部分採用
+
+#### Scenario: 舊單筆格式
+- WHEN 根層為舊單筆授權
+- THEN 只有具備 authorizationId 才轉為單筆容器；缺少 ID MUST 拒絕
+
+### Requirement: Master 專用清理與驗收快照
+授權過期或 Handoff 不再 active 即失效。Agent MUST NOT 修改授權檔、刪除 key 或執行 master-auth-gc。Master 執行 GC 預設 dry-run；--apply 才以 temp file + rename 寫入，寫入前比對 hash。
+
+#### Scenario: 清理失效授權
+- WHEN Master 清理到期、Handoff 非 active、CurrentState terminal 或不存在的 entry
+- THEN --apply 僅移除失效項目；授權檔執行期間改變 MUST 中止
+- AND CurrentState 損壞或無法讀取 MUST 中止，不猜測刪除
+
+#### Scenario: Agent 嘗試修改
+- WHEN Agent 透過 Write／Edit／MultiEdit／Bash 修改授權檔或執行 GC
+- THEN MUST 拒絕；Bash 字串比對無法阻擋所有混淆命令的限制須記錄
+
+#### Scenario: self_acceptance 快照
+- WHEN readiness_result 引用 self_acceptance
+- THEN inputRefs MUST 帶 authorizationId 與 authorizationSnapshot（相同 ID、entry 遞迴排序 object keys 的 normalizedJson 字串、UTF-8 SHA-256 sha256；array 順序保留）
+- AND 快照保留 GC 後稽核，MUST NOT 取代 live 授權

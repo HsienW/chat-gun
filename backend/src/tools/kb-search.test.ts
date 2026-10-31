@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { createSystemExecutionContext } from "../knowledge/connection.js";
 import { prepareCorpus } from "../knowledge/corpus.js";
+import { KnowledgeError } from "../knowledge/errors.js";
 import { InMemoryKnowledgeStore } from "../knowledge/in-memory-store.js";
 import { ingestCorpus } from "../knowledge/ingestion.js";
 import { kbSearchResultSchema } from "../knowledge/retrieval.js";
@@ -75,6 +76,21 @@ describe("kb_search tool", () => {
     );
     expect(output).toMatchObject({ outcome: "error", errorCode: "KB_CONFIG_INVALID" });
     expect(gateway.embedCalls).toHaveLength(0);
+  });
+
+  it.each([
+    ["EGRESS_DENIED", "PRIVATE_ADDRESS"],
+    ["EGRESS_POLICY_UNAVAILABLE", "DNS_RESOLUTION_FAILED"],
+  ] as const)("returns a typed %s failure instead of an empty result when the query embedding fails at egress", async (code, reason) => {
+    const { runnableConfig } = await setup();
+    const failingGateway = new FakeKnowledgeModelGateway({
+      dimensions: 64,
+      failEmbeddingFor: () => new KnowledgeError(code, "egress failed", reason),
+    });
+    const tool = createKbSearchTool({ config: () => config, store: async () => new InMemoryKnowledgeStore(), gateway: () => failingGateway });
+    const output = JSON.parse(await tool.invoke({ query: "returns" }, runnableConfig) as string);
+
+    expect(output).toEqual({ schemaVersion: "kb_search_result@1", outcome: "error", errorCode: code, retryable: false, egressReasonCode: reason });
   });
 
   it("reports cancellation as a typed outcome", async () => {

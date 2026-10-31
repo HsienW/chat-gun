@@ -1,0 +1,287 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chat-gun-react-agent/agent-result.schema.json",
+  "title": "Agent Result Envelope",
+  "description": "統一 Agent 輸出 Envelope，所有 coordinator_result、implementation_result、review_result、readiness_result、archive_result、handoff 共用。",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "artifactId",
+    "changeId",
+    "producer",
+    "kind",
+    "status",
+    "createdAt",
+    "summary",
+    "inputRefs",
+    "outputRefs",
+    "verification",
+    "risks"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "description": "Semver schema version，例如 '1.0.0'。Major 變更表示不相容。"
+    },
+    "artifactId": {
+      "type": "string",
+      "description": "此 Artifact 的唯一識別。可使用 UUID 或 deterministic id。"
+    },
+    "changeId": {
+      "type": "string",
+      "description": "OpenSpec Change 名稱。"
+    },
+    "runId": {
+      "type": "string",
+      "description": "本次執行識別。同一個 Change 可能多輪修改。"
+    },
+    "producer": {
+      "type": "string",
+      "enum": [
+        "CCR",
+        "Codex",
+        "Qwen"
+      ],
+      "description": "產生此 Artifact 的 Agent。"
+    },
+    "stage": {
+      "type": "string",
+      "description": "OpenSpec workflow stage，例如 'plan-change'、'review-plan'。"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "coordinator_result",
+        "implementation_result",
+        "review_result",
+        "readiness_result",
+        "archive_result",
+        "handoff"
+      ],
+      "description": "Discriminated union key。決定 payload 的 shape。"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "success",
+        "failure",
+        "partial"
+      ],
+      "description": "此 Agent 工作的整體狀態。"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 建立時間。"
+    },
+    "summary": {
+      "type": "string",
+      "description": "人類可讀的摘要。"
+    },
+    "inputRefs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ArtifactReference"
+      },
+      "description": "本產出引用了哪些上游 Artifact。"
+    },
+    "outputRefs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ArtifactReference"
+      },
+      "description": "本產出產生了哪些可供下游引用的 Artifact。"
+    },
+    "verification": {
+      "$ref": "#/$defs/Verification"
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Risk"
+      }
+    },
+    "nextHandoff": {
+      "$ref": "#/$defs/NextHandoff"
+    },
+    "payload": {
+      "description": "依 kind 決定結構的 payload。review_result 有 findings/verdict；其他 kind 由實際使用定義。"
+    },
+    "rolePolicyVersion": {
+      "enum": [
+        "1",
+        "2"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ArtifactReference": {
+      "type": "object",
+      "allOf": [{
+        "if": { "properties": { "relativePath": { "const": ".agent-runtime/master-authorization.json" } }, "required": ["relativePath"] },
+        "then": { "required": ["authorizationId", "authorizationSnapshot"] }
+      }],
+      "required": [
+        "artifactId",
+        "changeId",
+        "relativePath"
+      ],
+      "properties": {
+        "artifactId": {
+          "type": "string"
+        },
+        "changeId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "coordinator_result",
+            "implementation_result",
+            "review_result",
+            "readiness_result",
+            "archive_result",
+            "handoff",
+            "proposal",
+            "design",
+            "tasks",
+            "spec",
+            "evidence"
+          ]
+        },
+        "relativePath": {
+          "type": "string"
+        },
+        "authorizationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authorizationSnapshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authorizationId",
+            "normalizedJson",
+            "sha256"
+          ],
+          "properties": {
+            "authorizationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "normalizedJson": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          }
+        }
+      },
+      "additionalProperties": false,
+      "dependentRequired": {
+        "authorizationId": [
+          "authorizationSnapshot"
+        ],
+        "authorizationSnapshot": [
+          "authorizationId"
+        ]
+      }
+    },
+    "Verification": {
+      "type": "object",
+      "required": [
+        "executed",
+        "passed",
+        "failed",
+        "notExecuted"
+      ],
+      "properties": {
+        "executed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "passed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "failed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notExecuted": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Risk": {
+      "type": "object",
+      "required": [
+        "severity",
+        "description"
+      ],
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": [
+            "Low",
+            "Medium",
+            "High",
+            "Critical"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "mitigation": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "NextHandoff": {
+      "type": "object",
+      "required": [
+        "stage",
+        "to"
+      ],
+      "properties": {
+        "handoffId": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string",
+          "enum": [
+            "CCR",
+            "Codex",
+            "Qwen",
+            "Human"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

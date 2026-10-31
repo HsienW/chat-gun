@@ -40,6 +40,7 @@ describe("knowledge model gateway", () => {
     expect(http.mock.calls[0][1].headers.authorization).toBe(`Bearer ${CREDENTIAL}`);
     expect(usage).toHaveLength(3);
     expect(usage.every((event) => event.purpose === "embedding" && event.outcome === "succeeded")).toBe(true);
+    for (const event of usage) expect(event).not.toHaveProperty("egressReasonCode");
     expect(JSON.stringify(usage)).not.toContain(CREDENTIAL);
   });
 
@@ -71,6 +72,39 @@ describe("knowledge model gateway", () => {
       throw new EgressPolicyError("EGRESS_DENIED", "DESTINATION_NOT_ALLOWED", "denied");
     });
     await expect(gateway.embed(["text"], { credential: CREDENTIAL })).rejects.toMatchObject({ code: "EGRESS_DENIED" });
+  });
+
+  it("keeps the private-address reason when a fake-ip resolution is denied", async () => {
+    const { gateway, usage } = createGateway(async () => {
+      throw new EgressPolicyError("EGRESS_DENIED", "PRIVATE_ADDRESS", "Egress target is not a public IP address: 198.18.0.71");
+    });
+    const failure = await gateway.embed(["text"], { credential: CREDENTIAL }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: "EGRESS_DENIED", egressReasonCode: "PRIVATE_ADDRESS", retryable: false });
+    expect((failure as Error).message).not.toContain("198.18");
+    expect(usage).toEqual([expect.objectContaining({ outcome: "failed", errorCode: "EGRESS_DENIED", egressReasonCode: "PRIVATE_ADDRESS" })]);
+    const serialized = JSON.stringify(usage);
+    expect(serialized).not.toContain("198.18");
+    expect(serialized).not.toContain("embedding.example.test");
+    expect(serialized).not.toContain(CREDENTIAL);
+  });
+
+  it("reports a DNS failure as EGRESS_POLICY_UNAVAILABLE instead of a denial", async () => {
+    const { gateway, usage } = createGateway(async () => {
+      throw new EgressPolicyError("EGRESS_POLICY_UNAVAILABLE", "DNS_RESOLUTION_FAILED", "unavailable");
+    });
+    await expect(gateway.embed(["text"], { credential: CREDENTIAL })).rejects.toMatchObject({
+      code: "EGRESS_POLICY_UNAVAILABLE",
+      egressReasonCode: "DNS_RESOLUTION_FAILED",
+      retryable: false,
+    });
+    expect(usage[0]).toMatchObject({ errorCode: "EGRESS_POLICY_UNAVAILABLE", egressReasonCode: "DNS_RESOLUTION_FAILED" });
+  });
+
+  it("adds no egress reason to failures that did not come from the egress policy", async () => {
+    const { gateway, usage } = createGateway(async () => jsonResponse({ code: "x" }, 500));
+    await expect(gateway.embed(["text"], { credential: CREDENTIAL })).rejects.toMatchObject({ code: "KB_PROVIDER_ERROR" });
+    expect(usage[0]).not.toHaveProperty("egressReasonCode");
   });
 
   it("reports cancellation instead of a generic failure", async () => {

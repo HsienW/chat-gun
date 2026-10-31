@@ -6,6 +6,7 @@ import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import type { SyntheticOwnerBinding } from "../../tools/orders/synthetic-owner-binding.js";
 
 import type { ChatModelInvoker } from "../../platform/llm-gateway.js";
 import { applyToolGovernance } from "../../platform/tool-governance.js";
@@ -193,6 +194,7 @@ type ScriptedRun = (
 const fixturePromise = loadSyntheticOrderFixture();
 
 async function harness(options: {
+  ownerBinding?: SyntheticOwnerBinding;
   toolCalls: ToolCallSpec[] | (() => ToolCallSpec[]);
   ready?: () => Promise<boolean>;
   run?: ScriptedRun;
@@ -207,6 +209,7 @@ async function harness(options: {
   let externalIds = 0;
   const provider = new MockOrderProvider({
     fixture: await fixturePromise,
+    ownerBinding: options.ownerBinding,
     now,
     createExternalOperationId: () => `ext-${++externalIds}`,
   });
@@ -391,6 +394,40 @@ async function waitingState(graph: Graph, threadId: string) {
   const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
   return snapshot.values as Awaited<ReturnType<Graph["invoke"]>>;
 }
+
+describe("demo owner binding approval boundaries", () => {
+  const ownerBinding: SyntheticOwnerBinding = {
+    sourceTenantId: "public", sourcePrincipalId: "anonymous",
+    targetTenantId: TENANT, targetOwnerPrincipalId: SHOPPER, epoch: "e1",
+  };
+
+  it.each(["approve", "deny", "expire", "cancel"] as const)("preserves %s under the trusted demo identity", async (decision) => {
+    const threadId = `bound-${decision}`;
+    const h = await harness({ toolCalls: [refund("call-bound")], ownerBinding, timeoutMs: 1_000 });
+    const base = runConfig(threadId);
+    const context = base.configurable.execution_context;
+    const config = { configurable: { ...base.configurable, execution_context: {
+      ...context,
+      principal: { ...context.principal, tenantId: "public", principalId: "anonymous" },
+      scope: { ...context.scope, tenantId: "public", scopeId: "demo-scope" },
+    } } };
+    await h.graph.invoke({ messages: [new HumanMessage("退款 ORD-1001")] }, config);
+    const descriptor = (await waitingState(h.graph, threadId)).pendingAuthorization!;
+    expect(h.execute).not.toHaveBeenCalled();
+    if (decision === "expire") h.advance(1_001);
+    const result = await h.graph.invoke(decision === "cancel"
+      ? { kind: "cancel", targetRunId: "run-1" }
+      : resume(descriptor, decision === "deny" ? "deny" : "approve"), config);
+    const expected = { approve: "confirmed", deny: "approval_denied", expire: "approval_expired", cancel: "cancelled_before_effect" };
+    expect(result.operations["call-bound"]?.state).toBe(expected[decision]);
+    if (decision === "approve") {
+      expect(h.submitRefund).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ requester: { tenantId: "public", principalId: "anonymous" } }));
+    } else {
+      expect(h.submitRefund).not.toHaveBeenCalled();
+      expect(h.execute).not.toHaveBeenCalled();
+    }
+  });
+});
 
 describe("order branch approval", () => {
   it("binds only the order tools and runs an approved refund exactly once", async () => {

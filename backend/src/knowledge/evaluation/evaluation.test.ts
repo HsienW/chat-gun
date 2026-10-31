@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { prepareCorpus } from "../corpus.js";
+import { KnowledgeError } from "../errors.js";
 import { InMemoryKnowledgeStore } from "../in-memory-store.js";
 import { ingestCorpus } from "../ingestion.js";
 import type { KbSearchResult } from "../retrieval.js";
@@ -142,6 +143,21 @@ describe("retrieval evaluation runner", () => {
     };
     const run = await runEvaluation(await evaluationInput({ judge }));
     expect(run.results[0]).toMatchObject({ faithfulness: 0.5, judgeSupportedClaims: 1, judgeTotalClaims: 2, unsupportedClaims: ["claim b"] });
+  });
+
+  it("keeps the egress classification and reason when rerank degrades at egress", async () => {
+    const gateway = new FakeKnowledgeModelGateway({
+      dimensions: 64,
+      failRerank: new KnowledgeError("EGRESS_POLICY_UNAVAILABLE", "egress failed", "DNS_RESOLUTION_FAILED"),
+    });
+    const run = await runEvaluation(await evaluationInput({ gateway }));
+    const degraded = run.results.find((result) => result.status === "completed" && result.retrievalMode === "vector_only_degraded");
+
+    expect(degraded).toMatchObject({
+      degradationReason: "RERANK_PROVIDER_ERROR",
+      degradationEgressErrorCode: "EGRESS_POLICY_UNAVAILABLE",
+      degradationEgressReasonCode: "DNS_RESOLUTION_FAILED",
+    });
   });
 
   it("keeps raw candidate scores so thresholds can be calibrated on the dev split", async () => {

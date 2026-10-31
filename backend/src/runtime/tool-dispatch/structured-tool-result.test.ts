@@ -88,6 +88,24 @@ describe("StructuredToolResultEnvelope", () => {
     expect(JSON.stringify(envelope)).not.toContain("secret-value");
   });
 
+  it("leaves an unavailable egress evaluation out of the envelope decision", () => {
+    const envelope = createStructuredToolResultEnvelope({
+      executionContext,
+      descriptor,
+      outcome: { type: "failed_not_committed", errorCode: "EGRESS_POLICY_UNAVAILABLE" },
+      securityEvidence: {
+        executionProfileVersion: "1.0",
+        effectiveCapabilities: { executionMode: "trusted_in_process" },
+        secretRefsUsed: [],
+        egressDecision: { decision: "unavailable", reasonCode: "DNS_RESOLUTION_FAILED" },
+      },
+    });
+
+    expect(envelope.egressDecision).toBeNull();
+    expect(envelope.outcome).toMatchObject({ errorCode: "EGRESS_POLICY_UNAVAILABLE" });
+    expect(structuredToolResultEnvelopeSchema.safeParse(envelope).success).toBe(true);
+  });
+
   it("keeps successful output and canonical correlation structured", () => {
     const envelope = createStructuredToolResultEnvelope({
       executionContext,

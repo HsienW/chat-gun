@@ -2,6 +2,10 @@ import { isToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { z } from "zod";
 
 import { kbSearchResultSchema, type KbSearchResult } from "../../knowledge/retrieval.js";
+import {
+  toObservedEgressReasonCode,
+  type ObservedEgressReasonCode,
+} from "../../runtime/tool-dispatch/egress-reason.js";
 import { structuredToolResultEnvelopeSchema } from "../../runtime/tool-dispatch/structured-tool-result.js";
 import type { CardEmission } from "./card-events.js";
 
@@ -28,13 +32,14 @@ const kbSearchFailureSchema = z
     outcome: z.literal("error"),
     errorCode: z.string().min(1),
     retryable: z.boolean(),
+    egressReasonCode: z.string().min(1).optional(),
   })
   .strict();
 
 export type KbSearchToolOutcome =
   | { kind: "evidence_found"; result: Extract<KbSearchResult, { outcome: "evidence_found" }> }
   | { kind: "no_source_found" }
-  | { kind: "failed"; errorCode: string };
+  | { kind: "failed"; errorCode: string; egressReasonCode?: ObservedEgressReasonCode };
 
 function parseJson(text: string): unknown {
   try {
@@ -80,7 +85,15 @@ export function readKbSearchOutcome(
       : { kind: "no_source_found" };
   }
   const failure = kbSearchFailureSchema.safeParse(payload);
-  return { kind: "failed", errorCode: failure.success ? failure.data.errorCode : "KB_SEARCH_RESULT_INVALID" };
+  if (!failure.success) return { kind: "failed", errorCode: "KB_SEARCH_RESULT_INVALID" };
+  return {
+    kind: "failed",
+    errorCode: failure.data.errorCode,
+    // The reason stays a plain string above so an unknown value cannot discard the errorCode.
+    ...(failure.data.egressReasonCode !== undefined
+      ? { egressReasonCode: toObservedEgressReasonCode(failure.data.egressReasonCode) }
+      : {}),
+  };
 }
 
 function snippet(content: string): string {

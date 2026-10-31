@@ -9,7 +9,6 @@ import { getRuntimeIdentityStatusInstrumentation } from "../../runtime/authoriza
 import { instrumentGraphWithExecutionContext } from "../../runtime/execution-context/instrument-graph.js";
 import { getPool } from "../../runtime/persistence/connection.js";
 import { PgInterruptManifestRepository } from "../../runtime/recovery/interrupt-manifest-repository.js";
-import { MockOrderProvider } from "../../tools/orders/mock-order-provider.js";
 import type { OrderOperationStatusReader } from "../../tools/orders/order-tools.js";
 import { loadSyntheticOrderFixture } from "../../tools/orders/synthetic-orders.js";
 import { loadShoppingAssistantToolRuntime } from "../../tools/registry.js";
@@ -22,6 +21,7 @@ import { PgOrderOperationRequestStore, unavailableOrderOperationRequestStore } f
 import { PgOrderOperationStatusReader } from "./operation-status.js";
 import { PgOriginalOperationResolver, unresolvableOriginalOperation } from "./original-operation.js";
 import { LlmPolicyAnswerSynthesizer } from "./policy-answer.js";
+import { createConfiguredSyntheticOrderProvider } from "./order-owner-binding.js";
 
 const { model, temperature, intentTimeoutMs } = readShoppingAssistantModelSettings();
 // Structured output is chosen by declared capability, never by model name.
@@ -41,7 +41,9 @@ const statusReader: OrderOperationStatusReader = pool
     };
 
 const runtime = await loadShoppingAssistantToolRuntime({
-  orderProvider: new MockOrderProvider({ fixture: await loadSyntheticOrderFixture() }),
+  orderProvider: await createConfiguredSyntheticOrderProvider({
+    env: process.env, fixture: await loadSyntheticOrderFixture(), audit: auditLogger,
+  }),
   statusReader,
 });
 

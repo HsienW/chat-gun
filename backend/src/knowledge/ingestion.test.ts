@@ -114,6 +114,17 @@ describe("knowledge ingestion", () => {
     expect(gateway.embedCalls).toHaveLength(1);
   });
 
+  it("stops the run when the egress policy cannot finish evaluating", async () => {
+    const store = new InMemoryKnowledgeStore();
+    const gateway = new FakeKnowledgeModelGateway({
+      dimensions: 64,
+      failEmbeddingFor: () => new KnowledgeError("EGRESS_POLICY_UNAVAILABLE", "unavailable", "DNS_RESOLUTION_FAILED"),
+    });
+    const result = await run(store, gateway, corpusOf({ "product-a": "Red mug.", "product-b": "Blue bottle." }), "run-1");
+    expect(result).toMatchObject({ status: "failed", errorCode: "EGRESS_POLICY_UNAVAILABLE", counts: { failedDocuments: 1 } });
+    expect(gateway.embedCalls).toHaveLength(1);
+  });
+
   it("ends as incomplete when cancelled", async () => {
     const store = new InMemoryKnowledgeStore();
     const gateway = new FakeKnowledgeModelGateway({ dimensions: 64 });

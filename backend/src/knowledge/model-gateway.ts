@@ -8,6 +8,10 @@ import {
   fetchWithValidatedRedirects,
   type EgressPolicy,
 } from "../runtime/tool-dispatch/egress-policy.js";
+import {
+  toObservedEgressReasonCode,
+  type ObservedEgressReasonCode,
+} from "../runtime/tool-dispatch/egress-reason.js";
 import { knowledgeEgressDestinations, type KnowledgeConfig } from "./config.js";
 import { KnowledgeError, type KnowledgeErrorCode } from "./errors.js";
 
@@ -27,6 +31,8 @@ export interface KnowledgeUsageEvent {
   latencyMs: number;
   outcome: "succeeded" | "failed" | "cancelled";
   errorCode?: KnowledgeErrorCode;
+  /** Set only when the call failed at the egress policy. */
+  egressReasonCode?: ObservedEgressReasonCode;
 }
 
 export interface KnowledgeCallOptions {
@@ -178,7 +184,7 @@ export class HttpKnowledgeModelGateway implements KnowledgeModelGateway {
     const startedAt = this.now();
     const timeout = AbortSignal.timeout(this.config.requestTimeoutMs);
     const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-    const report = (outcome: KnowledgeUsageEvent["outcome"], totalTokens: number | null, errorCode?: KnowledgeErrorCode) =>
+    const report = (outcome: KnowledgeUsageEvent["outcome"], totalTokens: number | null, failure?: KnowledgeError) =>
       this.usageSink(
         {
           provider: "qwen",
@@ -188,7 +194,8 @@ export class HttpKnowledgeModelGateway implements KnowledgeModelGateway {
           totalTokens,
           latencyMs: this.now() - startedAt,
           outcome,
-          ...(errorCode ? { errorCode } : {}),
+          ...(failure ? { errorCode: failure.code } : {}),
+          ...(failure?.egressReasonCode ? { egressReasonCode: failure.egressReasonCode } : {}),
         },
         options.context
       );
@@ -219,7 +226,7 @@ export class HttpKnowledgeModelGateway implements KnowledgeModelGateway {
       return { body: parsedBody };
     } catch (error) {
       const failure = this.toKnowledgeError(error, options.signal);
-      report(failure.code === "KB_CANCELLED" ? "cancelled" : "failed", null, failure.code);
+      report(failure.code === "KB_CANCELLED" ? "cancelled" : "failed", null, failure);
       throw failure;
     }
   }
@@ -227,7 +234,11 @@ export class HttpKnowledgeModelGateway implements KnowledgeModelGateway {
   private toKnowledgeError(error: unknown, external?: AbortSignal): KnowledgeError {
     if (external?.aborted) return new KnowledgeError("KB_CANCELLED");
     if (error instanceof KnowledgeError) return error;
-    if (error instanceof EgressPolicyError) return new KnowledgeError("EGRESS_DENIED", error.message);
+    if (error instanceof EgressPolicyError) {
+      // Keep the egress classification; the egress message is not reused because it is not ours to expose.
+      const reason = toObservedEgressReasonCode(error.reasonCode);
+      return new KnowledgeError(error.code, `Knowledge egress failed: ${error.code} (${reason})`, reason);
+    }
     if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
       return new KnowledgeError("KB_PROVIDER_TIMEOUT");
     }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fsPromises, { access, mkdir, mkdtemp, readFile, rm, writeFile, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawnSync, execFileSync } from "node:child_process";
 import * as adapter from "./qwen-capture-adapter.mjs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,6 +11,8 @@ import { createRequire, syncBuiltinESMExports } from "node:module";
 import {
   captureQwenReviewResult,
   extractJsonObjectFromOutput,
+  resolveQwenCommand,
+  secretCategories,
   validateReviewResult,
 } from "./qwen-capture-adapter.mjs";
 
@@ -19,7 +21,7 @@ const requireBackend = createRequire(new URL("../backend/package.json", import.m
 const Ajv = requireBackend("ajv/dist/2020.js").default;
 const ajv = new Ajv({ strict: false, allErrors: true });
 requireBackend("ajv-formats")(ajv);
-const contractRoot = new URL("../openspec/changes/archive/2026-06-29-add-agent-artifact-shared-state-handoff/specs/", import.meta.url);
+const contractRoot = new URL("../openspec/specs/", import.meta.url);
 const contractValidators = {};
 for (const name of ["current-state", "handoff", "agent-result"]) {
   contractValidators[name] = ajv.compile(JSON.parse(await readFile(
@@ -252,6 +254,28 @@ test("extractJsonObjectFromOutput extracts fenced JSON from Qwen markdown", () =
   ].join("\n");
 
   assert.deepEqual(extractJsonObjectFromOutput(output), result);
+});
+
+test("extractJsonObjectFromOutput finds the review_result among quoted code blocks", () => {
+  const result = validReviewResult();
+  const output = [
+    "# Review Result", "```js", "const a = { kind: 1 };", "```",
+    "```", "not json at all", "```",
+    "```json", JSON.stringify({ sample: true }), "```",
+    "```json", JSON.stringify(result, null, 2), "```",
+  ].join("\n");
+
+  assert.deepEqual(extractJsonObjectFromOutput(output), result);
+});
+
+test("extractJsonObjectFromOutput refuses ambiguous or absent candidates", () => {
+  const block = value => ["```json", JSON.stringify(value), "```"].join("\n");
+  const twoReviews = [block(validReviewResult()), block(validReviewResult({ summary: "other" }))].join("\n");
+
+  assert.throws(() => extractJsonObjectFromOutput(twoReviews), /Multiple JSON candidates/);
+  assert.throws(() => extractJsonObjectFromOutput([block({ a: 1 }), block({ b: 2 })].join("\n")), /Multiple JSON candidates/);
+  assert.throws(() => extractJsonObjectFromOutput(["```js", "const a = 1;", "```"].join("\n")), /No JSON candidate/);
+  assert.throws(() => extractJsonObjectFromOutput(["```json", "{broken", "```"].join("\n")), /Invalid JSON/);
 });
 
 test("extractJsonObjectFromOutput extracts raw JSON stdout", () => {
@@ -1451,4 +1475,315 @@ test("settings paths follow Qwen 0.25.3", () => {
   assert.equal(overridden["system-defaults"], "/opt/qwen/defaults.json");
   assert.equal(Object.fromEntries(adapter.qwenSettingsPaths({ workspaceRoot: root, env: {}, platform: "linux", homedir: home })).system,
     "/etc/qwen-code/settings.json");
+});
+
+test("existing review lock rejects without publishing or removing another lock", async (t) => {
+  const f = await captureFixture(t);
+  const lock = path.join(path.dirname(f.statePath), "review.lock");
+  await writeFile(lock, "other-review");
+  await assert.rejects(f.capture, /review_lock_held/);
+  assert.equal(await readFile(lock, "utf8"), "other-review");
+  assert.equal(await readFile(f.statePath, "utf8"), JSON.stringify(f.state));
+  await assert.rejects(access(artifactPath(f)), /ENOENT/);
+});
+
+test("review lock is released on success and invalid state", async (t) => {
+  for (const invalid of [false, true]) {
+    const f = await captureFixture(t);
+    if (invalid) await writeFile(f.statePath, "{}");
+    if (invalid) await assert.rejects(f.capture); else await f.capture();
+    await assert.rejects(access(path.join(path.dirname(f.statePath), "review.lock")), /ENOENT/);
+  }
+});
+
+for (const [name, input, reason] of [
+  ["read_file", { file_path: ".env.local" }, "read_scope_violation"],
+  ["READ_FILE", { file_path: ".env.local" }, "read_scope_violation"],
+  ["read_file", { file_path: "node_modules/package/index.js" }, "read_scope_violation"],
+  ["read_file", { file_path: "dist/bundle.js" }, "read_scope_violation"],
+  ["read_file", { file_path: "build/output.js" }, "read_scope_violation"],
+  ["read_file", { file_path: "coverage/report.html" }, "read_scope_violation"],
+  ["read_file", { file_path: ".agent-runtime/master-authorization.json" }, "read_scope_violation"],
+  ["read_file", { file_path: ".agent-runtime/other/current-state.json" }, "read_scope_violation"],
+  ["read_file", { file_path: "../outside" }, "read_scope_violation"],
+  ["read_file", { unexpected: "README.md" }, "read_scope_not_proven"],
+  ["web_search", { query: "test" }, "tool_readonly_not_proven"],
+]) {
+  test(`read scope rejects ${name} ${JSON.stringify(input)}`, async (t) => {
+    const f = await captureFixture(t);
+    const evidence = await captureEvidence(f, { processResult: { exitCode: 0, stderr: "",
+      stdout: stream(f.review, rows => rows.splice(2, 0, reviewerMessage("assistant", [
+        { type: "tool_use", id: "scope-test", name, input },
+      ]))) } });
+    assert.ok(evidence.evidenceGate.reasons.includes(reason), JSON.stringify(evidence.evidenceGate));
+    assert.equal(JSON.parse(await readFile(f.statePath, "utf8")).currentPhase, "INCOMPLETE");
+  });
+}
+
+test("concurrent captures allow exactly one writer", async (t) => {
+  const f = await captureFixture(t);
+  const results = await Promise.allSettled([f.capture(), f.capture()]);
+  assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+  assert.match(results.find(result => result.status === "rejected").reason.message, /review_lock_held/);
+});
+
+test("explicit read_file paths pass and ignored files fail", async (t) => {
+  for (const ignored of [false, true]) {
+    const f = await captureFixture(t);
+    execFileSync("git", ["init", "--quiet"], { cwd: f.workspaceRoot, windowsHide: true });
+    await writeFile(path.join(f.workspaceRoot, "review.md"), "fixture");
+    if (ignored) await writeFile(path.join(f.workspaceRoot, ".gitignore"), "review.md\n");
+    const evidence = await captureEvidence(f, { processResult: { exitCode: 0, stderr: "",
+      stdout: stream(f.review, rows => rows.splice(2, 0, reviewerMessage("assistant", [
+        { type: "tool_use", id: "read-one", name: "read_file", input: { file_path: "review.md" } },
+      ]))) } });
+    assert.equal(evidence.evidenceGate.passed, !ignored, JSON.stringify(evidence.evidenceGate));
+    assert.deepEqual(evidence.observed.readPaths, ["review.md"]);
+    assert.ok(!JSON.stringify(evidence.observed).includes("readRequest"));
+  }
+});
+
+test("a referenced runtime file is allowed and an unreferenced file is refused", async (t) => {
+  for (const referenced of [true, false]) {
+    const f = await captureFixture(t);
+    const relativePath = `.agent-runtime/${f.review.changeId}/input.md`;
+    await writeFile(path.join(f.workspaceRoot, relativePath), "fixture");
+    if (referenced) {
+      f.state.latestArtifactRefs.input = { artifactId: "input", changeId: f.review.changeId, runId: f.review.runId, kind: "evidence", relativePath };
+      await writeFile(f.statePath, JSON.stringify(f.state));
+    }
+    const evidence = await captureEvidence(f, { processResult: { exitCode: 0, stderr: "",
+      stdout: stream(f.review, rows => rows.splice(2, 0, reviewerMessage("assistant", [
+        { type: "tool_use", id: "runtime-read", name: "read_file", input: { file_path: relativePath } },
+      ]))) } });
+    assert.equal(evidence.evidenceGate.passed, referenced, JSON.stringify(evidence.evidenceGate));
+  }
+});
+
+test("state symlink outside workspace is rejected and lock is released", async (t) => {
+  const f = await captureFixture(t);
+  const outside = await mkdtemp(path.join(tmpdir(), "outside-state-"));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  const external = path.join(outside, "state.json");
+  await writeFile(external, JSON.stringify(f.state));
+  await fsPromises.unlink(f.statePath);
+  try { await fsPromises.symlink(external, f.statePath, "file"); }
+  catch (error) { if (error.code === "EPERM") { t.skip("Windows does not permit file symlinks"); return; } throw error; }
+  await assert.rejects(f.capture, /outside|escape/i);
+  await assert.rejects(access(path.join(path.dirname(f.statePath), "review.lock")), /ENOENT/);
+  assert.equal(await readFile(external, "utf8"), JSON.stringify(f.state));
+});
+
+test("resolved state outside root fails before reading state or publishing artifacts", async (t) => {
+  const f = await captureFixture(t);
+  const original = fsPromises.realpath;
+  const mocked = t.mock.method(fsPromises, "realpath", async value => value === f.statePath
+    ? path.resolve(f.workspaceRoot, "../escaped-current-state.json") : original(value));
+  syncBuiltinESMExports();
+  try { await assert.rejects(f.capture, /outside|escape/i); }
+  finally { mocked.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(await readFile(f.statePath, "utf8"), JSON.stringify(f.state));
+  await assert.rejects(access(artifactPath(f)), /ENOENT/);
+  await assert.rejects(access(path.join(path.dirname(f.statePath), "review.lock")), /ENOENT/);
+});
+
+test("canonical state accepts authorization reference and required input refs", async (t) => {
+  const f = await captureFixture(t);
+  f.state.rolePolicyVersion = "2";
+  f.state.latestHandoff.authorizationRef = "master-authorization.json#test-auth";
+  f.state.latestHandoff.requiredInputRefs = [];
+  await writeFile(f.statePath, JSON.stringify(f.state));
+  await f.capture();
+  assert.equal(JSON.parse(await readFile(f.statePath, "utf8")).gateStatus.reviewPassed, true);
+});
+
+async function initGitRepo(f) {
+  execFileSync("git", ["init", "--quiet"], { cwd: f.workspaceRoot, windowsHide: true });
+}
+function withReviewerTool(f, name, input) {
+  return { processResult: { exitCode: 0, stderr: "", stdout: stream(f.review, rows => rows.splice(2, 0, reviewerMessage("assistant", [
+    { type: "tool_use", id: "search-test", name, input },
+  ]))) } };
+}
+
+for (const [name, input] of [
+  ["grep_search", { pattern: "needle" }],
+  ["grep_search", { pattern: "needle", path: ".", glob: "*.ts" }],
+  ["glob", { pattern: "**/*.mjs" }],
+]) {
+  test(`directory search passes while gitignore filtering is active: ${name} ${JSON.stringify(input)}`, async (t) => {
+    const f = await captureFixture(t);
+    await initGitRepo(f);
+    const evidence = await captureEvidence(f, withReviewerTool(f, name, input));
+    assert.equal(evidence.evidenceGate.passed, true, JSON.stringify(evidence.evidenceGate));
+    assert.deepEqual(evidence.observed.readPaths, ["."]);
+  });
+}
+
+test("the workspace root stays searchable when git check-ignore matches it", async (t) => {
+  const f = await captureFixture(t);
+  await initGitRepo(f);
+  await writeFile(path.join(f.workspaceRoot, ".gitignore"), "first\n\nsecond\n");
+  const evidence = await captureEvidence(f, withReviewerTool(f, "grep_search", { pattern: "needle", path: "." }));
+  assert.equal(evidence.evidenceGate.passed, true, JSON.stringify(evidence.evidenceGate));
+});
+
+for (const settings of [
+  `{ "context": { "fileFiltering": { "respectGitIgnore": false } } }`,
+  `{ "tools": { "useRipgrep": false } }`,
+  `{ not json`,
+]) {
+  test(`directory search is not proven with settings ${settings}`, async (t) => {
+    const f = await captureFixture(t);
+    await initGitRepo(f);
+    await writeSettings(f.workspaceRoot, "workspace", settings);
+    const evidence = await captureEvidence(f, withReviewerTool(f, "grep_search", { pattern: "needle" }));
+    assert.ok(evidence.evidenceGate.reasons.includes("read_scope_not_proven"), JSON.stringify(evidence.evidenceGate));
+  });
+}
+
+for (const [name, input] of [
+  ["glob", { pattern: ".agent-runtime/**" }],
+  ["glob", { pattern: "../**" }],
+  ["glob", { pattern: "C:/secrets/**" }],
+  ["grep_search", { pattern: "needle", glob: "{.env,other}" }],
+  ["grep_search", { pattern: "needle", glob: "**/node_modules/**" }],
+  ["grep_search", { pattern: "needle", path: ".agent-runtime" }],
+]) {
+  test(`search into a refused location is a violation: ${name} ${JSON.stringify(input)}`, async (t) => {
+    const f = await captureFixture(t);
+    await initGitRepo(f);
+    const evidence = await captureEvidence(f, withReviewerTool(f, name, input));
+    assert.ok(evidence.evidenceGate.reasons.includes("read_scope_violation"), JSON.stringify(evidence.evidenceGate));
+  });
+}
+
+test("suppressed output records the rule category and position without the content", async (t) => {
+  const f = await captureFixture(t);
+  await initGitRepo(f);
+  const secret = `sk-${"a".repeat(20)}`;
+  const evidence = await captureEvidence(f, { processResult: { exitCode: 0, stderr: "", stdout: stream(f.review, rows => rows.splice(2, 0,
+    reviewerMessage("assistant", [{ type: "tool_use", id: "leaky-read", name: "grep_search", input: { pattern: "needle" } }]),
+    reviewerMessage("user", [{ type: "tool_result", tool_use_id: "leaky-read", content: secret }]),
+  )) } });
+  assert.ok(evidence.evidenceGate.reasons.includes("raw_output_contains_secret"));
+  const hit = evidence.secretHits.stdout.hits.find(item => item.toolUseIds.includes("leaky-read"));
+  assert.deepEqual(hit.categories, ["provider_key"]);
+  assert.equal(hit.eventType, "user");
+  assert.equal(evidence.secretHits.stderr, null);
+  assert.ok(!JSON.stringify(evidence).includes(secret));
+});
+
+test("a rejected review_result records why without echoing a secret", async (t) => {
+  const f = await captureFixture(t);
+  const mismatched = { ...f.review, artifactId: "other-id" };
+  await assert.rejects(f.capture({ processResult: { exitCode: 0, stderr: "", stdout: stream(mismatched) } }), /schema or artifactId/);
+  const evidence = JSON.parse(await readFile(artifactPath(f, ".capture.json"), "utf8"));
+  assert.match(evidence.validationIssue.message, /artifactId/);
+  assert.equal(evidence.validationIssue.candidateFound, true);
+  assert.equal(evidence.validationIssue.candidateOwner, "subagent");
+  assert.ok(evidence.validationIssue.candidateKeys.includes("payload"));
+});
+
+test("a tool Qwen 0.25.3 does not have is not certified as read-only", async (t) => {
+  const f = await captureFixture(t);
+  await initGitRepo(f);
+  const evidence = await captureEvidence(f, withReviewerTool(f, "read_many_files", { paths: ["review.md"] }));
+  assert.ok(evidence.evidenceGate.reasons.includes("tool_readonly_not_proven"), JSON.stringify(evidence.evidenceGate));
+});
+
+test("a review from an unverified Qwen version routes to INCOMPLETE", async (t) => {
+  const f = await captureFixture(t);
+  const evidence = await captureEvidence(f, { processResult: { exitCode: 0, stderr: "", stdout: stream(f.review, rows => {
+    rows.find(row => row.subtype === "init").qwen_code_version = "0.20.1";
+  }) } });
+  assert.ok(evidence.evidenceGate.reasons.includes("qwen_version_unverified"), JSON.stringify(evidence.evidenceGate));
+  assert.equal(JSON.parse(await readFile(f.statePath, "utf8")).currentPhase, "INCOMPLETE");
+});
+
+test("qwen resolves to node and its cli entry on Windows only", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "qwen-resolve-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const onPath = path.join(root, "bin", "node_modules", "@qwen-code", "qwen-code", "cli-entry.js");
+  const pinned = path.join(root, "pinned", "cli-entry.js");
+  await mkdir(path.dirname(onPath), { recursive: true });
+  await mkdir(path.dirname(pinned), { recursive: true });
+  await writeFile(onPath, "");
+  await writeFile(pinned, "");
+  const win = env => resolveQwenCommand("qwen", ["-p", "x"], { platform: "win32", env });
+  const Path = `${path.join(root, "empty")};${path.join(root, "bin")}`;
+
+  assert.deepEqual(await win({ Path }), { command: process.execPath, commandArgs: [onPath, "-p", "x"] });
+  assert.deepEqual(await win({ Path, QWEN_CLI_ENTRY: pinned }), { command: process.execPath, commandArgs: [pinned, "-p", "x"] });
+  assert.deepEqual(await win({ Path, QWEN_CLI_ENTRY: path.join(root, "missing.js") }), { command: "qwen", commandArgs: ["-p", "x"] });
+  assert.deepEqual(await resolveQwenCommand("qwen", ["-p"], { platform: "linux", env: { PATH: root } }), { command: "qwen", commandArgs: ["-p"] });
+  assert.deepEqual(await resolveQwenCommand("node", ["a.js"], { platform: "win32", env: { Path } }), { command: "node", commandArgs: ["a.js"] });
+});
+
+test("the current change's own state is readable and recorded as clean", async (t) => {
+  const f = await captureFixture(t);
+  await initGitRepo(f);
+  await writeFile(path.join(f.workspaceRoot, ".gitignore"), ".agent-runtime/\n");
+  const relativePath = `.agent-runtime/${f.review.changeId}/current-state.json`;
+  const evidence = await captureEvidence(f, withReviewerTool(f, "read_file", { file_path: relativePath }));
+  assert.equal(evidence.evidenceGate.passed, true, JSON.stringify(evidence.evidenceGate));
+  assert.deepEqual(evidence.observed.readScopeFindings, []);
+});
+
+test("read scope findings name the rule and tool without file content", async (t) => {
+  for (const [name, input, rule, target] of [
+    ["read_file", { file_path: ".agent-runtime/other/current-state.json" }, "forbidden_path", ".agent-runtime/other/current-state.json"],
+    ["grep_search", { pattern: "needle", glob: "{.env,other}" }, "unsafe_search_filter", null],
+    ["read_file", { file_path: "../outside" }, "outside_workspace", null],
+  ]) {
+    const f = await captureFixture(t);
+    await initGitRepo(f);
+    const evidence = await captureEvidence(f, withReviewerTool(f, name, input));
+    assert.ok(evidence.evidenceGate.reasons.includes("read_scope_violation"), JSON.stringify(evidence.evidenceGate));
+    const finding = evidence.observed.readScopeFindings.find(item => item.rule === rule);
+    assert.equal(finding.reason, "read_scope_violation");
+    assert.equal(finding.toolUseId, "search-test");
+    assert.equal(finding.tool, name);
+    assert.equal(finding.target, target);
+  }
+});
+
+test("a search filter holding a credential is not copied into the findings", async (t) => {
+  const f = await captureFixture(t);
+  await initGitRepo(f);
+  const secret = `sk-${"a1".repeat(10)}`;
+  const evidence = await captureEvidence(f, withReviewerTool(f, "glob", { pattern: secret }));
+  assert.equal(evidence.observed.readScopeFindings[0].filter, null);
+  assert.ok(!JSON.stringify(evidence.observed.readScopeFindings).includes(secret));
+});
+
+const AUTH = ["author", "ization"].join("");
+const BEARER = "Bea" + "rer";
+for (const [label, line, expected] of [
+  ["a template header", `headers: { ${AUTH}: \`${BEARER} \${options.credential}\` },`, []],
+  ["a double-quoted template", `"${AUTH}": "${BEARER} \${token}"`, []],
+  ["a JSON-escaped template", `\\"${AUTH}\\": \\"${BEARER} \${token}\\"`, []],
+  ["a bare template", `api_key = \`\${config.apiKey}\`;`, []],
+  ["a literal token", `${AUTH}: ${BEARER} abcdef0123456789`, ["bearer_token", "credential_assignment"]],
+  ["a literal token in a template", `${AUTH}: \`${BEARER} abcdef0123456789\``, ["bearer_token", "credential_assignment"]],
+  ["a literal assignment", `api_key=abcd${"1234"}`, ["credential_assignment"]],
+  ["a shell default", `password=\${DB_PASS:-hunter2222}`, ["credential_assignment"]],
+  ["a literal after an interpolation", `password: \`\${prefix}hunter2222\``, ["credential_assignment"]],
+  ["a real provider key", `sk-${"proj-Ab3dE5gH7jK9"}`, ["provider_key"]],
+  ["a hex provider key", `sk-${"0a1b2c3d4e5f6a7b8c9d"}`, ["provider_key"]],
+  ["an upper-case prefix", `SK-${"Ab3dE5gH7jK9mN1p"}`, ["provider_key"]],
+  ["a random key under the test prefix", `sk-${"test-a8f3k29xQ7mN1p"}`, ["provider_key"]],
+  ["a word fixture", `sk-${"test-credential-value-123456"}`, []],
+  ["a key embedded after a word fixture", `sk-${"test-credential-value-123456"} sk-${"proj-Ab3dE5gH7jK9"}`, ["provider_key"]],
+]) {
+  test(`secret rules for ${label}`, () => {
+    assert.deepEqual(secretCategories(line), expected);
+  });
+}
+
+test("a failed spawn records the error code", async (t) => {
+  const f = await captureFixture(t);
+  await assert.rejects(f.capture({ processResult: undefined, command: path.join(f.workspaceRoot, "no-such-binary"), commandArgs: [] }), /process_nonzero_exit/);
+  const evidence = JSON.parse(await readFile(artifactPath(f, ".capture.json"), "utf8"));
+  assert.equal(evidence.spawnError, "ENOENT");
 });

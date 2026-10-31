@@ -9,6 +9,7 @@ import type { IngestionRunStatus, KnowledgeStore } from "./store.js";
 const FATAL_CODES: ReadonlySet<KnowledgeErrorCode> = new Set([
   "SECRET_REFERENCE_UNRESOLVABLE",
   "EGRESS_DENIED",
+  "EGRESS_POLICY_UNAVAILABLE",
   "KB_CONFIG_INVALID",
   "KB_EMBEDDING_SPACE_MISMATCH",
   "KB_EMBEDDING_DIMENSION_MISMATCH",

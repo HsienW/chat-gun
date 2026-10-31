@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    { "$ref": "#/$defs/entry" },
+    {
+      "type": "object", "additionalProperties": false,
+      "required": ["schemaVersion", "authorizations"],
+      "properties": {
+        "schemaVersion": { "const": "2" },
+        "authorizations": { "type": "object", "propertyNames": { "$ref": "#/$defs/id" }, "additionalProperties": { "$ref": "#/$defs/entry" } }
+      }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "pattern": "^(?!.*\\.\\.)[A-Za-z0-9_.-]+$" },
+    "entry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["authorizationId", "rolePolicyVersion", "grantedBy", "grantee", "actingRole", "grants", "changeId", "runId", "handoffId", "writeScope", "expiresAt"],
+      "properties": {
+        "schemaVersion": { "const": "1.0.0" },
+        "authorizationId": { "$ref": "#/$defs/id" },
+        "rolePolicyVersion": { "const": "2" },
+        "grantedBy": { "const": "Master" },
+        "grantee": { "enum": ["CCR", "Codex"] },
+        "actingRole": { "enum": ["implementation_secondary", "planning_secondary"] },
+        "grants": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["secondary_takeover", "self_acceptance"] } },
+        "changeId": { "$ref": "#/$defs/id" },
+        "runId": { "$ref": "#/$defs/id" },
+        "handoffId": { "$ref": "#/$defs/id" },
+        "writeScope": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*\\.\\.)(?!.*[:\\\\]).+$" } },
+        "grantedAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

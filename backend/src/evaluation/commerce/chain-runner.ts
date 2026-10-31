@@ -36,6 +36,7 @@ import type { SecretBrokerPort } from "../../runtime/tool-dispatch/secret-broker
 import { createRuntimeToolAuthorizationComposition } from "../../tools/authorization/tool-authorization.js";
 import { KB_SEARCH_SECRET_REFERENCE, KB_SEARCH_TOOL_NAME, kbSearchInputSchema } from "../../tools/kb-search.js";
 import { MockOrderProvider, type MockOrderProviderOptions } from "../../tools/orders/mock-order-provider.js";
+import { createEvaluationOrderProvider } from "./order-provider.js";
 import { ORDER_MUTATION_TOOL_NAMES, ORDER_TOOL_NAMES, createOrderToolRiskPolicies, createOrderToolSet } from "../../tools/orders/order-tools.js";
 import type { SyntheticOrderFixture } from "../../tools/orders/synthetic-orders.js";
 import type { ChainEvalCase, ChainTurnExpectation } from "./chain-case.js";
@@ -459,7 +460,7 @@ async function runChainEvaluation(input: ChainEvaluationInputBase, evaluationRun
       ...(gate ? { beforeCommit: gate.beforeCommit } : {}),
     };
     let externalOperations = 0;
-    const provider = new MockOrderProvider({
+    const provider = createEvaluationOrderProvider({
       fixture,
       createExternalOperationId: () => `ext-${tenantPrefix}${caseIndex}-${++externalOperations}`,
       ...providerOptions,

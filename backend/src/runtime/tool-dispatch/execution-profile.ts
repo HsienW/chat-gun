@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ExecutionContext } from "../execution-context/execution-context.js";
 import { readCanonicalExecutionContext } from "../execution-context/read-execution-context.js";
 import type { ToolExecutionTerminationCause } from "../side-effect/governed-outcome.js";
+import type { EgressDecisionEvidence } from "./egress-reason.js";
 import {
   withResolvedSecrets,
   type SecretBrokerPort,
@@ -263,10 +264,7 @@ export interface ExecutionProfileEvidence {
   executionProfileVersion: string;
   effectiveCapabilities: EffectiveSandboxCapabilities;
   secretRefsUsed: string[];
-  egressDecision: null | {
-    decision: "allow" | "deny";
-    reasonCode: string;
-  };
+  egressDecision: null | EgressDecisionEvidence;
 }
 
 export type ExecutionProfileTerminationCause = ToolExecutionTerminationCause;

@@ -41,7 +41,7 @@ Claude 是 Specification Coordinator 與 Integration Arbiter，負責：
 
 Research、Spec 或 Design 尚未完成前，預設不得進行大型、破壞性或跨層程式修改。
 
-CCR 是 Change 規劃與協調的主要角色，也是寫程式領域的次要角色。v1 紀錄下 CCR 不是 Implementer；在 `rolePolicyVersion: "2"` 下，CCR 只有在有效 Master 授權（`grants` 含 `secondary_takeover`、`actingRole` 為 `implementation_secondary`）時，才能寫入授權 `writeScope` 內的程式與測試。CCR MUST NOT 以「改動很小」「只有一行」「順手完成較快」或「使用者已接受處置方向」取代 Master 授權。決策權不等於執行權；沒有授權時 MUST 只產出 Handoff 給 Codex。無論何種版本，CCR MUST NOT 修改 `.claude/hooks/**`、`.claude/settings*.json` 與 Master 授權檔。
+CCR 是 Change 規劃與協調的主要角色，也是寫程式領域的次要角色。v1 紀錄下 CCR 不是 Implementer；在 `rolePolicyVersion: "2"` 下，CCR 只有在有效 Master 授權（容器中由 Handoff `authorizationRef: "master-authorization.json#<id>"` 指定的單筆，`grants` 含 `secondary_takeover`、`actingRole` 為 `implementation_secondary`）時，才能寫入授權 `writeScope` 內的程式與測試。CCR MUST NOT 以「改動很小」「只有一行」「順手完成較快」或「使用者已接受處置方向」取代 Master 授權。決策權不等於執行權；沒有授權時 MUST 只產出 Handoff 給 Codex。無論何種版本，CCR MUST NOT 修改 `.claude/hooks/**`、`.claude/settings*.json` 與 Master 授權檔。不得聯集多筆 scope；重疊授權拒絕；失效 entry 只由 Master 執行 GC，CCR 不得執行 GC 或刪除 key。
 
 ## 2.1 寫入前角色硬檢查
 
@@ -53,7 +53,7 @@ CCR 每次呼叫 Write、Edit、MultiEdit、NotebookEdit、Bash、具副作用 M
 
 任一條件不符、未知或衝突時 MUST fail-closed，只產出 Structured Handoff，一個字都不得修改。任務從回顧、查詢、規劃或審查滑向實作時，MUST 先重新執行 router；使用者回答決策問題不會自動改變角色或 owner。
 
-專案的 `.claude/settings.json` 會以 `PreToolUse` hook 執行同一檢查。CCR 不得停用、繞過、改寫或要求其他工具規避該 hook；hook 拒絕後必須依拒絕理由建立 Handoff。
+專案的 `.claude/settings.json` 會以 `PreToolUse` hook 執行同一檢查。CCR 不得停用、繞過、改寫或要求其他工具規避該 hook；hook 拒絕後必須依拒絕理由建立 Handoff。唯一例外：CurrentState 為 Qwen 審查階段（PLAN_REVIEW、READY_FOR_REVIEW、REVIEWING）且 owner 為 Qwen 時，CCR 可以 CLIHost 身分，以 Bash 執行 hook 白名單中的 node tools/qwen-capture-adapter.mjs 指令。是否符合例外由 hook 判定；CCR 不得改用 PowerShell、終端機或其他工具執行。
 
 ## 3. 規則載入與路由
 處理任務前，依修改範圍讀取：

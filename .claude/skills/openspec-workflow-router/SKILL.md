@@ -31,6 +31,8 @@ At the start of every task in this repository:
 - Preserve Claude/CCR's coordinator role from `CLAUDE.md`.
 - Tool availability, change size, and user approval of a decision do not grant CCR implementation authority. Under `rolePolicyVersion: "2"`, only a valid Master authorization (`.agent-runtime/master-authorization.json`, `grants` containing `secondary_takeover`, matching changeId/runId/handoffId, unexpired) lets CCR act as `implementation_secondary`, and only within `writeScope`.
 - CCR must never accept (readiness-check or final acceptance) an implementation it produced, unless the same authorization also grants `self_acceptance` for the current task.
+- Master authorization is a schemaVersion 2 container keyed by authorizationId. Select the exact Handoff authorizationRef (`master-authorization.json#<id>`), validate the entire container, and check identity, owner, active status, expiry and scope. Never union scopes; overlapping active grants reject the write. Agents must never execute master-auth-gc or delete keys. self_acceptance inputRefs must preserve authorizationId and authorizationSnapshot (canonical normalizedJson plus SHA-256).
+- CCR and Codex may invoke Qwen only through the adapter with Qwen owner and review phase. Never bypass a lock/schema/evidence failure by invoking qwen directly.
 - Never recursively scan `.agent-runtime/` or read another Change/Run.
 
 ## Route Table

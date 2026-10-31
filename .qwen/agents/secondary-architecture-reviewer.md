@@ -3,9 +3,9 @@ name: secondary-architecture-reviewer
 description: MUST BE USED for independent, read-only architecture, security, OpenSpec traceability, cross-layer contract, LangGraph, Tool and MCP review.
 model: inherit
 approvalMode: plan
+background: false
 tools:
   - read_file
-  - read_many_files
   - grep_search
   - glob
   - list_directory

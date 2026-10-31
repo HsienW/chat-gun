@@ -94,6 +94,24 @@ describe("knowledge retrieval", () => {
     expect(result.retrieval.rerankModel).toBeUndefined();
   });
 
+  it.each([
+    ["EGRESS_DENIED", "PRIVATE_ADDRESS"],
+    ["EGRESS_POLICY_UNAVAILABLE", "DNS_RESOLUTION_FAILED"],
+  ] as const)("keeps %s and its reason when rerank degrades at egress", async (code, egressReasonCode) => {
+    const store = await seededStore();
+    const gateway = new FakeKnowledgeModelGateway({
+      dimensions: 64,
+      failRerank: new KnowledgeError(code, "egress failed", egressReasonCode),
+    });
+    const result = await searchKnowledge(request(store, { gateway }));
+
+    expect(result.retrieval).toMatchObject({
+      mode: "vector_only_degraded",
+      degradation: { reason: "RERANK_PROVIDER_ERROR", egressErrorCode: code, egressReasonCode },
+    });
+    expect(kbSearchResultSchema.safeParse(result).success).toBe(true);
+  });
+
   it("runs the configured vector-only baseline without calling rerank", async () => {
     const store = await seededStore();
     const gateway = new FakeKnowledgeModelGateway({ dimensions: 64 });

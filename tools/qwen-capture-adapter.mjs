@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { readRequest, auditReadScope } from "./qwen-read-scope.mjs";
 import { spawn } from "node:child_process";
 import { constants as fsConstants, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -16,7 +17,7 @@ const requireBackend = createRequire(new URL("../backend/package.json", import.m
 const Ajv = requireBackend("ajv/dist/2020.js").default;
 const ajv = new Ajv({ strict: false, allErrors: true });
 requireBackend("ajv-formats")(ajv);
-const contractRoot = new URL("../openspec/changes/archive/2026-06-29-add-agent-artifact-shared-state-handoff/specs/", import.meta.url);
+const contractRoot = new URL("../openspec/specs/", import.meta.url);
 const contractValidators = new Map();
 for (const name of ["current-state", "handoff", "agent-result"]) {
   contractValidators.set(name, ajv.compile(JSON.parse(readFileSync(
@@ -170,14 +171,25 @@ export function extractJsonObjectFromOutput(output) {
     throw new Error("Qwen stdout is empty; no review_result JSON found.");
   }
 
-  const fenced = [...output.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
-  if (fenced.length > 1) throw new Error("Multiple JSON candidates.");
-  return parseJsonObject(fenced.length === 1 ? fenced[0][1].trim() : output.trim());
+  const fenced = [...output.matchAll(/```([a-z0-9_-]*)\s*([\s\S]*?)```/gi)];
+  if (fenced.length === 0) return parseJsonObject(output.trim());
+  const jsonBlocks = fenced.filter(([, tag]) => tag === "" || tag.toLowerCase() === "json").map(([, , body]) => body.trim());
+  // Findings may quote code or sample JSON, so only a block that declares itself a review_result is the result.
+  const reviews = jsonBlocks.flatMap(body => {
+    try {
+      const value = parseJsonObject(body);
+      return value.kind === EXPECTED_KIND ? [value] : [];
+    } catch { return []; }
+  });
+  if (reviews.length === 1) return reviews[0];
+  if (reviews.length > 1 || jsonBlocks.length > 1) throw new Error("Multiple JSON candidates.");
+  if (jsonBlocks.length === 0) throw new Error("No JSON candidate.");
+  return parseJsonObject(jsonBlocks[0]);
 }
 
 function emptyObservations() {
   return { parentSessionId: null, model: null, provider: null, approvalMode: null, qwenCodeVersion: null,
-    effectiveTools: null, subagents: [], tools: [], unknownEventCount: 0,
+    effectiveTools: null, subagents: [], tools: [], readPaths: [], unknownEventCount: 0,
     notObserved: ["parentSessionId", "model", "provider", "approvalMode", "subagents"], conflicts: [] };
 }
 
@@ -276,6 +288,11 @@ export function parseCaptureOutput(output, format = "text") {
           sessionId: metadata(event.session_id), parentToolUseId: metadata(event.parent_tool_use_id) };
         // The skill name is call metadata, not file content; it decides whether the load is read-only.
         if (name?.toLowerCase() === "skill") tool.skillName = metadata(block.input?.skill);
+        const request = readRequest(name?.toLowerCase(), block.input);
+        if (request) {
+          if (request.paths.some(containsSecret)) { request.paths = []; request.proven = false; }
+          tool.readRequest = request;
+        }
         observed.tools.push(tool);
         if (name?.toLowerCase() === "agent" && isParentEvent(event)) {
           observed.subagents.push({ name: metadata(block.input?.subagent_type), toolUseId: tool.id });
@@ -468,6 +485,38 @@ export async function verifyProviderLaunch({ commandArgs = [], expected = null, 
   return evidence;
 }
 
+// Qwen 0.25.3 reads context.fileFiltering. Directory searches stay certifiable only while
+// .gitignore filtering and the ripgrep path remain enabled in every settings scope.
+export async function verifySearchFiltering({ workspaceRoot, env, platform, homedir }) {
+  for (const [, file] of qwenSettingsPaths({ workspaceRoot, env, platform, homedir })) {
+    let settings;
+    try { settings = parseJsonWithComments(await readFile(file, "utf8")); }
+    catch (error) { if (error.code === "ENOENT") continue; return false; }
+    if (settings?.context?.fileFiltering?.respectGitIgnore === false || settings?.tools?.useRipgrep === false) return false;
+  }
+  return true;
+}
+
+// The stream-json parsing and tool contracts above were verified against this Qwen release only.
+export const VERIFIED_QWEN_VERSION = "0.25.3";
+
+// On Windows the npm shim for qwen is a .cmd or .ps1 file, which spawn cannot start without a shell.
+// The launch contract stays `-- qwen`; it resolves to `node <cli-entry.js>` and never uses a shell.
+// QWEN_CLI_ENTRY pins one install: when set, it is the only candidate.
+export async function resolveQwenCommand(command, commandArgs, { env = process.env, platform = process.platform } = {}) {
+  if (command !== "qwen" || platform !== "win32") return { command, commandArgs };
+  const pathValue = env.Path ?? env.PATH ?? "";
+  const candidates = env.QWEN_CLI_ENTRY ? [env.QWEN_CLI_ENTRY]
+    : pathValue.split(";").filter(Boolean).map(dir => path.join(dir, "node_modules", "@qwen-code", "qwen-code", "cli-entry.js"));
+  for (const entry of candidates) {
+    try {
+      await access(entry, fsConstants.R_OK);
+      return { command: process.execPath, commandArgs: [entry, ...commandArgs] };
+    } catch { /* try the next PATH directory */ }
+  }
+  return { command, commandArgs };
+}
+
 function assessEvidence(observed, reviewSource, format) {
   const reasons = [];
   if (format === "text") reasons.push("text_has_no_isolation_evidence");
@@ -479,8 +528,8 @@ function assessEvidence(observed, reviewSource, format) {
   if (observed.tools.some(tool => WRITE_TOOLS.has(tool.name?.toLowerCase()))) reasons.push("write_or_shell_tool_called");
   if (observed.tools.some(tool => tool.owner === null || tool.name === null)) reasons.push("tool_provenance_not_observed");
   // An unfamiliar tool might wrap writes or shell execution. Do not certify it as read-only.
-  const readOnlyTools = new Set(["read_file", "readfile", "read", "grep_search", "grep", "glob", "list_directory",
-    "listfiles", "ls", "agent", "structured_output", "web_search", "websearch", "read_mcp_resource"]);
+  const readOnlyTools = new Set(["read_file", "grep_search", "glob", "list_directory",
+    "agent", "structured_output"]);
   if (observed.tools.some(tool => !readOnlyTools.has(tool.name?.toLowerCase()) && !isReadOnlySkillLoad(tool))) {
     reasons.push("tool_readonly_not_proven");
   }
@@ -488,8 +537,54 @@ function assessEvidence(observed, reviewSource, format) {
   return { passed: reasons.length === 0, reasons };
 }
 
+const SECRET_PATTERNS = Object.freeze({
+  // A readable sk-test- fixture (words and numbers only) is not a key; random or mixed segments still match.
+  provider_key: /\b[sS][kK]-(?!test-(?:[a-z]+|[0-9]+)(?:-(?:[a-z]+|[0-9]+))*(?![a-zA-Z0-9_-]))[a-zA-Z0-9_-]{12,}/,
+  cloud_access_key: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/i,
+  private_key: /-----BEGIN (?:[A-Z ]*PRIVATE KEY)-----/i,
+  bearer_token: /\bBearer\s+[a-zA-Z0-9._~+/-]{8,}/i,
+  jwt: /\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/i,
+  // A value that is only a variable interpolation, optionally after a scheme word, holds no credential.
+  credential_assignment: /["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|client[_-]?secret|authorization|cookie)["']?\s*[:=]\s*(?!\\?["'`]?(?:[A-Za-z]+[ \t]+)?\$\{[A-Za-z_$][\w$.?]*\}\\?(?:["'`]|[\s,;)}]|$))["']?[^\s"',;}]{4,}/i,
+});
+
+export function secretCategories(text) {
+  return Object.entries(SECRET_PATTERNS).filter(([, pattern]) => pattern.test(text ?? "")).map(([category]) => category);
+}
+
 function containsSecret(text) {
-  return /(?:\bsk-[a-zA-Z0-9_-]{12,}|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|-----BEGIN (?:[A-Z ]*PRIVATE KEY)-----|\bBearer\s+[a-zA-Z0-9._~+/-]{8,}|\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+|["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|client[_-]?secret|authorization|cookie)["']?\s*[:=]\s*["']?[^\s"',;}]{4,})/i.test(text ?? "");
+  return secretCategories(text).length > 0;
+}
+
+const MAX_SECRET_HITS = 50;
+// Diagnostics for suppressed output: rule category and event position, never the matched content.
+function describeSecretHits(text, format) {
+  const safeId = value => typeof value === "string" && /^[\w-]{1,128}$/u.test(value) ? value : null;
+  const hits = [];
+  let total = 0;
+  for (const [index, line] of (text ?? "").split(/\r?\n/u).entries()) {
+    const categories = secretCategories(line);
+    if (!categories.length) continue;
+    total++;
+    if (hits.length === MAX_SECRET_HITS) continue;
+    let event = null;
+    if (format !== "text") { try { event = JSON.parse(line); } catch { /* position and category still help */ } }
+    const blocks = Array.isArray(event?.message?.content) ? event.message.content : [];
+    hits.push({ line: index + 1, categories, eventType: safeId(event?.type),
+      blockTypes: blocks.map(block => safeId(block?.type)).filter(Boolean),
+      toolUseIds: blocks.map(block => safeId(block?.tool_use_id ?? block?.id)).filter(Boolean) });
+  }
+  return { total, hits };
+}
+
+// Names fields and shapes only. Adapter messages may echo values, so suspect text is dropped.
+function describeValidationFailure(error, parsed) {
+  const candidate = parsed?.reviewResult;
+  const safeKeys = value => isPlainObject(value) ? Object.keys(value).filter(key => /^[\w-]{1,64}$/u.test(key)).sort() : null;
+  const message = error instanceof Error ? error.message.slice(0, 1000) : "unknown";
+  return { message: containsSecret(message) ? "[redacted]" : message,
+    candidateFound: isPlainObject(candidate), candidateOwner: parsed?.reviewSource?.owner ?? null,
+    candidateKeys: safeKeys(candidate), payloadKeys: safeKeys(candidate?.payload) };
 }
 
 function redactArgv(argv) {
@@ -630,129 +725,153 @@ export async function captureQwenReviewResult({
   ensureInside(root, currentStatePath);
   ensureInside(root, artifactPath);
 
-  const currentState = await readCurrentState(currentStatePath, { expectedChangeId: changeId, expectedRunId: runId });
-  const reviewPhases = stage === "review-plan" ? ["PLAN_REVIEW"] : ["READY_FOR_REVIEW", "REVIEWING"];
-  if (currentState.currentOwner !== "Qwen" || !reviewPhases.includes(currentState.currentPhase)) {
-    throw new Error("CurrentState review owner/phase does not authorize capture.");
-  }
-  if (Object.values(currentState.latestArtifactRefs).some(ref => ref.artifactId === artifactId)) {
-    throw new Error("artifactId already exists in CurrentState.");
-  }
-  await mkdir(artifactsDir, { recursive: true });
-  ensureInside(await realpath(root), await realpath(artifactsDir));
-  for (const target of [artifactPath, capturePath, stdoutPath, stderrPath]) await assertAbsent(target);
-  const originalState = await readFile(currentStatePath, "utf8");
-  const startedAt = now().toISOString();
-  // Version lookup never uses review arguments, credentials or shell interpolation.
-  if (!processResult && !fromFile && qwenVersion === null) {
-    const version = await runCommand(command, versionArgs(commandArgs), { cwd: root });
-    if (version.exitCode === 0 && /^\d+\.\d+\.\d+[\w.+-]*$/.test(version.stdout.trim())) qwenVersion = version.stdout.trim();
-  }
-  const result = processResult ?? (fromFile
-    ? { exitCode: 0, stdout: await readFile(fromFile, "utf8"), stderr: "", signal: null }
-    : await runCommand(command, commandArgs, { cwd: root }));
-  const format = outputFormat ?? getOutputFormat(commandArgs);
-  let parsed;
-  let partialObserved;
-  let captureError = result.exitCode !== 0 ? "process_nonzero_exit" : null;
-  try { parsed = parseCaptureOutput(result.stdout, format); }
-  catch (error) { partialObserved = error.observed; captureError ??= "output_extraction_failed"; }
-  const observed = parsed?.observed ?? partialObserved ?? emptyObservations();
-  const suppressed = { stdout: containsSecret(result.stdout), stderr: containsSecret(result.stderr) };
-  observed.provider = await verifyProviderLaunch({ commandArgs: fromFile ? [] : commandArgs,
-    expected: expectedProvider, workspaceRoot: root, ...settingsEnvironment });
-  if (observed.provider.verified) observed.notObserved = observed.notObserved.filter(key => key !== "provider");
-  const evidenceGate = assessEvidence(observed, parsed?.reviewSource, format);
-  if (!observed.provider.verified) evidenceGate.reasons.push("provider_not_verified");
-  else if (observed.model !== observed.provider.model) evidenceGate.reasons.push("model_differs_from_pinned_launch");
-  if (suppressed.stdout || suppressed.stderr) evidenceGate.reasons.push("raw_output_contains_secret");
-  if (captureError) evidenceGate.reasons.push(captureError);
-  evidenceGate.passed = evidenceGate.reasons.length === 0;
-  const reference = (id, target, kind = "evidence") => ({
-    artifactId: id, changeId, runId, kind, relativePath: toPosixPath(path.relative(root, target)),
-  });
-  const evidence = {
-    schemaVersion: "1.0.0", artifactId: `${artifactId}-capture`, changeId, runId, kind: "evidence",
-    argv: redactArgv([command ?? (fromFile ? "from-file" : "injected-process"), ...commandArgs]),
-    cwd: ".", qwenVersion: typeof qwenVersion === "string" && /^\d+\.\d+\.\d+[\w.+-]*$/.test(qwenVersion) ? qwenVersion : null,
-    startedAt, endedAt: now().toISOString(),
-    exitCode: result.exitCode, signal: result.signal ?? null, outputFormat: format,
-    source: fromFile ? "from-file" : processResult ? "injected-process" : "child-process",
-    hashes: { stdout: sha256(result.stdout), stderr: sha256(result.stderr), savedResult: null },
-    redactedForSecret: suppressed, observed, evidenceGate, error: captureError,
-  };
-  const evidenceEntries = () => [
-    ...(!suppressed.stdout ? [[stdoutPath, result.stdout]] : []),
-    ...(!suppressed.stderr ? [[stderrPath, result.stderr]] : []),
-    [capturePath, evidence],
-  ];
-  if (captureError) {
-    await writeCapture(evidenceEntries());
-    throw new Error(`Capture failed: ${captureError}; evidence saved.`);
-  }
-  let reviewResult;
+  const canonicalRoot = await realpath(root);
+  ensureInside(canonicalRoot, await realpath(runtimeDir));
+  const lockPath = path.join(runtimeDir, "review.lock");
   try {
-    reviewResult = validateReviewResult(parsed.reviewResult, {
-      expectedChangeId: changeId, expectedRunId: runId, expectedStage: stage, expectedKind: EXPECTED_KIND,
+    await writeFile(lockPath, JSON.stringify({ pid: process.pid, startedAt: now().toISOString(), runId, artifactId }), { flag: "wx" });
+  } catch (error) {
+    if (error.code === "EEXIST") throw new Error("review_lock_held");
+    throw error;
+  }
+  try {
+    ensureInside(canonicalRoot, await realpath(currentStatePath));
+    const currentState = await readCurrentState(currentStatePath, { expectedChangeId: changeId, expectedRunId: runId });
+    const reviewPhases = stage === "review-plan" ? ["PLAN_REVIEW"] : ["READY_FOR_REVIEW", "REVIEWING"];
+    if (currentState.currentOwner !== "Qwen" || !reviewPhases.includes(currentState.currentPhase)) {
+      throw new Error("CurrentState review owner/phase does not authorize capture.");
+    }
+    if (Object.values(currentState.latestArtifactRefs).some(ref => ref.artifactId === artifactId)) {
+      throw new Error("artifactId already exists in CurrentState.");
+    }
+    await mkdir(artifactsDir, { recursive: true });
+    ensureInside(await realpath(root), await realpath(artifactsDir));
+    for (const target of [artifactPath, capturePath, stdoutPath, stderrPath]) await assertAbsent(target);
+    const originalState = await readFile(currentStatePath, "utf8");
+    const startedAt = now().toISOString();
+    // Version lookup never uses review arguments, credentials or shell interpolation.
+    if (!processResult && !fromFile) ({ command, commandArgs } = await resolveQwenCommand(command, commandArgs, settingsEnvironment));
+    if (!processResult && !fromFile && qwenVersion === null) {
+      const version = await runCommand(command, versionArgs(commandArgs), { cwd: root });
+      if (version.exitCode === 0 && /^\d+\.\d+\.\d+[\w.+-]*$/.test(version.stdout.trim())) qwenVersion = version.stdout.trim();
+    }
+    const result = processResult ?? (fromFile
+      ? { exitCode: 0, stdout: await readFile(fromFile, "utf8"), stderr: "", signal: null }
+      : await runCommand(command, commandArgs, { cwd: root }));
+    const format = outputFormat ?? getOutputFormat(commandArgs);
+    let parsed;
+    let partialObserved;
+    let captureError = result.exitCode !== 0 ? "process_nonzero_exit" : null;
+    try { parsed = parseCaptureOutput(result.stdout, format); }
+    catch (error) { partialObserved = error.observed; captureError ??= "output_extraction_failed"; }
+    const observed = parsed?.observed ?? partialObserved ?? emptyObservations();
+    const suppressed = { stdout: containsSecret(result.stdout), stderr: containsSecret(result.stderr) };
+    observed.provider = await verifyProviderLaunch({ commandArgs: fromFile ? [] : commandArgs,
+      expected: expectedProvider, workspaceRoot: root, ...settingsEnvironment });
+    if (observed.provider.verified) observed.notObserved = observed.notObserved.filter(key => key !== "provider");
+    const searchFilteringProven = await verifySearchFiltering({ workspaceRoot: root, ...settingsEnvironment });
+    const readScopeReasons = await auditReadScope(observed, { root, changeId, runId, currentState, containsSecret, searchFilteringProven });
+    const evidenceGate = assessEvidence(observed, parsed?.reviewSource, format);
+    evidenceGate.reasons.push(...readScopeReasons);
+    if (!observed.provider.verified) evidenceGate.reasons.push("provider_not_verified");
+    else if (observed.model !== observed.provider.model) evidenceGate.reasons.push("model_differs_from_pinned_launch");
+    if (observed.qwenCodeVersion !== VERIFIED_QWEN_VERSION) evidenceGate.reasons.push("qwen_version_unverified");
+    if (suppressed.stdout || suppressed.stderr) evidenceGate.reasons.push("raw_output_contains_secret");
+    if (captureError) evidenceGate.reasons.push(captureError);
+    evidenceGate.passed = evidenceGate.reasons.length === 0;
+    const reference = (id, target, kind = "evidence") => ({
+      artifactId: id, changeId, runId, kind, relativePath: toPosixPath(path.relative(root, target)),
     });
-    if (reviewResult.artifactId !== artifactId) throw new Error("review_result artifactId does not match requested artifactId.");
-  } catch {
-    evidence.error = "review_result_schema_or_artifactId_invalid";
-    evidence.evidenceGate = { passed: false, reasons: [...evidenceGate.reasons, evidence.error] };
-    await writeCapture(evidenceEntries());
-    throw new Error("Capture failed: review_result schema or artifactId invalid; evidence saved.");
-  }
-  if (containsSecret(JSON.stringify(reviewResult))) {
-    evidence.error = "review_result_contains_secret";
-    evidence.evidenceGate = { passed: false, reasons: [...evidenceGate.reasons, evidence.error] };
-    await writeCapture(evidenceEntries());
-    throw new Error("Capture failed: review_result contains secret; only safe evidence saved.");
-  }
-  const updatedState = applyVerdictTransition(currentState, reviewResult, {
-    changeId,
-    runId,
-    relativePath: toPosixPath(path.relative(root, artifactPath)),
-    now,
-    effectiveVerdict: evidenceGate.passed ? reviewResult.payload.verdict : "INCOMPLETE",
-  });
-  const handoff = buildHandoff(currentState, updatedState, reviewResult);
-  if (!evidenceGate.passed) handoff.reason = "Review evidence gate failed; CCR must recheck the review environment.";
-  const handoffPath = path.join(artifactsDir, `${handoff.handoffId}.json`);
-  await assertAbsent(handoffPath);
-  updatedState.latestArtifactRefs.reviewCapture = reference(evidence.artifactId, capturePath);
-  if (!suppressed.stdout) updatedState.latestArtifactRefs.reviewRawStdout = reference(`${artifactId}-stdout`, stdoutPath);
-  else delete updatedState.latestArtifactRefs.reviewRawStdout;
-  if (!suppressed.stderr) updatedState.latestArtifactRefs.reviewRawStderr = reference(`${artifactId}-stderr`, stderrPath);
-  else delete updatedState.latestArtifactRefs.reviewRawStderr;
-  updatedState.latestArtifactRefs.handoff = {
-    artifactId: handoff.handoffId, changeId, runId, kind: "handoff",
-    relativePath: toPosixPath(path.relative(root, handoffPath)),
-  };
-  validateContract("handoff", handoff);
-  validateCanonicalCurrentState(updatedState, { expectedChangeId: changeId, expectedRunId: runId });
-  for (const ref of handoff.requiredInputRefs) {
-    validateArtifactPath(ref, changeId);
-    const inputPath = path.resolve(root, ref.relativePath);
-    ensureInside(root, inputPath);
-    if (ref.artifactId === reviewResult.artifactId && inputPath === artifactPath) continue;
-    await access(inputPath, fsConstants.R_OK);
-    ensureInside(await realpath(root), await realpath(inputPath));
-  }
+    const evidence = {
+      schemaVersion: "1.0.0", artifactId: `${artifactId}-capture`, changeId, runId, kind: "evidence",
+      argv: redactArgv([command ?? (fromFile ? "from-file" : "injected-process"), ...commandArgs]),
+      cwd: ".", qwenVersion: typeof qwenVersion === "string" && /^\d+\.\d+\.\d+[\w.+-]*$/.test(qwenVersion) ? qwenVersion : null,
+      startedAt, endedAt: now().toISOString(),
+      exitCode: result.exitCode, signal: result.signal ?? null, outputFormat: format,
+      source: fromFile ? "from-file" : processResult ? "injected-process" : "child-process",
+      hashes: { stdout: sha256(result.stdout), stderr: sha256(result.stderr), savedResult: null },
+      spawnError: result.spawnError ?? null,
+      redactedForSecret: suppressed,
+      secretHits: { stdout: suppressed.stdout ? describeSecretHits(result.stdout, format) : null,
+        stderr: suppressed.stderr ? describeSecretHits(result.stderr, "text") : null },
+      observed, evidenceGate, error: captureError,
+    };
+    const evidenceEntries = () => [
+      ...(!suppressed.stdout ? [[stdoutPath, result.stdout]] : []),
+      ...(!suppressed.stderr ? [[stderrPath, result.stderr]] : []),
+      [capturePath, evidence],
+    ];
+    if (captureError) {
+      await writeCapture(evidenceEntries());
+      throw new Error(`Capture failed: ${captureError}; evidence saved.`);
+    }
+    let reviewResult;
+    try {
+      reviewResult = validateReviewResult(parsed.reviewResult, {
+        expectedChangeId: changeId, expectedRunId: runId, expectedStage: stage, expectedKind: EXPECTED_KIND,
+      });
+      if (reviewResult.artifactId !== artifactId) throw new Error("review_result artifactId does not match requested artifactId.");
+    } catch (error) {
+      evidence.error = "review_result_schema_or_artifactId_invalid";
+      evidence.validationIssue = describeValidationFailure(error, parsed);
+      evidence.evidenceGate = { passed: false, reasons: [...evidenceGate.reasons, evidence.error] };
+      await writeCapture(evidenceEntries());
+      throw new Error("Capture failed: review_result schema or artifactId invalid; evidence saved.");
+    }
+    if (containsSecret(JSON.stringify(reviewResult))) {
+      evidence.error = "review_result_contains_secret";
+      evidence.evidenceGate = { passed: false, reasons: [...evidenceGate.reasons, evidence.error] };
+      await writeCapture(evidenceEntries());
+      throw new Error("Capture failed: review_result contains secret; only safe evidence saved.");
+    }
+    const updatedState = applyVerdictTransition(currentState, reviewResult, {
+      changeId,
+      runId,
+      relativePath: toPosixPath(path.relative(root, artifactPath)),
+      now,
+      effectiveVerdict: evidenceGate.passed ? reviewResult.payload.verdict : "INCOMPLETE",
+    });
+    const handoff = buildHandoff(currentState, updatedState, reviewResult);
+    if (!evidenceGate.passed) handoff.reason = "Review evidence gate failed; CCR must recheck the review environment.";
+    const handoffPath = path.join(artifactsDir, `${handoff.handoffId}.json`);
+    await assertAbsent(handoffPath);
+    updatedState.latestArtifactRefs.reviewCapture = reference(evidence.artifactId, capturePath);
+    if (!suppressed.stdout) updatedState.latestArtifactRefs.reviewRawStdout = reference(`${artifactId}-stdout`, stdoutPath);
+    else delete updatedState.latestArtifactRefs.reviewRawStdout;
+    if (!suppressed.stderr) updatedState.latestArtifactRefs.reviewRawStderr = reference(`${artifactId}-stderr`, stderrPath);
+    else delete updatedState.latestArtifactRefs.reviewRawStderr;
+    updatedState.latestArtifactRefs.handoff = {
+      artifactId: handoff.handoffId, changeId, runId, kind: "handoff",
+      relativePath: toPosixPath(path.relative(root, handoffPath)),
+    };
+    validateContract("handoff", handoff);
+    validateCanonicalCurrentState(updatedState, { expectedChangeId: changeId, expectedRunId: runId });
+    for (const ref of handoff.requiredInputRefs) {
+      validateArtifactPath(ref, changeId);
+      const inputPath = path.resolve(root, ref.relativePath);
+      ensureInside(root, inputPath);
+      if (ref.artifactId === reviewResult.artifactId && inputPath === artifactPath) continue;
+      await access(inputPath, fsConstants.R_OK);
+      ensureInside(await realpath(root), await realpath(inputPath));
+    }
 
-  evidence.hashes.savedResult = sha256(serialize(reviewResult));
-  if (await readFile(currentStatePath, "utf8") !== originalState) throw new Error("CurrentState changed during capture.");
-  // Publish the state last, after all referenced documents have been staged.
-  await writeCapture([
-    ...evidenceEntries(), [artifactPath, reviewResult], [handoffPath, handoff], [currentStatePath, updatedState, originalState],
-  ]);
+    evidence.hashes.savedResult = sha256(serialize(reviewResult));
+    if (await readFile(currentStatePath, "utf8") !== originalState) throw new Error("CurrentState changed during capture.");
+    // Publish the state last, after all referenced documents have been staged.
+    await writeCapture([
+      ...evidenceEntries(), [artifactPath, reviewResult], [handoffPath, handoff], [currentStatePath, updatedState, originalState],
+    ]);
 
-  return {
-    artifactPath,
-    currentStatePath,
-    handoffPath,
-    capturePath,
-    artifactReference: updatedState.latestArtifactRefs.reviewResult,
-  };
+    return {
+      artifactPath,
+      currentStatePath,
+      handoffPath,
+      capturePath,
+      artifactReference: updatedState.latestArtifactRefs.reviewResult,
+    };
+  } finally {
+    await unlink(lockPath);
+  }
 }
 
 function applyVerdictTransition(currentState, reviewResult, { changeId, runId, relativePath, now, effectiveVerdict }) {
@@ -802,6 +921,7 @@ function buildHandoff(currentState, updatedState, reviewResult) {
   const implementation = identity.to === "Codex";
   return {
     schemaVersion: "1.0.0", ...identity,
+    ...(currentState.rolePolicyVersion ? { rolePolicyVersion: currentState.rolePolicyVersion } : {}),
     changeId: currentState.changeId, runId: currentState.runId,
     reason: `Qwen ${reviewResult.stage}: ${reviewResult.payload.verdict}. Follow CurrentState owner and gates before execution.`,
     requiredInputRefs,
@@ -1020,7 +1140,8 @@ function runCommand(command, commandArgs, { cwd }) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
-    child.on("error", () => resolve({ exitCode: 1, stdout, stderr, signal: null }));
+    child.on("error", error => resolve({ exitCode: 1, stdout, stderr, signal: null,
+      spawnError: /^[A-Z0-9_]+$/u.test(error.code ?? "") ? error.code : "UNKNOWN" }));
     child.on("close", (exitCode, signal) => {
       resolve({
         exitCode: exitCode ?? 1,
