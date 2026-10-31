@@ -82,7 +82,7 @@
 
 ### Requirement: 冪等鍵識別邏輯業務操作且並行重複只提交一次
 
-訂單變更的 business effect key MUST 由操作種類、server 端的申請者 principal、訂單識別與正規化的操作明細推導，MUST NOT 包含 attempt、tool call 識別、run 識別或自由文字理由。同一申請者在同一 trusted scope 內的同一邏輯操作 MUST 至多提交一次。第二次提交 MUST 可觀察為去重，並指向原操作，MUST NOT 被呈現為失敗。去重 MUST NOT 跨申請者發生，非擁有者的申請 MUST NOT 得到他人操作的任何資訊。
+訂單變更的 business effect key MUST 由操作種類、server 端的申請者 principal、訂單識別與正規化的操作明細推導，MUST NOT 包含 attempt、tool call 識別、run 識別或自由文字理由。模擬訂單擁有者綁定對申請者生效時，推導 MUST 另外納入綁定 epoch；綁定未生效時，推導結果 MUST 與未引入綁定前完全相同。同一申請者在同一 trusted scope 內的同一邏輯操作 MUST 至多提交一次。第二次提交 MUST 可觀察為去重，並指向原操作，MUST NOT 被呈現為失敗。去重 MUST NOT 跨申請者發生，非擁有者的申請 MUST NOT 得到他人操作的任何資訊。
 
 #### Scenario: 並行重複提交
 
@@ -131,6 +131,20 @@
 - **WHEN** 同一使用者在另一個對話申請相同退款並核准
 - **THEN** 結果 MUST 為去重並指向原操作
 - **AND** 訂單系統 MUST NOT 再次提交
+
+#### Scenario: 綁定未生效時 key 與既有紀錄相容
+
+- **GIVEN** 模擬訂單擁有者綁定未啟用，或申請者與綁定來源不符
+- **WHEN** 推導 business effect key
+- **THEN** 結果 MUST 與未引入綁定前的推導結果完全相同
+- **AND** 既有 ledger 紀錄 MUST 不需遷移即可繼續去重
+
+#### Scenario: 不同綁定 epoch 為不同邏輯操作
+
+- **GIVEN** 綁定對申請者生效，某退款已在 epoch `e1` 確認
+- **WHEN** 同一申請者在 epoch `e2` 申請相同訂單與明細的退款並核准
+- **THEN** 該申請 MUST 視為不同的邏輯操作並實際提交一次
+- **AND** `e1` 的操作與其 ledger 紀錄 MUST NOT 被修改
 
 ---
 
@@ -259,7 +273,7 @@
 
 ### Requirement: 訂單 tool 失敗分類穩定且不洩漏他人訂單
 
-訂單 tool MUST 以穩定的 typed failure 區分輸入錯誤、查無訂單、不符資格、操作已存在、dispatch 前 provider 不可用與 dispatch 後 provider 逾時。不屬於目前 tenant 與 principal 的訂單 MUST 與查無訂單回傳相同結果。provider error MUST NOT 被轉為查無訂單。
+訂單 tool MUST 以穩定的 typed failure 區分輸入錯誤、查無訂單、不符資格、操作已存在、dispatch 前 provider 不可用與 dispatch 後 provider 逾時。訂單擁有者 MUST 以生效的 fixture 擁有者判斷：模擬訂單擁有者綁定對申請者生效時為綁定目標，否則為目前 trusted tenant 與 principal。不屬於生效擁有者的訂單 MUST 與查無訂單回傳相同結果。provider error MUST NOT 被轉為查無訂單。
 
 #### Scenario: 他人訂單
 
@@ -281,6 +295,13 @@
 - **WHEN** 已核准的退款執行
 - **THEN** 操作 MUST 以 typed 不符資格失敗結束
 - **AND** ledger MUST NOT 有已提交的 business effect
+
+#### Scenario: 綁定目標不擁有的訂單
+
+- **GIVEN** 綁定對申請者生效，目標擁有者為 `synthetic-shopper-a`
+- **WHEN** 申請者對屬於 `synthetic-shopper-b` 的訂單申請取消並核准
+- **THEN** MUST 回傳查無訂單
+- **AND** 回應 MUST NOT 透露該訂單存在
 
 ---
 
