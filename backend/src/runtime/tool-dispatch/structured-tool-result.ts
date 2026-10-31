@@ -26,6 +26,11 @@ export interface CreateStructuredToolResultInput<TResult> {
   emittedAt?: string;
 }
 
+function toEnvelopeEgressDecision(evidence: ExecutionProfileEvidence["egressDecision"]) {
+  if (evidence === null || evidence.decision === "unavailable") return null;
+  return { decision: evidence.decision, reasonCode: evidence.reasonCode };
+}
+
 export function createStructuredToolResultEnvelope<TResult>(
   input: CreateStructuredToolResultInput<TResult>
 ): StructuredToolResultEnvelope<TResult> {
@@ -56,7 +61,9 @@ export function createStructuredToolResultEnvelope<TResult>(
       executionProfileVersion: input.securityEvidence.executionProfileVersion,
       effectiveCapabilities: input.securityEvidence.effectiveCapabilities,
       secretRefsUsed: input.securityEvidence.secretRefsUsed,
-      egressDecision: input.securityEvidence.egressDecision,
+      // harness-contracts 0.1.0-alpha.3 only models allow and deny. An unavailable evaluation stays
+      // in audit and ledger evidence; the outcome errorCode keeps its classification here.
+      egressDecision: toEnvelopeEgressDecision(input.securityEvidence.egressDecision),
     } : {}),
     terminationCause: input.terminationCause ?? getToolExecutionTerminationCause(input.outcome),
     emittedAt: input.emittedAt ?? new Date().toISOString(),

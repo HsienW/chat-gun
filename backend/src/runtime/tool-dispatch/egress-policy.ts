@@ -14,6 +14,13 @@ import {
   egressRequirementsSchema,
   type EgressRequirements,
 } from "./execution-profile.js";
+import type {
+  EgressFailureReasonCode,
+  EgressPolicyErrorCode,
+  EgressReasonCode,
+} from "./egress-reason.js";
+
+export type { EgressPolicyErrorCode } from "./egress-reason.js";
 
 export const EGRESS_POLICY_VERSION = "1.0" as const;
 export const PUBLIC_INTERNET_DESTINATION =
@@ -29,13 +36,9 @@ export const egressPolicySchema = z
   .strict();
 
 export type EgressPolicy = z.infer<typeof egressPolicySchema>;
-export type EgressPolicyErrorCode =
-  | "EGRESS_DENIED"
-  | "EGRESS_POLICY_UNAVAILABLE";
-
 export interface EgressDecision {
-  decision: "allow" | "deny";
-  reasonCode: string;
+  decision: "allow" | "deny" | "unavailable";
+  reasonCode: EgressReasonCode;
 }
 
 const egressDecisionStorage = new AsyncLocalStorage<
@@ -53,15 +56,34 @@ function recordDecision(decision: EgressDecision): void {
   egressDecisionStorage.getStore()?.(decision);
 }
 
+/**
+ * The reason must belong to the code's classification, so callers cannot
+ * report an unavailable evaluation as a denial or the reverse. Messages carry
+ * no URL, hostname or IP because they may reach logs and tool results.
+ */
 export class EgressPolicyError extends Error {
   readonly name = "EgressPolicyError";
+  readonly code: EgressPolicyErrorCode;
+  readonly reasonCode: EgressFailureReasonCode;
 
   constructor(
-    readonly code: EgressPolicyErrorCode,
-    readonly reasonCode: string,
+    code: "EGRESS_DENIED",
+    reasonCode: EgressFailureReasonCode<"EGRESS_DENIED">,
+    message: string
+  );
+  constructor(
+    code: "EGRESS_POLICY_UNAVAILABLE",
+    reasonCode: EgressFailureReasonCode<"EGRESS_POLICY_UNAVAILABLE">,
+    message: string
+  );
+  constructor(
+    code: EgressPolicyErrorCode,
+    reasonCode: EgressFailureReasonCode,
     message: string
   ) {
     super(message);
+    this.code = code;
+    this.reasonCode = reasonCode;
   }
 }
 
@@ -105,9 +127,13 @@ export function setEgressPolicyTestDependencies(
 const DEFAULT_ALLOWED_PORTS = new Set(["80", "443"]);
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
-function deny(reasonCode: string, message: string): never {
+function deny(reasonCode: EgressFailureReasonCode<"EGRESS_DENIED">): never {
   recordDecision({ decision: "deny", reasonCode });
-  throw new EgressPolicyError("EGRESS_DENIED", reasonCode, message);
+  throw new EgressPolicyError(
+    "EGRESS_DENIED",
+    reasonCode,
+    `Egress denied: ${reasonCode}`
+  );
 }
 
 function canonicalHostname(hostname: string): string {
@@ -226,7 +252,7 @@ export function assertPublicIp(address: string): void {
     (version === 4 && isPrivateIpv4(normalized)) ||
     (version === 6 && isPrivateIpv6(normalized))
   ) {
-    deny("PRIVATE_ADDRESS", `Egress target is not a public IP address: ${address}`);
+    deny("PRIVATE_ADDRESS");
   }
 }
 
@@ -266,7 +292,7 @@ function assertUnambiguousRawUrl(rawUrl: string): void {
     /[\\\u0000-\u0020]/.test(rawUrl) ||
     /%(?:2f|5c|40|3a)/i.test(authority)
   ) {
-    deny("URL_PARSER_DISAGREEMENT", "Ambiguous URL encoding is not allowed");
+    deny("URL_PARSER_DISAGREEMENT");
   }
 }
 
@@ -282,34 +308,34 @@ export async function assertHttpUrl(
   try {
     url = new URL(rawUrl);
   } catch {
-    deny("URL_INVALID", "Invalid egress URL");
+    deny("URL_INVALID");
   }
   const protocol = url.protocol.slice(0, -1);
   if (
     (protocol !== "http" && protocol !== "https") ||
     !parsedPolicy.protocols.includes(protocol)
   ) {
-    deny("PROTOCOL_NOT_ALLOWED", `Egress protocol is not allowed: ${url.protocol}`);
+    deny("PROTOCOL_NOT_ALLOWED");
   }
   if (url.username.length > 0 || url.password.length > 0) {
-    deny("EMBEDDED_CREDENTIAL", "URLs with embedded credentials are not allowed");
+    deny("EMBEDDED_CREDENTIAL");
   }
 
   const allowedPorts = dependencies.allowedPorts ?? DEFAULT_ALLOWED_PORTS;
   const effectivePort = getEffectivePort(url);
   if (!allowedPorts.has(effectivePort)) {
-    deny("PORT_NOT_ALLOWED", `Egress port is not allowed: ${effectivePort}`);
+    deny("PORT_NOT_ALLOWED");
   }
 
   const hostname = canonicalHostname(url.hostname);
   if (hostname === "localhost") {
-    deny("PRIVATE_ADDRESS", "localhost is not allowed");
+    deny("PRIVATE_ADDRESS");
   }
   const permitsPublicInternet = parsedPolicy.destinations.includes(
     PUBLIC_INTERNET_DESTINATION
   );
   if (!permitsPublicInternet && !parsedPolicy.destinations.includes(hostname)) {
-    deny("DESTINATION_NOT_ALLOWED", `Egress destination is not allowed: ${hostname}`);
+    deny("DESTINATION_NOT_ALLOWED");
   }
 
   const ipVersion = isIP(hostname);
@@ -324,18 +350,60 @@ export async function assertHttpUrl(
     addresses = await (dependencies.resolveDns ?? defaultResolveDns)(hostname);
   } catch (error) {
     if (error instanceof EgressPolicyError) throw error;
+    recordDecision({ decision: "unavailable", reasonCode: "DNS_RESOLUTION_FAILED" });
     throw new EgressPolicyError(
       "EGRESS_POLICY_UNAVAILABLE",
       "DNS_RESOLUTION_FAILED",
-      `Egress DNS resolution failed for ${hostname}`
+      "Egress policy unavailable: DNS_RESOLUTION_FAILED"
     );
   }
   if (addresses.length === 0) {
-    deny("DNS_EMPTY", `Egress DNS resolution returned no addresses: ${hostname}`);
+    deny("DNS_EMPTY");
   }
   for (const { address } of addresses) assertPublicIp(address);
   recordDecision({ decision: "allow", reasonCode: "POLICY_ALLOWED" });
   return { url, addresses };
+}
+
+/** undici's fetch reports a connector failure as TypeError with the original error as cause. */
+export function restoreEgressPolicyError(error: unknown): unknown {
+  return error instanceof Error && error.cause instanceof EgressPolicyError
+    ? error.cause
+    : error;
+}
+
+export function createPinnedConnector(
+  target: ValidatedEgressTarget,
+  validateConnectedAddress: (address: string) => void,
+  recordConnectDecision?: (decision: EgressDecision) => void
+): buildConnector.connector {
+  const pinned = target.addresses[0];
+  const connector = buildConnector({});
+  return (options, callback) => {
+    const requestedHostname = canonicalHostname(options.hostname);
+    const expectedHostname = canonicalHostname(target.url.hostname);
+    if (requestedHostname !== expectedHostname) {
+      recordConnectDecision?.({ decision: "deny", reasonCode: "CONNECT_HOST_MISMATCH" });
+      callback(
+        new EgressPolicyError(
+          "EGRESS_DENIED",
+          "CONNECT_HOST_MISMATCH",
+          "Egress denied: CONNECT_HOST_MISMATCH"
+        ),
+        null
+      );
+      return;
+    }
+    validateConnectedAddress(pinned.address);
+    connector(
+      {
+        ...options,
+        hostname: pinned.address,
+        servername: expectedHostname,
+      },
+      callback
+    );
+  };
 }
 
 const defaultConnect: EgressConnect = async (
@@ -343,34 +411,10 @@ const defaultConnect: EgressConnect = async (
   init,
   validateConnectedAddress
 ) => {
-  const pinned = target.addresses[0];
-  validateConnectedAddress(pinned.address);
-  const connector = buildConnector({});
+  validateConnectedAddress(target.addresses[0].address);
   const dispatcher = new Agent({
-    connect(options, callback) {
-      const requestedHostname = canonicalHostname(options.hostname);
-      const expectedHostname = canonicalHostname(target.url.hostname);
-      if (requestedHostname !== expectedHostname) {
-        callback(
-          new EgressPolicyError(
-            "EGRESS_DENIED",
-            "CONNECT_HOST_MISMATCH",
-            "Connected hostname differs from the validated destination"
-          ),
-          null
-        );
-        return;
-      }
-      validateConnectedAddress(pinned.address);
-      connector(
-        {
-          ...options,
-          hostname: pinned.address,
-          servername: expectedHostname,
-        },
-        callback
-      );
-    },
+    // The connector may run outside this call's async context, so pass the recorder from here.
+    connect: createPinnedConnector(target, validateConnectedAddress, egressDecisionStorage.getStore()),
   });
   try {
     const response = await undiciFetch(target.url, {
@@ -384,6 +428,8 @@ const defaultConnect: EgressConnect = async (
       statusText: response.statusText,
       headers: response.headers,
     });
+  } catch (error) {
+    throw restoreEgressPolicyError(error);
   } finally {
     await dispatcher.close();
   }
@@ -413,5 +459,5 @@ export async function fetchWithValidatedRedirects(
     if (location === null) return response;
     currentUrl = new URL(location, target.url).toString();
   }
-  deny("TOO_MANY_REDIRECTS", `Too many redirects; maximum is ${maxRedirects}`);
+  deny("TOO_MANY_REDIRECTS");
 }
