@@ -368,7 +368,11 @@ export function createShoppingAssistantGraph(
     if (outcome.kind === "failed") {
       await dependencies.audit(
         "shopping.product.lookup_failed",
-        { graphId: SHOPPING_ASSISTANT_GRAPH_ID, errorCode: outcome.errorCode },
+        {
+          graphId: SHOPPING_ASSISTANT_GRAPH_ID,
+          errorCode: outcome.errorCode,
+          ...(outcome.egressReasonCode ? { egressReasonCode: outcome.egressReasonCode } : {}),
+        },
         readCanonicalExecutionContext(config)
       ).catch(() => undefined);
       return {
@@ -416,7 +420,10 @@ export function createShoppingAssistantGraph(
     const { human, outcome } = currentKbSearchOutcome(state);
     const promptVersion = dependencies.policyAnswerSynthesizer.promptVersion;
     if (outcome.kind === "failed") {
-      await audit("shopping.policy.lookup_failed", { errorCode: outcome.errorCode });
+      await audit("shopping.policy.lookup_failed", {
+        errorCode: outcome.errorCode,
+        ...(outcome.egressReasonCode ? { egressReasonCode: outcome.egressReasonCode } : {}),
+      });
       return {
         messages: [reply(REPLIES.policyUnavailable)],
         turnEvidence: { citations: [], answerStatus: "lookup_failed" },

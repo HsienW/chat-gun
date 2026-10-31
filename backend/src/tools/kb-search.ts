@@ -5,6 +5,7 @@ import { z } from "zod";
 import { readKnowledgeConfig, type KnowledgeConfig } from "../knowledge/config.js";
 import { getSharedKnowledgeStore } from "../knowledge/connection.js";
 import { isKnowledgeError, type KnowledgeErrorCode } from "../knowledge/errors.js";
+import type { ObservedEgressReasonCode } from "../runtime/tool-dispatch/egress-reason.js";
 import { HttpKnowledgeModelGateway, type KnowledgeModelGateway } from "../knowledge/model-gateway.js";
 import { KB_SEARCH_RESULT_VERSION, searchKnowledge } from "../knowledge/retrieval.js";
 import { KNOWLEDGE_SOURCE_TYPES, type KnowledgeStore } from "../knowledge/store.js";
@@ -44,8 +45,14 @@ const defaultDependencies: KbSearchDependencies = {
   gateway: (config) => new HttpKnowledgeModelGateway(config),
 };
 
-function failure(errorCode: KnowledgeErrorCode, retryable: boolean): string {
-  return JSON.stringify({ schemaVersion: KB_SEARCH_RESULT_VERSION, outcome: "error", errorCode, retryable });
+function failure(errorCode: KnowledgeErrorCode, retryable: boolean, egressReasonCode?: ObservedEgressReasonCode): string {
+  return JSON.stringify({
+    schemaVersion: KB_SEARCH_RESULT_VERSION,
+    outcome: "error",
+    errorCode,
+    retryable,
+    ...(egressReasonCode ? { egressReasonCode } : {}),
+  });
 }
 
 export function createKbSearchTool(dependencies: KbSearchDependencies = defaultDependencies) {
@@ -76,7 +83,7 @@ export function createKbSearchTool(dependencies: KbSearchDependencies = defaultD
         });
         return JSON.stringify(result);
       } catch (error) {
-        if (isKnowledgeError(error)) return failure(error.code, error.retryable);
+        if (isKnowledgeError(error)) return failure(error.code, error.retryable, error.egressReasonCode);
         return failure("KB_PROVIDER_ERROR", false);
       }
     },

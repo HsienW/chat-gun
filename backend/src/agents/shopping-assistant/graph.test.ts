@@ -352,6 +352,25 @@ describe("shopping assistant product branch", () => {
     expect(audit).toHaveBeenCalledWith("shopping.product.lookup_failed", expect.anything(), expect.anything());
   });
 
+  it("audits the egress reason when the product lookup fails at egress", async () => {
+    const kbOutput = () => JSON.stringify({
+      schemaVersion: "kb_search_result@1",
+      outcome: "error",
+      errorCode: "EGRESS_POLICY_UNAVAILABLE",
+      retryable: false,
+      egressReasonCode: "DNS_RESOLUTION_FAILED",
+    });
+    const { graph, audit } = setup(productRoute, { kbOutput });
+
+    await graph.invoke({ messages: [new HumanMessage("x")] }, runConfig("thread-egress-product"));
+
+    expect(audit).toHaveBeenCalledWith(
+      "shopping.product.lookup_failed",
+      expect.objectContaining({ errorCode: "EGRESS_POLICY_UNAVAILABLE", egressReasonCode: "DNS_RESOLUTION_FAILED" }),
+      expect.anything()
+    );
+  });
+
   it("drops any tool call other than one kb_search before authorization", async () => {
     const { graph, kb } = setup(productRoute, {
       toolCalls: [
@@ -497,6 +516,25 @@ describe("shopping assistant policy answers", () => {
     expect(lastText(state.messages)).toBe("目前無法回答這個問題，請稍後再試。");
     expect(synthesize).not.toHaveBeenCalled();
     expect(audit).toHaveBeenCalledWith("shopping.policy.lookup_failed", expect.anything(), expect.anything());
+  });
+
+  it("audits the egress reason when the policy lookup fails at egress", async () => {
+    const kbOutput = () => JSON.stringify({
+      schemaVersion: "kb_search_result@1",
+      outcome: "error",
+      errorCode: "EGRESS_DENIED",
+      retryable: false,
+      egressReasonCode: "PRIVATE_ADDRESS",
+    });
+    const { graph, audit } = setup(policyRoute, { kbOutput, toolCalls: policyCall });
+
+    await graph.invoke({ messages: [new HumanMessage("x")] }, runConfig("thread-egress-policy"));
+
+    expect(audit).toHaveBeenCalledWith(
+      "shopping.policy.lookup_failed",
+      expect.objectContaining({ errorCode: "EGRESS_DENIED", egressReasonCode: "PRIVATE_ADDRESS" }),
+      expect.anything()
+    );
   });
 
   it("says it cannot answer now when synthesis fails", async () => {
