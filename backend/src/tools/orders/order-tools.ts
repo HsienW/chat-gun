@@ -4,8 +4,9 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 
 import { defaultToolPolicy, GovernedDispatchError } from "../../platform/tool-governance.js";
+import { auditLogger, type AuditLogger } from "../../platform/observability.js";
 import type { ToolRiskPolicy } from "../../runtime/authorization/tool-risk.js";
-import { readCanonicalExecutionContext } from "../../runtime/execution-context/read-execution-context.js";
+import { executionCorrelation, readCanonicalExecutionContext } from "../../runtime/execution-context/read-execution-context.js";
 import { DEFAULT_RETRY_POLICY } from "../../runtime/retry/retry-policy.js";
 import { hashBusinessEffectKey, type TrustedScope } from "../../runtime/side-effect/identity.js";
 import type { SideEffectToolDescriptor } from "../../runtime/side-effect/side-effect-descriptor.js";
@@ -56,18 +57,19 @@ const MOCK_ORDER_SYSTEM_NAMESPACE = "mock-order-provider";
  */
 export function deriveRefundBusinessEffectKey(
   input: OrderRefundRequestInput,
-  scope: TrustedScope
+  scope: TrustedScope,
+  epoch?: string,
 ): string {
   const lineItems = input.lineItems === undefined
     ? "all"
     : [...input.lineItems]
         .sort((left, right) => (left.lineItemId < right.lineItemId ? -1 : left.lineItemId > right.lineItemId ? 1 : 0))
         .map((item) => [item.lineItemId, item.quantity]);
-  return JSON.stringify([`${ORDER_REFUND_REQUEST_TOOL_NAME}@1`, scope.principalId, input.orderId, lineItems]);
+  return JSON.stringify([`${ORDER_REFUND_REQUEST_TOOL_NAME}@1`, scope.principalId, input.orderId, lineItems, ...(epoch === undefined ? [] : [epoch])]);
 }
 
-export function deriveCancelBusinessEffectKey(input: OrderCancelInput, scope: TrustedScope): string {
-  return JSON.stringify([`${ORDER_CANCEL_TOOL_NAME}@1`, scope.principalId, input.orderId]);
+export function deriveCancelBusinessEffectKey(input: OrderCancelInput, scope: TrustedScope, epoch?: string): string {
+  return JSON.stringify([`${ORDER_CANCEL_TOOL_NAME}@1`, scope.principalId, input.orderId, ...(epoch === undefined ? [] : [epoch])]);
 }
 
 function trustedScopeFrom(config: unknown): TrustedScope {
@@ -92,16 +94,31 @@ function toGovernedError(error: unknown): unknown {
 
 export interface OrderMutationToolDependencies {
   provider: OrderProvider;
+  audit?: AuditLogger;
+}
+
+async function auditOwnerBinding(dependencies: OrderMutationToolDependencies, toolName: string,
+  epoch: string | undefined, businessEffectKey: string, config: unknown): Promise<void> {
+  if (epoch === undefined) return;
+  const context = readCanonicalExecutionContext(config);
+  await (dependencies.audit ?? auditLogger).record("order.owner_binding.applied", {
+    toolName, isOwnerBindingApplied: true, epoch, businessEffectKey,
+    ...(context === undefined ? {} : executionCorrelation(context)),
+    ...(context?.toolCallId === undefined ? {} : { toolCallId: context.toolCallId }),
+  }, context);
 }
 
 export function createOrderRefundRequestTool(dependencies: OrderMutationToolDependencies) {
   return tool(
     async (input, config?: RunnableConfig): Promise<OrderEffectResult> => {
       const scope = trustedScopeFrom(config);
+      const epoch = dependencies.provider.businessEffectEpoch?.(scope);
+      const businessEffectKey = hashBusinessEffectKey(deriveRefundBusinessEffectKey(input, scope, epoch));
+      await auditOwnerBinding(dependencies, ORDER_REFUND_REQUEST_TOOL_NAME, epoch, businessEffectKey, config);
       try {
         return await dependencies.provider.submitRefund({
           // The same derivation the ledger uses, so reconciliation can query by key.
-          businessEffectKey: hashBusinessEffectKey(deriveRefundBusinessEffectKey(input, scope)),
+          businessEffectKey,
           requester: { tenantId: scope.tenantId, principalId: scope.principalId },
           orderId: input.orderId,
           ...(input.lineItems !== undefined ? { lineItems: input.lineItems } : {}),
@@ -128,9 +145,12 @@ export function createOrderCancelTool(dependencies: OrderMutationToolDependencie
   return tool(
     async (input, config?: RunnableConfig): Promise<OrderEffectResult> => {
       const scope = trustedScopeFrom(config);
+      const epoch = dependencies.provider.businessEffectEpoch?.(scope);
+      const businessEffectKey = hashBusinessEffectKey(deriveCancelBusinessEffectKey(input, scope, epoch));
+      await auditOwnerBinding(dependencies, ORDER_CANCEL_TOOL_NAME, epoch, businessEffectKey, config);
       try {
         return await dependencies.provider.submitCancel({
-          businessEffectKey: hashBusinessEffectKey(deriveCancelBusinessEffectKey(input, scope)),
+          businessEffectKey,
           requester: { tenantId: scope.tenantId, principalId: scope.principalId },
           orderId: input.orderId,
           reasonCode: input.reasonCode,
@@ -337,7 +357,7 @@ export function createOrderToolSet(input: CreateOrderToolSetInput): OrderToolSet
     interruptBehavior: "reconcile_first",
     sideEffect: createOrderSideEffectDescriptor(
       ORDER_REFUND_REQUEST_TOOL_NAME,
-      deriveRefundBusinessEffectKey,
+      (args, scope) => deriveRefundBusinessEffectKey(args, scope, input.provider.businessEffectEpoch?.(scope)),
       input.provider
     ),
   };
@@ -350,7 +370,7 @@ export function createOrderToolSet(input: CreateOrderToolSetInput): OrderToolSet
     interruptBehavior: "reconcile_first",
     sideEffect: createOrderSideEffectDescriptor(
       ORDER_CANCEL_TOOL_NAME,
-      deriveCancelBusinessEffectKey,
+      (args, scope) => deriveCancelBusinessEffectKey(args, scope, input.provider.businessEffectEpoch?.(scope)),
       input.provider
     ),
   };

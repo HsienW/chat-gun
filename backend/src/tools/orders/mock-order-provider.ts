@@ -5,7 +5,8 @@ import {
   type OrderEffectResult,
   type OrderFailureCode,
 } from "./order-contracts.js";
-import type { SyntheticOrder, SyntheticOrderFixture } from "./synthetic-orders.js";
+import { parseSyntheticOrderFixture, type SyntheticOrder, type SyntheticOrderFixture } from "./synthetic-orders.js";
+import { matchesSyntheticOwnerBinding, validateSyntheticOwnerBinding, type SyntheticOwnerBinding } from "./synthetic-owner-binding.js";
 
 export class OrderProviderError extends Error {
   readonly name = "OrderProviderError";
@@ -50,6 +51,8 @@ export interface OrderProviderLookupQuery {
 }
 
 export interface OrderProvider {
+  /** Optional server-configured logical-operation generation; never supplied by tool input. */
+  businessEffectEpoch?(requester: OrderRequester): string | undefined;
   submitRefund(request: SubmitRefundRequest): Promise<OrderEffectResult>;
   submitCancel(request: SubmitCancelRequest): Promise<OrderEffectResult>;
   lookup(query: OrderProviderLookupQuery): Promise<OrderProviderLookupResult>;
@@ -70,6 +73,7 @@ export interface MockOrderProviderFaults {
 
 export interface MockOrderProviderOptions {
   fixture: SyntheticOrderFixture;
+  ownerBinding?: SyntheticOwnerBinding;
   faults?: MockOrderProviderFaults;
   now?: () => Date;
   createExternalOperationId?: () => string;
@@ -93,6 +97,7 @@ const CANCELLABLE_STATUSES: ReadonlySet<SyntheticOrder["status"]> = new Set(["pl
 
 /** In-memory mock of an external order system; state is lost on restart (design §13 Q3). */
 export class MockOrderProvider implements OrderProvider {
+  private readonly ownerBinding: SyntheticOwnerBinding | undefined;
   private readonly orders = new Map<string, OrderState>();
   private readonly effectsByKey = new Map<string, OrderEffectResult>();
   private readonly effectsByOperationId = new Map<string, OrderEffectResult>();
@@ -104,6 +109,8 @@ export class MockOrderProvider implements OrderProvider {
   private lookupCount = 0;
 
   constructor(options: MockOrderProviderOptions) {
+    this.ownerBinding = options.ownerBinding === undefined ? undefined
+      : validateSyntheticOwnerBinding(options.ownerBinding, parseSyntheticOrderFixture(options.fixture));
     for (const order of options.fixture.orders) {
       this.orders.set(order.orderId, {
         order: structuredClone(order),
@@ -125,6 +132,10 @@ export class MockOrderProvider implements OrderProvider {
 
   get lookups(): number {
     return this.lookupCount;
+  }
+
+  businessEffectEpoch(requester: OrderRequester): string | undefined {
+    return matchesSyntheticOwnerBinding(this.ownerBinding, requester) ? this.ownerBinding.epoch : undefined;
   }
 
   async submitRefund(request: SubmitRefundRequest): Promise<OrderEffectResult> {
@@ -209,11 +220,14 @@ export class MockOrderProvider implements OrderProvider {
 
   /** Another principal's or tenant's order is indistinguishable from a missing one. */
   private ownedOrder(orderId: string, requester: OrderRequester): OrderState {
+    const owner = matchesSyntheticOwnerBinding(this.ownerBinding, requester)
+      ? { tenantId: this.ownerBinding.targetTenantId, principalId: this.ownerBinding.targetOwnerPrincipalId }
+      : requester;
     const state = this.orders.get(orderId);
     if (
       state === undefined ||
-      state.order.tenantId !== requester.tenantId ||
-      state.order.ownerPrincipalId !== requester.principalId
+      state.order.tenantId !== owner.tenantId ||
+      state.order.ownerPrincipalId !== owner.principalId
     ) {
       throw new OrderProviderError("ORDER_NOT_FOUND");
     }

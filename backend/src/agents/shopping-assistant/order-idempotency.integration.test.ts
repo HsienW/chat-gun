@@ -306,6 +306,58 @@ describePostgres("order idempotency against the Postgres ledger", () => {
     return result.rows as { business_effect_id: string; external_operation_id: string; decision_id: string }[];
   }
 
+  it("retains old ledger and status across epoch reset and deduplicates a same-epoch restart", async () => {
+    const { tenantId } = await newTenant("binding-reset");
+    const providerFor = (epoch: string) => new MockOrderProvider({
+      fixture: synthetic,
+      ownerBinding: { sourceTenantId: tenantId, sourcePrincipalId: SHOPPER_A,
+        targetTenantId: "synthetic-tenant", targetOwnerPrincipalId: SHOPPER_A, epoch },
+      now: () => new Date("2026-10-24T12:00:00Z"),
+    });
+    const firstProvider = providerFor("e1");
+    const firstHarness = harness(tenantId, firstProvider);
+    const first = await firstHarness.request("binding-e1", refund("binding-call-e1"));
+    expect((await first.approve()).operations["binding-call-e1"]?.state).toBe("confirmed");
+    const oldRows = await committedEffects(tenantId);
+    expect(oldRows).toHaveLength(1);
+    const restartedProvider = providerFor("e1");
+    const restarted = await harness(tenantId, restartedProvider).request("binding-restart", refund("binding-call-restart"));
+    expect((await restarted.approve()).operations["binding-call-restart"]).toMatchObject({ state: "deduplicated", dedup: { of: first.descriptor.approvalId } });
+    expect(restartedProvider.submissions).toBe(0);
+    const resetProvider = providerFor("e2");
+    const resetHarness = harness(tenantId, resetProvider);
+    const reset = await resetHarness.request("binding-e2", refund("binding-call-e2"));
+    expect((await reset.approve()).operations["binding-call-e2"]?.state).toBe("confirmed");
+    expect(resetProvider.submissions).toBe(1);
+    const rows = await committedEffects(tenantId);
+    expect(rows).toHaveLength(2);
+    expect(rows).toEqual(expect.arrayContaining(oldRows));
+    await expect(resetHarness.statusReader.read({ tenantId, scopeId: tenantId, principalId: SHOPPER_A, operationId: first.descriptor.approvalId }))
+      .resolves.toMatchObject({ state: "confirmed" });
+  });
+
+  it("commits parallel bound operations in one epoch only once", async () => {
+    const { tenantId } = await newTenant("binding-concurrent");
+    const gate = commitGate();
+    const provider = new MockOrderProvider({ fixture: synthetic,
+      ownerBinding: { sourceTenantId: tenantId, sourcePrincipalId: SHOPPER_A,
+        targetTenantId: "synthetic-tenant", targetOwnerPrincipalId: SHOPPER_A, epoch: "e1" },
+      beforeCommit: gate.beforeCommit, now: () => new Date("2026-10-24T12:00:00Z"),
+    });
+    const first = await harness(tenantId, provider).request("bound-conc-a", refund("bound-call-a"));
+    const second = await harness(tenantId, provider).request("bound-conc-b", refund("bound-call-b"));
+    const running = first.approve();
+    await gate.inCommit;
+    try {
+      expect((await second.approve()).operations["bound-call-b"]).toMatchObject({ state: "deduplicated", dedup: { of: first.descriptor.approvalId } });
+      expect(provider.submissions).toBe(1);
+    } finally {
+      gate.release();
+    }
+    expect((await running).operations["bound-call-a"]?.state).toBe("confirmed");
+    expect(await committedEffects(tenantId)).toHaveLength(1);
+  });
+
   /** The order system holds the first submission inside its commit until released. */
   function commitGate() {
     let release!: () => void;
