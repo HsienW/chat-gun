@@ -63,7 +63,7 @@ Chat Gun 是一套由 Frontend、BFF 与 LangGraph Runtime 组成的全栈 Agent
   <img src="./assets/chat-gun-03.png" alt="Entry screen" width="1280" />
 </p>
 
-**其他操作的画面见[操作画面](./docs/gun-shop.md#操作畫面)（繁中）。**
+其他操作的画面见[操作画面](./docs/gun-shop.md#操作畫面)（繁中）。
 
 ## 核心能力
 
