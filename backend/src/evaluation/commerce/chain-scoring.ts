@@ -34,6 +34,13 @@ export interface TurnObservation {
     state: OrderOperationState | null;
     dedupReason?: NonNullable<OrderOperationRecord["dedup"]>["reason"];
     reasonCode?: string;
+    /** Absent in results older than this field; never read as initiated. */
+    requestInitiated?: boolean;
+    /** Who wrote the order call: a script proves nothing about the model. */
+    initiatedBy?: "model" | "script";
+    /** The request model's own text when it initiated nothing; bounded, evaluation results only. */
+    modelTextExcerpt?: string;
+    modelTextTruncated?: boolean;
   };
   /** The graph stopped for an approval before anything was submitted. */
   approvalRequested: boolean;
@@ -77,6 +84,7 @@ export interface TurnScore {
     expectedDedupReason?: string;
     actualDedupReason?: string;
     dedupCorrect?: boolean;
+    requestInitiated?: boolean;
   };
   prohibitedOutcomes: ChainProhibitedOutcome[];
   passed: boolean;
@@ -113,6 +121,10 @@ export interface ChainSplitSummary {
   routing: RoutingSummary;
   operationTurns: number;
   operationTerminalAccuracy: number | null;
+  /** Expected an operation, but no call was made: the approval gate never ran. */
+  operationNotInitiatedTurns: number;
+  /** A call was made and ended in the wrong terminal state. */
+  operationTerminalErrors: number;
   dedupReasonAccuracy: number | null;
   citationAccuracy: number | null;
   abstentionAccuracy: number | null;
@@ -174,15 +186,26 @@ function scoreAnswer(expectation: NonNullable<ChainTurnExpectation["answer"]>, o
   };
 }
 
+export const MODEL_TEXT_EXCERPT_LIMIT = 300;
+
+/** Bounded by code points, so an excerpt never ends inside a surrogate pair. */
+export function boundedModelText(text: string): { modelTextExcerpt: string; modelTextTruncated: boolean } {
+  const characters = Array.from(text);
+  return { modelTextExcerpt: characters.slice(0, MODEL_TEXT_EXCERPT_LIMIT).join(""), modelTextTruncated: characters.length > MODEL_TEXT_EXCERPT_LIMIT };
+}
+
 function scoreOperation(expectation: NonNullable<ChainTurnExpectation["operation"]>, observed: TurnObservation): TurnScore["operation"] {
   const actual = observed.operation?.state ?? null;
   const correct = actual === expectation.expectedTerminalState;
-  if (expectation.expectedDedupReason === undefined) return { expected: expectation.expectedTerminalState as OrderOperationState, actual, correct };
+  const requestInitiated = observed.operation?.requestInitiated;
+  const initiation = requestInitiated === undefined ? {} : { requestInitiated };
+  if (expectation.expectedDedupReason === undefined) return { expected: expectation.expectedTerminalState as OrderOperationState, actual, correct, ...initiation };
   const actualDedupReason = observed.operation?.dedupReason;
   return {
     expected: expectation.expectedTerminalState as OrderOperationState,
     actual,
     correct,
+    ...initiation,
     expectedDedupReason: expectation.expectedDedupReason,
     ...(actualDedupReason !== undefined ? { actualDedupReason } : {}),
     dedupCorrect: actualDedupReason === expectation.expectedDedupReason,
@@ -296,6 +319,8 @@ export function summarizeChainResults(results: readonly ChainCaseResult[], mode:
         : { status: "measured", accuracy: ratio(routes.map((route) => route.correct)), confusionMatrix: confusionMatrix(routes) },
     operationTurns: operations.length,
     operationTerminalAccuracy: ratio(operations.map((operation) => operation.correct)),
+    operationNotInitiatedTurns: operations.filter((operation) => operation.requestInitiated === false).length,
+    operationTerminalErrors: operations.filter((operation) => operation.requestInitiated === true && !operation.correct).length,
     dedupReasonAccuracy: ratio(operations.flatMap((operation) => (operation.dedupCorrect === undefined ? [] : [operation.dedupCorrect]))),
     citationAccuracy: mean(answerable.flatMap((answer) => (answer.citationAccuracy === undefined ? [] : [answer.citationAccuracy]))),
     abstentionAccuracy: ratio(answers.filter((answer) => answer.expectedKind === "abstain").map((answer) => answer.correct)),

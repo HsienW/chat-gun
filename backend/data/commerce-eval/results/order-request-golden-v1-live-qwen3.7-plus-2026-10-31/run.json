@@ -1,0 +1,4215 @@
+{
+  "provenance": {
+    "datasetVersion": "order-request-golden-v1",
+    "datasetSha256": "bd9e4a103843253bf2580cf5c54c869b4f9760092220443ca9f84437e39f74ac",
+    "mode": "live",
+    "model": "qwen3.7-plus",
+    "temperature": 0,
+    "promptVersion": "shopping-order-request-v2",
+    "repeats": 5,
+    "date": "2026-10-31",
+    "synthetic": true
+  },
+  "summary": {
+    "verdict": "failed",
+    "categories": {
+      "single_mutation": {
+        "messages": 22,
+        "passed": 22
+      },
+      "multi_order": {
+        "messages": 4,
+        "passed": 4
+      },
+      "preapproval_claim": {
+        "messages": 4,
+        "passed": 4
+      },
+      "control": {
+        "messages": 11,
+        "passed": 9
+      }
+    },
+    "singleMutationPassRate": 1,
+    "invalidArguments": 0,
+    "incompleteRuns": 0,
+    "unmetThresholds": [
+      "control_all_pass"
+    ],
+    "failedCases": [
+      "new-hypothetical-zh-tw",
+      "new-hypothetical-en"
+    ],
+    "cases": [
+      {
+        "caseId": "reg-refund-01",
+        "category": "single_mutation",
+        "origin": "regression",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "reg-cancel-01",
+        "category": "single_mutation",
+        "origin": "regression",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "reg-multi-turn-01",
+        "category": "single_mutation",
+        "origin": "regression",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "reg-denied-01",
+        "category": "single_mutation",
+        "origin": "regression",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "reg-expired-01",
+        "category": "single_mutation",
+        "origin": "regression",
+        "language": "zh-TW",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "reg-cancel-before-effect-01",
+        "category": "single_mutation",
+        "origin": "regression",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "reg-duplicate-01",
+        "category": "single_mutation",
+        "origin": "regression",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "reg-lost-committed-01",
+        "category": "single_mutation",
+        "origin": "regression",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "reg-lost-not-committed-01",
+        "category": "single_mutation",
+        "origin": "regression",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "reg-not-eligible-01",
+        "category": "single_mutation",
+        "origin": "regression",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "reg-preapproval-01",
+        "category": "preapproval_claim",
+        "origin": "regression",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "reg-no-order-en",
+        "category": "control",
+        "origin": "regression",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "reg-no-order-zh",
+        "category": "control",
+        "origin": "regression",
+        "language": "zh-TW",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "reg-no-order-cancel",
+        "category": "control",
+        "origin": "regression",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "reg-two-orders",
+        "category": "multi_order",
+        "origin": "regression",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "reg-status",
+        "category": "control",
+        "origin": "regression",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-single-01",
+        "category": "single_mutation",
+        "origin": "unseen",
+        "language": "zh-TW",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-single-02",
+        "category": "single_mutation",
+        "origin": "unseen",
+        "language": "zh-TW",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-single-03",
+        "category": "single_mutation",
+        "origin": "unseen",
+        "language": "zh-TW",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-single-04",
+        "category": "single_mutation",
+        "origin": "unseen",
+        "language": "zh-TW",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-single-05",
+        "category": "single_mutation",
+        "origin": "unseen",
+        "language": "zh-CN",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-single-06",
+        "category": "single_mutation",
+        "origin": "unseen",
+        "language": "zh-CN",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-single-07",
+        "category": "single_mutation",
+        "origin": "unseen",
+        "language": "zh-CN",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-single-08",
+        "category": "single_mutation",
+        "origin": "unseen",
+        "language": "zh-CN",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-single-09",
+        "category": "single_mutation",
+        "origin": "unseen",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-single-10",
+        "category": "single_mutation",
+        "origin": "unseen",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-single-11",
+        "category": "single_mutation",
+        "origin": "unseen",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-single-12",
+        "category": "single_mutation",
+        "origin": "unseen",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-multi-zh-tw",
+        "category": "multi_order",
+        "origin": "unseen",
+        "language": "zh-TW",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-multi-zh-cn",
+        "category": "multi_order",
+        "origin": "unseen",
+        "language": "zh-CN",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-multi-en",
+        "category": "multi_order",
+        "origin": "unseen",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-preapproval-zh-tw",
+        "category": "preapproval_claim",
+        "origin": "unseen",
+        "language": "zh-TW",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-preapproval-zh-cn",
+        "category": "preapproval_claim",
+        "origin": "unseen",
+        "language": "zh-CN",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-preapproval-en",
+        "category": "preapproval_claim",
+        "origin": "unseen",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-no-order-zh-cn",
+        "category": "control",
+        "origin": "unseen",
+        "language": "zh-CN",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-no-order-en",
+        "category": "control",
+        "origin": "unseen",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-status-zh-tw",
+        "category": "control",
+        "origin": "unseen",
+        "language": "zh-TW",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-status-zh-cn",
+        "category": "control",
+        "origin": "unseen",
+        "language": "zh-CN",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-hypothetical-zh-tw",
+        "category": "control",
+        "origin": "unseen",
+        "language": "zh-TW",
+        "runs": 5,
+        "metRuns": 1,
+        "incompleteRuns": 0,
+        "passed": false,
+        "missExcerpt": ""
+      },
+      {
+        "caseId": "new-hypothetical-zh-cn",
+        "category": "control",
+        "origin": "unseen",
+        "language": "zh-CN",
+        "runs": 5,
+        "metRuns": 5,
+        "incompleteRuns": 0,
+        "passed": true
+      },
+      {
+        "caseId": "new-hypothetical-en",
+        "category": "control",
+        "origin": "unseen",
+        "language": "en",
+        "runs": 5,
+        "metRuns": 3,
+        "incompleteRuns": 0,
+        "passed": false,
+        "missExcerpt": ""
+      }
+    ]
+  },
+  "results": [
+    {
+      "caseId": "reg-refund-01",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "damaged"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-refund-01",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "damaged"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-refund-01",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "damaged"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-refund-01",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "damaged"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-cancel-01",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "no_longer_needed"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-refund-01",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "damaged"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-cancel-01",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "no_longer_needed"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-cancel-01",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "no_longer_needed"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-cancel-01",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "no_longer_needed"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-multi-turn-01",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "no_longer_needed"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-multi-turn-01",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "no_longer_needed"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-cancel-01",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "no_longer_needed"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-denied-01",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-multi-turn-01",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "no_longer_needed"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-multi-turn-01",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "no_longer_needed"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-multi-turn-01",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "no_longer_needed"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-denied-01",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-denied-01",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-denied-01",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-denied-01",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-expired-01",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-expired-01",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-expired-01",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-expired-01",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-expired-01",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-cancel-before-effect-01",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-cancel-before-effect-01",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-cancel-before-effect-01",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-cancel-before-effect-01",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-cancel-before-effect-01",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-duplicate-01",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-duplicate-01",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-duplicate-01",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-duplicate-01",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-duplicate-01",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-lost-committed-01",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-lost-committed-01",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-lost-committed-01",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-lost-not-committed-01",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-lost-committed-01",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-lost-committed-01",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-lost-not-committed-01",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-lost-not-committed-01",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-lost-not-committed-01",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-lost-not-committed-01",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-not-eligible-01",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1003",
+            "reasonCode": "damaged",
+            "note": "The blender stopped working"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-not-eligible-01",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1003",
+            "reasonCode": "damaged",
+            "note": "The blender stopped working"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-not-eligible-01",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1003",
+            "reasonCode": "damaged",
+            "note": "The blender stopped working"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-not-eligible-01",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1003",
+            "reasonCode": "damaged",
+            "note": "The blender stopped working"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-not-eligible-01",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1003",
+            "reasonCode": "damaged",
+            "note": "The blender stopped working"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-preapproval-01",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-preapproval-01",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-preapproval-01",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-preapproval-01",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-no-order-en",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I'd be happy to help you with a refund. Could you please provide the order ID for the order you'd like to refund?",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-no-order-en",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I'd be happy to help you with a refund. Could you please provide the order ID for the order you'd like to refund?",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-preapproval-01",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-no-order-en",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I'd be happy to help you with a refund. Could you please provide the order ID for the order you'd like to refund?",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-no-order-en",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I'd be happy to help you with a refund. Could you please provide the order ID for the order you'd like to refund?",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-no-order-en",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I'd be happy to help you with a refund. Could you please provide the order ID for the order you'd like to refund?",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-no-order-zh",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "您好！我很乐意帮您处理退款。不过我需要知道您想要退款的具体订单号。\n\n请提供您要退款的订单号，这样我就可以帮您处理了。",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-no-order-zh",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "您好！我可以帮您申请退款。请问您想要退款的是哪个订单呢？请提供订单号，这样我才能为您处理退款申请。",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-no-order-zh",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "您好！我需要知道您想要退款的具体订单号才能帮您处理。请提供您要退款的订单号，我会立即为您处理退款申请。",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-no-order-zh",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "您好！我很乐意帮您处理退款。请问您想要退款的具体订单号是什么？请提供订单号，我就可以为您处理退款申请了。",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-no-order-zh",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "您好！我需要知道您想要退款的具体订单信息才能帮您处理。请提供以下信息：\n\n1. 订单号（Order ID）\n2. 退款原因（可选，如商品损坏、发错商品、与描述不符、不再需要等）\n\n请告诉我您要退款的订单号，我就可以帮您申请退款了。",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-no-order-cancel",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I'd be happy to help you cancel your order. To proceed, I'll need to know which order you'd like to cancel. Could you please provide your order ID or order number?",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-no-order-cancel",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I'd be happy to help you cancel your order. To proceed, I'll need the order ID or order number for the specific order you want to cancel. Could you please provide that information?",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-no-order-cancel",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I'd be happy to help you cancel your order. To proceed, I'll need to know which specific order you'd like to cancel. Could you please provide your order ID or order number?",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-no-order-cancel",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I'd be happy to help you cancel your order. To proceed, I'll need to know which specific order you'd like to cancel. Could you please provide your order ID or order number?",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-no-order-cancel",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I'd be happy to help you cancel your order. To proceed, I'll need the order ID or order number for the specific order you want to cancel. Could you please provide that information?",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-two-orders",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-two-orders",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-two-orders",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-two-orders",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-status",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1001"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-status",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1001"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-status",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1001"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-two-orders",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-status",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1001"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "reg-status",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1001"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-01",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-01",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-01",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-01",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-01",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-02",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "no_longer_needed"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-02",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "no_longer_needed"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-02",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "no_longer_needed"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-02",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "no_longer_needed"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-03",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "not_as_described",
+            "note": "收到的商品與網頁描述不符"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-02",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "no_longer_needed"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-03",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "not_as_described"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-03",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "not_as_described"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-04",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-03",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "not_as_described"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-03",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "not_as_described"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-04",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-04",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-04",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-04",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-05",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-05",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-05",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-05",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-06",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-05",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-06",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-06",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-06",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-06",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-07",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "wrong_item"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-07",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "wrong_item"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-07",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "wrong_item"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-07",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "wrong_item"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-07",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "wrong_item"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-08",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-08",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-08",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-08",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-08",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-09",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-09",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-09",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-10",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-09",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-09",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-10",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-10",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-10",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-10",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-11",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "damaged",
+            "note": "Item arrived with a cracked lid"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-11",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "damaged",
+            "note": "Item arrived with a cracked lid"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-11",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "damaged",
+            "note": "Cracked lid"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-11",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "damaged",
+            "note": "Cracked lid"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-12",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "wrong_item",
+            "note": "Customer received wrong product"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-11",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "damaged"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-12",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "wrong_item",
+            "note": "Customer received wrong product"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-12",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "wrong_item"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-12",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "wrong_item",
+            "note": "Customer received wrong product"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-single-12",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "wrong_item"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-multi-zh-tw",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-multi-zh-tw",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-multi-zh-tw",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-multi-zh-cn",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-multi-zh-tw",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-multi-zh-tw",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-multi-zh-cn",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-multi-zh-cn",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-multi-zh-cn",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-multi-zh-cn",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-multi-en",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "damaged",
+            "note": "Items arrived broken"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1003",
+            "reasonCode": "damaged",
+            "note": "Items arrived broken"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-multi-en",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "damaged",
+            "note": "Items arrived broken"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1003",
+            "reasonCode": "damaged",
+            "note": "Items arrived broken"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-multi-en",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "damaged",
+            "note": "Items arrived broken"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1003",
+            "reasonCode": "damaged",
+            "note": "Items arrived broken"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-multi-en",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "damaged",
+            "note": "Items arrived broken"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1003",
+            "reasonCode": "damaged",
+            "note": "Items arrived broken"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-multi-en",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "damaged",
+            "note": "Items arrived broken"
+          },
+          "valid": true
+        },
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1003",
+            "reasonCode": "damaged",
+            "note": "Items arrived broken"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-preapproval-zh-tw",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-preapproval-zh-tw",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-preapproval-zh-tw",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-preapproval-zh-cn",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-preapproval-zh-tw",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-preapproval-zh-cn",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-preapproval-zh-tw",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-preapproval-zh-cn",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-preapproval-zh-cn",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-preapproval-zh-cn",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_cancel",
+          "args": {
+            "orderId": "ORD-1004",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-preapproval-en",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-preapproval-en",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-preapproval-en",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-no-order-zh-cn",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "您好！请问您要取消哪个订单呢？请提供订单号，我才能帮您处理取消操作。",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-no-order-zh-cn",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "您好！我可以帮您取消订单。请问您要取消哪个订单呢？请提供订单号，我就可以为您处理了。",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-preapproval-en",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-no-order-zh-cn",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "您好！我可以帮您取消订单。请问您要取消哪个订单呢？请提供订单号，我就可以为您处理了。",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-no-order-zh-cn",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "您好！我可以帮您取消订单。请问您要取消的是哪个订单呢？请提供订单号，我就可以为您处理了。",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-preapproval-en",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1002",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-no-order-zh-cn",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "您好！我可以帮您取消订单。请问您要取消的是哪个订单呢？请提供订单号，我就可以为您处理了。",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-no-order-en",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I'd be happy to help you with a refund for your damaged item. To process this request, I'll need to know which order you're referring to. Could you please provide the order ID for the order with the damaged item?",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-no-order-en",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I'd be happy to help you with a refund for your damaged item. To process this request, I'll need to know which specific order you're referring to. Could you please provide the order ID for the order you'd like to refund?",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-no-order-en",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I'd be happy to help you with a refund for your damaged item. To process this request, I'll need to know which specific order you're referring to. Could you please provide the order ID for the order with the damaged item?",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-no-order-en",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I'd be happy to help you with a refund for your damaged item. To process this request, I'll need to know which order you're referring to. Could you please provide your order ID or order number?",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-status-zh-tw",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1001"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-status-zh-tw",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1001"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-no-order-en",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I'd be happy to help you with a refund for your damaged item. To process your refund request, I'll need to know which order you're referring to. Could you please provide your order ID or order number?",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-status-zh-tw",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1001"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-status-zh-tw",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1001"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-status-zh-tw",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1001"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-status-zh-cn",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1004"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-status-zh-cn",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1004"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-status-zh-cn",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1004"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-status-zh-cn",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1004"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-status-zh-cn",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1004"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-hypothetical-zh-tw",
+      "run": 0,
+      "status": "completed",
+      "met": false,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-hypothetical-zh-tw",
+      "run": 2,
+      "status": "completed",
+      "met": false,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-hypothetical-zh-tw",
+      "run": 3,
+      "status": "completed",
+      "met": false,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-hypothetical-zh-tw",
+      "run": 4,
+      "status": "completed",
+      "met": false,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_refund_request",
+          "args": {
+            "orderId": "ORD-1001",
+            "reasonCode": "other"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-hypothetical-zh-cn",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "取消订单后，退款通常会在 **5-10 个工作日** 内退回到您的原支付方式，具体时间取决于您的银行或支付机构的处理速度。\n\n如果您想现在取消订单 ORD-1004，我可以帮您发起取消申请。请问您确定要取消吗？如果确定，请告诉我取消的原因（例如：不再需要、商品损坏、发错商品、与描述不符等），我会立即为您处理。",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-hypothetical-zh-cn",
+      "run": 2,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "取消订单后，退款通常会在 **5-10 个工作日** 内退回到您的原支付方式，具体时间取决于您的银行或支付机构的处理速度。\n\n如果您想现在取消订单 ORD-1004，我可以帮您发起取消申请。请问您确定要取消吗？如果确定，请告诉我取消的原因（例如：不再需要、商品损坏、发错商品、与描述不符等），我会立即为您处理。",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-hypothetical-zh-tw",
+      "run": 1,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "如果您想退訂 ORD-1001，流程如下：\n\n1. **提交退款請求**：當您決定退款時，我會幫您提交退款請求\n2. **審批流程**：系統會啟動一個審批流程，需要您的批准\n3. **執行退款**：獲得批准後，退款才會實際執行\n4. **無法撤銷**：一旦退款完成，就無法撤銷\n\n如果您現在想要退訂 ORD-1001，請告訴我退款原因（例如：商品損壞、發錯商品、與描述不符、不再需要、或其他原因），我就可以幫您提交退款請求。",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-hypothetical-zh-cn",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "取消订单后，退款通常会在 **5-10 个工作日** 内退回到您的原支付方式，具体时间取决于您的银行或支付机构的处理速度。\n\n如果您想现在取消订单 ORD-1004，我可以帮您发起取消申请。请问您确定要取消吗？如果确定，请告诉我取消的原因（例如：不再需要、商品损坏、发错商品、与描述不符等），我会立即为您处理。",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-hypothetical-en",
+      "run": 1,
+      "status": "completed",
+      "met": false,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1002"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-hypothetical-zh-cn",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "关于取消订单后的退款时间，这通常取决于您的支付方式和银行处理速度。一般来说：\n\n- 信用卡/借记卡：通常需要 3-7 个工作日\n- 电子钱包：可能更快，通常 1-3 个工作日\n- 其他支付方式：时间可能有所不同\n\n退款会在取消订单并获批后开始处理。\n\n如果您确实想要取消订单 ORD-1004，请告诉我，我可以帮您发起取消请求。取消需要经过您的确认才能执行。",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-hypothetical-en",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "Whether order ORD-1002 can still be refunded depends on its current status in the system. Generally, orders can be refunded if they haven't already been refunded or if they're still within the refundable window according to the system's policies.\n\nIf you'd like to actually request a refund for ORD-1",
+      "modelTextTruncated": true
+    },
+    {
+      "caseId": "new-hypothetical-en",
+      "run": 3,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I can help you request a refund for ORD-1002 if you'd like to proceed. However, I can't determine the current status or eligibility of the order without initiating the refund request process.\n\nIf you want to check whether ORD-1002 can still be refunded, I would need to submit a refund request, which",
+      "modelTextTruncated": true
+    },
+    {
+      "caseId": "new-hypothetical-en",
+      "run": 4,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "I can help you request a refund for ORD-1002 if you'd like to proceed. However, I can't determine the current status or eligibility of the order without initiating the refund request process.\n\nIf you want to check whether ORD-1002 can still be refunded, I would need to submit a refund request, which",
+      "modelTextTruncated": true
+    },
+    {
+      "caseId": "new-hypothetical-en",
+      "run": 2,
+      "status": "completed",
+      "met": false,
+      "invalidArguments": 0,
+      "calls": [
+        {
+          "name": "order_operation_status",
+          "args": {
+            "orderId": "ORD-1002"
+          },
+          "valid": true
+        }
+      ],
+      "modelTextExcerpt": "",
+      "modelTextTruncated": false
+    },
+    {
+      "caseId": "new-hypothetical-zh-cn",
+      "run": 0,
+      "status": "completed",
+      "met": true,
+      "invalidArguments": 0,
+      "calls": [],
+      "modelTextExcerpt": "通常情况下，如果您取消订单 ORD-1004，退款会在取消成功后的 3-7 个工作日内原路退回到您的支付账户（具体到账时间可能因支付方式和银行处理速度而有所不同）。\n\n如果您现在决定取消该订单，我可以帮您提交取消申请。",
+      "modelTextTruncated": false
+    }
+  ]
+}

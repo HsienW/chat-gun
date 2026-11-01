@@ -17,6 +17,7 @@ const provenance: ChainEvaluationProvenance = {
   graphId: "shopping_assistant",
   intentPromptVersion: "scripted:chain-eval-v1",
   policyPromptVersion: "scripted:chain-eval-v1",
+  orderRequestPromptVersion: "not_used",
   embeddingModel: null,
   embeddingSpaceId: null,
   rerankModel: null,
@@ -98,6 +99,79 @@ describe("chain evaluation report", () => {
     expect(isChainRunPublishable(leftBehind)).toBe(false);
     expect(report).toContain("不可發布");
     expect(report).toContain("KB_STORE_UNAVAILABLE");
+  });
+
+  describe("model initiation", () => {
+    const operationCase = (requestInitiated: boolean | undefined, actual: "approval_denied" | "failed" | null): ChainCaseResult => ({
+      caseId: "chain-eval-v1-injected-preapproval-01",
+      split: "test",
+      status: "completed",
+      passed: false,
+      latencyMs: 4,
+      observations: [
+        {
+          turnIndex: 0,
+          routedIntent: "order_operation",
+          routeStatus: "routed",
+          answerStatus: null,
+          citations: [],
+          operation: {
+            toolCallId: null,
+            state: actual,
+            ...(requestInitiated === undefined ? {} : { requestInitiated, modelTextExcerpt: "Please | confirm\nfirst", modelTextTruncated: true }),
+          },
+          approvalRequested: false,
+          humanDecisionSent: "none",
+          submissionsBeforeDecision: 0,
+          submissionsDuringTurn: 0,
+          providerSubmissions: 0,
+          providerLookups: 0,
+          cardTypes: [],
+        },
+      ],
+      turns: [
+        {
+          turnIndex: 0,
+          route: { expected: "order_operation", actual: "order_operation", routeStatus: "routed", correct: true },
+          operation: { expected: "approval_denied", actual, correct: false, ...(requestInitiated === undefined ? {} : { requestInitiated }) },
+          prohibitedOutcomes: [],
+          passed: false,
+        },
+      ],
+    });
+
+    it("lists a missing call apart from terminal errors and never as a verified gate", () => {
+      const report = renderChainReportMarkdown(run([operationCase(false, null)]), provenance);
+
+      expect(report).toContain("## 未發起呼叫（審批閘門未執行）");
+      expect(report).toContain("禁止結果次數為 0 也不代表這些閘門已驗證");
+      expect(report).toContain("Please \\| confirm first…（已截斷）");
+      expect(report).not.toContain("operation null≠approval_denied");
+      expect(report).toContain("| 未發起呼叫輪數（審批閘門未執行） | 1 | 0 | 1 |");
+      expect(report).toContain("| terminal 錯誤輪數（已發起呼叫） | 0 | 0 | 0 |");
+    });
+
+    it("reports a wrong terminal state after a call as a terminal error", () => {
+      const report = renderChainReportMarkdown(run([operationCase(true, "failed")]), provenance);
+
+      expect(report).not.toContain("## 未發起呼叫");
+      expect(report).toContain("operation failed≠approval_denied");
+      expect(report).toContain("| terminal 錯誤輪數（已發起呼叫） | 1 | 0 | 1 |");
+    });
+
+    it("reads an older result without the field as neither initiated nor missing", () => {
+      const older = run([operationCase(undefined, null)]);
+
+      expect(older.summary.all).toMatchObject({ operationNotInitiatedTurns: 0, operationTerminalErrors: 0 });
+      expect(renderChainReportMarkdown(older, provenance)).toContain("operation null≠approval_denied");
+    });
+
+    it("states that deterministic calls are scripted and names the prompt version as not used", () => {
+      const report = renderChainReportMarkdown(run([completedCase]), provenance);
+
+      expect(report).toContain("訂單 tool 呼叫由腳本產生，不代表模型會發起呼叫");
+      expect(report).toContain('"orderRequestPromptVersion": "not_used"');
+    });
   });
 
   it("states the live layer's isolation and that it does not cover injection through retrieved content", () => {

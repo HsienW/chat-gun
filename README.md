@@ -238,10 +238,9 @@ flowchart LR
 | `vector_rerank` | 1.000 | 0.917 | 1.000 | 1.000 | 0.100 |
 
 **流程評測（業務實作）**： 
-  - deterministic test 10 / 10；live 意圖路由準確率 1.000（18 輪，`qwen3.7-plus`）、禁止結果 0。
-  - 資料集 `chain-eval-v1`（15 題）、訂單資料 `synthetic-orders-v1`（合成）、prompt `shopping-intent-v1` / `shopping-policy-answer-v1`。
+  - deterministic test 10 / 10；live test 10 / 10、意圖路由準確率 1.000、禁止結果 0。
 
-**已知限制**： live test split 3 / 10 通過，其餘 7 題為同一現象（訂單操作回傳空結果），尚未修正。同一組案例在 deterministic 層全數通過。
+**已知限制**： 訂單請求 Golden 大致上通過；live 引用準確率約 0.380。
 
 完整結果、執行次數、dev split、延遲、指標定義、忠實度未發布的原因、方法學與重跑方式見[評測](./docs/evaluation.md)。
 

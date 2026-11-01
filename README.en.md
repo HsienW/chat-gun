@@ -238,10 +238,9 @@ Only the **test split** is listed below
 | `vector_rerank` | 1.000 | 0.917 | 1.000 | 1.000 | 0.100 |
 
 **Flow evaluation (business implementation):**
-- Deterministic test 10 / 10; live intent routing accuracy 1.000 (18 turns, `qwen3.7-plus`), prohibited outcomes 0.
-- Dataset `chain-eval-v1` (15 questions), order data `synthetic-orders-v1` (synthetic), prompts `shopping-intent-v1` / `shopping-policy-answer-v1`.
+- Deterministic test 10 / 10; live test 10 / 10, intent routing accuracy 1.000, prohibited outcomes 0.
 
-**Known limitation:** the live test split passes 3 / 10; the remaining 7 questions share the same symptom (order operations return an empty result) and have not been fixed yet. The same set of cases all pass at the deterministic layer.
+**Known limitations:** the order request Golden largely passes; live citation accuracy is about 0.380.
 
 For full results, run counts, the dev split, latency, metric definitions, why faithfulness is not published, methodology, and how to rerun, see [Evaluation](./docs/evaluation.md) (Traditional Chinese).
 

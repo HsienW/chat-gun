@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 
 import { LlmShoppingIntentRouter } from "../../agents/shopping-assistant/intent-router.js";
 import { readShoppingAssistantModelSettings } from "../../agents/shopping-assistant/model-settings.js";
+import { SHOPPING_ORDER_REQUEST_PROMPT_VERSION } from "../../agents/shopping-assistant/order-branch.js";
 import { LlmPolicyAnswerSynthesizer } from "../../agents/shopping-assistant/policy-answer.js";
 import { readKnowledgeConfig, type KnowledgeConfig } from "../../knowledge/config.js";
 import {
@@ -80,6 +81,7 @@ export interface LiveChainProvenance {
   temperature: number;
   intentPromptVersion: string;
   policyPromptVersion: string;
+  orderRequestPromptVersion: string;
   embeddingModel: string;
   embeddingSpaceId: string;
   rerankModel: string | null;
@@ -137,6 +139,7 @@ export async function prepareLiveChainEvaluation(model: string, corpus: Prepared
       temperature: settings.temperature,
       intentPromptVersion: intentRouter.promptVersion,
       policyPromptVersion: policyAnswerSynthesizer.promptVersion,
+      orderRequestPromptVersion: SHOPPING_ORDER_REQUEST_PROMPT_VERSION,
       embeddingModel: config.embeddingModel,
       embeddingSpaceId: config.embeddingSpaceId,
       rerankModel: config.rerankUrl ? config.rerankModel : null,
