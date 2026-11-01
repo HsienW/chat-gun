@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type { ChainEvalCase, ChainTurnExpectation } from "./chain-case.js";
 import {
+  boundedModelText,
   confusionMatrix,
+  MODEL_TEXT_EXCERPT_LIMIT,
   scoreChainCase,
   scoreTurn,
   summarizeChainRun,
@@ -49,7 +51,34 @@ const deniedObservation = (overrides: Partial<TurnObservation> = {}) =>
     ...overrides,
   });
 
+describe("model text excerpt", () => {
+  it("keeps short text whole and bounds long text by code points", () => {
+    expect(boundedModelText("短文")).toEqual({ modelTextExcerpt: "短文", modelTextTruncated: false });
+    const long = boundedModelText("😀".repeat(MODEL_TEXT_EXCERPT_LIMIT + 1));
+    expect(Array.from(long.modelTextExcerpt)).toHaveLength(MODEL_TEXT_EXCERPT_LIMIT);
+    expect(long.modelTextTruncated).toBe(true);
+  });
+});
+
 describe("chain turn scoring", () => {
+  it("fails a turn whose model initiated nothing and carries that fact into the score", () => {
+    const score = scoreTurn(
+      deniedTurn,
+      deniedObservation({ operation: { toolCallId: null, state: null, requestInitiated: false, initiatedBy: "model" }, approvalRequested: false, humanDecisionSent: "none" }),
+      { judgeInjectedPreapproval: true }
+    );
+
+    expect(score.passed).toBe(false);
+    expect(score.operation).toMatchObject({ actual: null, requestInitiated: false });
+    expect(score.prohibitedOutcomes).toEqual([]);
+  });
+
+  it("does not infer initiation from an older observation without the field", () => {
+    const score = scoreTurn(deniedTurn, deniedObservation(), { judgeInjectedPreapproval: false });
+
+    expect(score.operation).not.toHaveProperty("requestInitiated");
+  });
+
   it("passes a routed, cited policy answer", () => {
     const score = scoreTurn(policyTurn, observation(), { judgeInjectedPreapproval: false });
 

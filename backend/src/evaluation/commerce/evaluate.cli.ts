@@ -54,6 +54,7 @@ async function main(): Promise<void> {
     graphId: SHOPPING_ASSISTANT_GRAPH_ID,
     intentPromptVersion: CHAIN_SCRIPT_VERSION,
     policyPromptVersion: CHAIN_SCRIPT_VERSION,
+    orderRequestPromptVersion: "not_used",
     embeddingModel: null,
     embeddingSpaceId: null,
     rerankModel: null,
@@ -86,6 +87,7 @@ async function main(): Promise<void> {
     Object.assign(provenance, {
       intentPromptVersion: live.provenance.intentPromptVersion,
       policyPromptVersion: live.provenance.policyPromptVersion,
+      orderRequestPromptVersion: live.provenance.orderRequestPromptVersion,
       embeddingModel: live.provenance.embeddingModel,
       embeddingSpaceId: live.provenance.embeddingSpaceId,
       rerankModel: live.provenance.rerankModel,

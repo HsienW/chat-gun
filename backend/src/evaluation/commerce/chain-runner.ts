@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, isAIMessage, isHumanMessage } from "@langchain/core/messages";
 import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { Command, MemorySaver } from "@langchain/langgraph";
 import type { Pool } from "pg";
@@ -10,6 +10,7 @@ import { createDispatchReadinessCheck } from "../../agents/shopping-assistant/di
 import { createShoppingAssistantGraph, type ShoppingAssistantGraphDependencies } from "../../agents/shopping-assistant/graph.js";
 import { PgOrderOperationRequestStore } from "../../agents/shopping-assistant/operation-requests.js";
 import { PgOrderOperationStatusReader } from "../../agents/shopping-assistant/operation-status.js";
+import { messageText } from "../../agents/shopping-assistant/order-branch.js";
 import { PgOriginalOperationResolver } from "../../agents/shopping-assistant/original-operation.js";
 import type { ShoppingAssistantState } from "../../agents/shopping-assistant/state.js";
 import type { SourceDocument } from "../../knowledge/corpus.js";
@@ -43,6 +44,7 @@ import type { ChainEvalCase, ChainTurnExpectation } from "./chain-case.js";
 import { FIXTURE_SHOPPER_PRINCIPAL_ID, isolatedOrderFixture, liveCasePrincipalId, liveTenantId } from "./chain-isolation.js";
 import { CHAIN_SCRIPT_VERSION, scriptedOrderCall, scriptedPolicyAnswer, scriptedRetrieval, scriptedRoute, type ScriptedToolCall } from "./chain-script.js";
 import {
+  boundedModelText,
   scoreChainCase,
   summarizeChainRun,
   type ChainCaseResult,
@@ -199,6 +201,14 @@ function scriptedModels(cursor: () => ScriptCursor, corpus: readonly SourceDocum
 /** The operation a model-written order call created this turn: the newest record the turn added. */
 function newOperationKey(state: ShoppingAssistantState, before: ReadonlySet<string>): string | null {
   return Object.keys(state.operations ?? {}).filter((key) => !before.has(key)).at(-1) ?? null;
+}
+
+/** The order request step's own text: the first assistant message after this turn's human message. */
+function orderRequestText(state: ShoppingAssistantState): string | undefined {
+  const messages = state.messages ?? [];
+  const humanIndex = messages.map((message) => isHumanMessage(message)).lastIndexOf(true);
+  const request = messages.slice(humanIndex + 1).find((message) => isAIMessage(message));
+  return request === undefined ? undefined : messageText(request.content);
 }
 
 /**
@@ -549,6 +559,8 @@ async function runChainEvaluation(input: ChainEvaluationInputBase, evaluationRun
 
       const operationKey = layer.scriptsOrderCalls ? toolCallId : newOperationKey(state, operationsBefore);
       const record = operationKey === null ? undefined : state.operations[operationKey];
+      // Only the order branch's request step has text to explain a missing call.
+      const requestText = record === undefined && state.turn?.routedIntent === "order_operation" ? orderRequestText(state) : undefined;
       observations.push({
         turnIndex,
         routedIntent: state.turn?.routedIntent ?? null,
@@ -562,6 +574,9 @@ async function runChainEvaluation(input: ChainEvaluationInputBase, evaluationRun
                 state: record?.state ?? null,
                 ...(record?.dedup ? { dedupReason: record.dedup.reason } : {}),
                 ...(record?.reasonCode ? { reasonCode: record.reasonCode } : {}),
+                requestInitiated: record !== undefined,
+                initiatedBy: layer.scriptsOrderCalls ? ("script" as const) : ("model" as const),
+                ...(requestText === undefined ? {} : boundedModelText(requestText)),
               },
             }
           : {}),

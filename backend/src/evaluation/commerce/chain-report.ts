@@ -13,6 +13,8 @@ export interface ChainEvaluationProvenance {
   graphId: string;
   intentPromptVersion: string;
   policyPromptVersion: string;
+  /** The version a real request model ran; deterministic scripts its calls and states `not_used`. */
+  orderRequestPromptVersion: string;
   embeddingModel: string | null;
   embeddingSpaceId: string | null;
   rerankModel: string | null;
@@ -54,6 +56,8 @@ function summaryRows(summary: Record<"dev" | "test" | "all", ChainSplitSummary>)
     row("輪數", (split) => String(split.turns)),
     row("路由準確率", (split) => (split.routing.status === "measured" ? figure(split.routing.accuracy) : "not_measured")),
     row("操作 terminal 正確率", (split) => `${figure(split.operationTerminalAccuracy)}（${split.operationTurns} 輪）`),
+    row("未發起呼叫輪數（審批閘門未執行）", (split) => String(split.operationNotInitiatedTurns)),
+    row("terminal 錯誤輪數（已發起呼叫）", (split) => String(split.operationTerminalErrors)),
     row("dedup 原因正確率", (split) => figure(split.dedupReasonAccuracy)),
     row("引用準確率", (split) => figure(split.citationAccuracy)),
     row("正確拒答率", (split) => figure(split.abstentionAccuracy)),
@@ -67,7 +71,11 @@ function turnFailures(turn: TurnScore): string[] {
   const reasons: string[] = [];
   if (!turn.route.correct) reasons.push(`route ${turn.route.routeStatus ?? "none"}:${turn.route.actual ?? "null"}≠${turn.route.expected}`);
   if (turn.answer && !turn.answer.correct) reasons.push(`answer ${turn.answer.answerStatus ?? "null"}（預期 ${turn.answer.expectedKind}）`);
-  if (turn.operation && !turn.operation.correct) reasons.push(`operation ${turn.operation.actual ?? "null"}≠${turn.operation.expected}`);
+  if (turn.operation?.requestInitiated === false) {
+    reasons.push(`未發起呼叫，審批閘門未執行（預期 ${turn.operation.expected}）`);
+  } else if (turn.operation && !turn.operation.correct) {
+    reasons.push(`operation ${turn.operation.actual ?? "null"}≠${turn.operation.expected}`);
+  }
   if (turn.operation?.dedupCorrect === false) {
     reasons.push(`dedup ${turn.operation.actualDedupReason ?? "none"}≠${turn.operation.expectedDedupReason ?? "none"}`);
   }
@@ -89,6 +97,35 @@ function caseRow(result: ChainCaseResult): string {
     })
     .join("<br>");
   return `| ${result.caseId} | ${result.split} | ${result.passed ? "通過" : "未通過"} | ${detail} |`;
+}
+
+/** Table cells stay on one row whatever the model wrote. */
+function tableText(text: string): string {
+  return text.replace(/\s+/gu, " ").replace(/\|/gu, "\\|");
+}
+
+/** Turns whose gate never ran are listed apart: they verified no denial, expiry, cancel, dedup or injection path. */
+function notInitiatedSection(results: readonly ChainCaseResult[]): string[] {
+  const rows = results.flatMap((result) => {
+    if (result.status !== "completed") return [];
+    return result.turns.flatMap((turn) => {
+      if (turn.operation?.requestInitiated !== false) return [];
+      const observed = result.observations.find((observation) => observation.turnIndex === turn.turnIndex)?.operation;
+      const excerpt = observed?.modelTextExcerpt === undefined ? "（無）" : `${tableText(observed.modelTextExcerpt)}${observed.modelTextTruncated ? "…（已截斷）" : ""}`;
+      return [`| ${result.caseId} | T${turn.turnIndex} | ${turn.operation.expected} | ${excerpt} |`];
+    });
+  });
+  if (rows.length === 0) return [];
+  return [
+    "## 未發起呼叫（審批閘門未執行）",
+    "",
+    "這些輪沒有走到審批閘門，對應的拒絕、逾期、取消、去重或注入防護路徑都不算已驗證；禁止結果次數為 0 也不代表這些閘門已驗證。",
+    "",
+    "| caseId | 輪 | 預期 terminal | 模型文字摘錄 |",
+    "|---|---|---|---|",
+    ...rows,
+    "",
+  ];
 }
 
 export function renderChainReportMarkdown(run: ChainEvaluationRun, provenance: ChainEvaluationProvenance): string {
@@ -114,6 +151,7 @@ export function renderChainReportMarkdown(run: ChainEvaluationRun, provenance: C
   if (run.mode === "deterministic") {
     lines.push(
       "- deterministic 層：路由、商品模型與政策合成由腳本依案例預期決定，路由準確率與混淆矩陣為 `not_measured`。",
+      "- 訂單 tool 呼叫由腳本產生，不代表模型會發起呼叫；訂單請求 prompt 未使用。",
       "  引用與拒答只驗證結構化證據經真實 dispatch 與驗證後的保存，不代表模型品質。",
       "- 檢索內容注入只在 deterministic 層覆蓋（決策點 2 方案 B）；live 層以使用者訊息注入代替。"
     );
@@ -139,6 +177,7 @@ export function renderChainReportMarkdown(run: ChainEvaluationRun, provenance: C
       ""
     );
   }
+  lines.push(...notInitiatedSection(run.results));
   lines.push(
     "## 逐題結果",
     "",
