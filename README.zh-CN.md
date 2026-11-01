@@ -76,24 +76,24 @@ Chat Gun 是一套由 Frontend、BFF 与 LangGraph Runtime 组成的全栈 Agent
   - Math Solver 执行算式与数值运算。
   - MCP Agent 通过 Tool Calling 使用 native 与 MCP tools。
 - **Streaming**：实时流式输出回答与执行活动，可中途取消，错误以明确状态呈现。
-- **HITL**：Human-in-the-Loop 订单操作先经人工审批；天气地点不明确时列出候选地点请用户确认，再接续原本的对话。
+- **HITL**：Human-in-the-Loop 操作经人工审批；地点不明确时列出候选地点请用户确认，再接续原本的对话。
 - **Multimodal input**：接受 PNG、JPEG 与 WebP 图片，经 vision model 分析后纳入回答或研究流程。
-- **Model providers**：支持 Qwen、OpenAI-compatible 与 CCR-compatible endpoints，由 LLM Gateway 统一处理模型能力检查与调用。
+- **Model providers**：支持 Qwen、OpenAI-compatible 与 CC-compatible endpoints，由 LLM Gateway 统一处理模型能力检查与调用。
 - **Native Tools 与 MCP**：内置计算、网络搜索（Tavily）、网页抓取、天气、知识库检索与模拟订单操作；可选择加载 Filesystem 与 Brave Search MCP Server。见 [Tools 与 MCP](./docs/tools-and-mcp.md)（繁中）。
 - **Agent / Tool SDK**：以版本化 manifest 声明输入输出、副作用类别、所需权限与执行条件；工具只授予声明它的 Agent。见 [`@gun-ai/harness-sdk`](https://www.npmjs.com/package/@gun-ai/harness-sdk)。
 
 ### Agent 平台: Runtime 治理
-- **检索与拒答：**PostgreSQL + pgvector 向量索引，经 `qwen3-rerank` 与证据门槛后绑定引用，无依据时明确拒答。Recall@5 1.000、MRR 0.917、引用准确率 1.000、误拒率 0.100（test split）。见[知识库检索](./docs/retrieval.md)（繁中）与[评测](./docs/evaluation.md#檢索品質)（繁中）。
+- **检索与拒答：**PostgreSQL + pgvector 向量索引，经 `qwen3-rerank` 与证据门槛后绑定引用，无依据时明确拒答。Recall@5、MRR、误拒率等指标详见[知识库检索](./docs/retrieval.md)（繁中）与[评测](./docs/evaluation.md#檢索品質)（繁中）。
 - **副作用：**外部状态变更须先取得可持久化的人工审批，模型只能请求、不能记录审批。见[Gun Shop 流程走查](./docs/gun-shop.md#gun-shop-流程走查)（繁中）。
-- **幂等与结果：**幂等键由业务操作推导，并发重复提交只生效一次；提交后失去响应时进入 `outcome_unknown` 并建立对账任务。见[并发与回归验证](./docs/gun-shop.md#並行與回歸驗證)（繁中）。
+- **幂等与结果：**幂等键由业务操作推导，并发重复提交只生效一次。详见[并发与回归验证](./docs/gun-shop.md#並行與回歸驗證)（繁中）。
 - **可信边界：**BFF 将 API key 映射为可信身份，集中处理 CORS、限流、超时与取消传递，并拒绝客户端直接写入对话 state。见 [BFF](./docs/bff.md#對話-state-的寫入防護)（繁中）。
-- **观测与评测：**提供 Metrics、OpenTelemetry 与 Opik tracing；评测分 deterministic（验证 runtime 保证）与 live（衡量模型质量）两层，各自记录数据集、模型与 prompt 版本。模型评分经 10 题人工复核，评审一致率 0.600，因此忠实度不发布。见[评测](./docs/evaluation.md)（繁中）。
+- **观测与评测：**提供 Metrics、OpenTelemetry 与 Opik tracing；评测分 deterministic（验证 runtime 保证）与 live（衡量模型质量）两层，各自记录数据集、模型与 prompt 版本。模型评分经 10 题人工复核，评审详情见[评测](./docs/evaluation.md)（繁中）。
 
 ### 业务场景：Gun Shop AI 智能客服
 
 使用 Agent 平台的能力搭建的业务场景，不新增 Runtime 机制。它的数字同时是平台保证的端到端验证。
 
-- **售后客服链路：**意图分流 → 商品卡片 → 政策问答（带引用）→ 退款申请 → 人工审批 → 幂等执行 → 状态卡片。live 意图路由准确率 1.000（18 轮）、禁止结果 0。见[流程走查](./docs/gun-shop.md#gun-shop-流程走查)（繁中）与[流程评测](./docs/evaluation.md#流程評測)（繁中）。
+- **售后客服链路：**意图分流 → 商品卡片 → 政策问答（带引用）→ 退款申请 → 人工审批 → 幂等执行 → 状态卡片。意图路由准确率、禁止结果等见[流程走查](./docs/gun-shop.md#gun-shop-流程走查)（繁中）与[流程评测](./docs/evaluation.md#流程評測)（繁中）。
 - **订单操作状态：**等待审批、执行中、已确认、已去重、失败、生效前已取消、结果未知、审批被拒、审批逾期，九种状态在界面上互相可辨识；不提供 undo。deterministic test 10 / 10（含审批被拒、逾期、生效前取消）。见[操作状态](./docs/gun-shop.md#gun-shop-流程走查)（繁中）与[订单幂等集成测试](./backend/src/agents/shopping-assistant/order-idempotency.integration.test.ts)。
 - **模拟边界：**商品与政策答案只来自合成语料并带引用；退款与取消作用在模拟订单系统，不触及真实交易。见[范围与限制](./docs/scope-and-limitations.md)（繁中）。
 
@@ -142,11 +142,11 @@ docker compose up --build
 | 语料中没有答案 | 可能改用模型自身知识作答 | 明确拒答 |
 | 答案的出处 | 文字描述 | 每个引用解析回已存储的片段与来源版本 |
 
-**1. 模型产生的是请求，不是副作用。** 退款与取消的工具调用会先停在审批；审批记录存在 Server 端并与对话绑定，只能消费一次。提交由 Tool Dispatch 在审批后执行，结果写入 side-effect ledger。
+**1. 模型产生的是请求，而非副作用：** 退款与取消的工具调用会先停在审批；审批记录存在 Server 端并与对话绑定，只能消费一次。提交由 Tool Dispatch 在审批后执行，结果写入 side-effect ledger。
 
-**2. 幂等键描述业务操作，不描述一次调用。** 键由操作种类、订单与规范化后的明细推导，不含重试次数或调用标识，所以并发或重复的提交会收敛成同一笔操作。提交后失去响应时，系统承认「不知道」，而不是猜一个结果。
+**2. 幂等键描述业务操作，不描述一次调用：** 键由操作种类、订单与规范化后的明细推导，不含重试次数或调用标识，所以并发或重复的提交会收敛成同一笔操作。提交后失去响应时，系统承认「不知道」，而不是猜一个结果。
 
-**3. 答案必须能回溯到语料。** 候选片段经 rerank 后仍须通过证据门槛，每个引用都绑定到已存储的片段与其来源版本；没有片段达标就明确拒答。
+**3. 答案必须能回溯到语料：** 候选片段经 rerank 后仍须通过证据门槛，每个引用都绑定到已存储的片段与其来源版本；没有片段达标就明确拒答。
 
 ## 架构设计
 

@@ -78,16 +78,16 @@ Chat Gun 是一套由 Frontend、BFF 與 LangGraph Runtime 組成的全端 Agent
 - **Streaming**：即時串流回答與執行活動，可中途取消，錯誤以明確狀態呈現。
 - **HITL**：Human-in-the-Loop 訂單操作先經人工核准；天氣地點不明確時列出候選地點請使用者確認，再接續原本的對話。
 - **Multimodal input**：接受 PNG、JPEG 與 WebP 圖片，經 vision model 分析後納入回答或研究流程。
-- **Model providers**：支援 Qwen、OpenAI-compatible 與 CCR-compatible endpoints，由 LLM Gateway 統一處理模型能力檢查與呼叫。
+- **Model providers**：支援 Qwen、OpenAI-compatible 與 CC-compatible endpoints，由 LLM Gateway 統一處理模型能力檢查與呼叫。
 - **Native Tools 與 MCP**：內建計算、網路搜尋（Tavily）、網頁擷取、天氣、知識庫檢索與模擬訂單操作；可選擇載入 Filesystem 與 Brave Search MCP Server。見 [Tools 與 MCP](./docs/tools-and-mcp.md)。
 - **Agent / Tool SDK**：以版本化 manifest 宣告輸入輸出、副作用類別、所需權限與執行條件；工具只授予宣告它的 Agent。見 [`@gun-ai/harness-sdk`](https://www.npmjs.com/package/@gun-ai/harness-sdk)。
 
 ### Agent 平台: Runtime 治理
-- **檢索與拒答**：PostgreSQL + pgvector 向量索引，經 `qwen3-rerank` 與證據門檻後綁定引用，無依據時明確拒答。Recall@5 1.000、MRR 0.917、引用準確率 1.000、誤拒率 0.100（test split）。見[知識庫檢索](./docs/retrieval.md)與[評測](./docs/evaluation.md#檢索品質)。
+- **檢索與拒答**：PostgreSQL + pgvector 向量索引，經 `qwen3-rerank` 與證據門檻後綁定引用，無依據時明確拒答。詳細 Recall@5 / MRR / 誤拒率等指標見[知識庫檢索](./docs/retrieval.md)與[評測](./docs/evaluation.md#檢索品質)。
 - **副作用**：外部狀態變更須先取得可持久化的人工核准，模型只能請求、不能記錄核准。見[Gun Shop 流程走查](./docs/gun-shop.md#gun-shop-流程走查)。
-- **冪等與結果**：冪等鍵由業務操作推導，並行重複送出只生效一次；提交後失去回應時進入 `outcome_unknown` 並建立對帳任務。見[並行與回歸驗證](./docs/gun-shop.md#並行與回歸驗證)。
+- **冪等與結果**：冪等鍵由業務操作推導，並行重複送出只生效一次。詳細見[並行與回歸驗證](./docs/gun-shop.md#並行與回歸驗證)。
 - **可信邊界**： BFF 將 API key 映射為可信身分，集中處理 CORS、限流、逾時與取消傳遞，並拒絕客戶端直接寫入對話 state。見 [BFF](./docs/bff.md#對話-state-的寫入防護)。
-- **觀測與評測**： 提供 Metrics、OpenTelemetry 與 Opik tracing；評測分 deterministic（驗證 runtime 保證）與 live（衡量模型品質）兩層，各自記錄資料集、模型與 prompt 版本。模型評分經 10 題人工複核，評審一致率 0.600，因此忠實度不發布。見[評測](./docs/evaluation.md)。
+- **觀測與評測**： 提供 Metrics、OpenTelemetry 與 Opik tracing；評測分 deterministic（驗證 runtime 保證）與 live（衡量模型品質）兩層，各自記錄資料集、模型與 prompt 版本。模型評分經 10 題人工複核，評審詳細信息見[評測](./docs/evaluation.md)。
 
 ### 業務場景：Gun Shop AI 智能客服
 
@@ -142,11 +142,11 @@ docker compose up --build
 | 語料中沒有答案 | 可能改用模型自身知識作答 | 明確拒答 |
 | 答案的出處 | 文字描述 | 每個引用解析回已儲存的片段與來源版本 |
 
-**1. 模型產生的是請求，不是副作用。** 退款與取消的工具呼叫會先停在核准；核准紀錄存在 Server 端並與對話綁定，只能消費一次。提交由 Tool Dispatch 在核准後執行，結果寫入 side-effect ledger。
+**1. 模型產生的是請求，而非副作用：** 退款與取消的工具呼叫會先停在核准；核准紀錄存在 Server 端並與對話綁定，只能消費一次。提交由 Tool Dispatch 在核准後執行，結果寫入 side-effect ledger。
 
-**2. 冪等鍵描述業務操作，不描述一次呼叫。** 鍵由操作種類、訂單與正規化後的明細推導，不含重試次數或呼叫識別，所以並行或重複的送出會收斂成同一筆操作。提交後失去回應時，系統承認「不知道」，而不是猜一個結果。
+**2. 冪等鍵描述業務操作，不描述一次呼叫：** 鍵由操作種類、訂單與正規化後的明細推導，不含重試次數或呼叫識別，所以並行或重複的送出會收斂成同一筆操作。提交後失去回應時，系統承認「不知道」，而不是猜一個結果。
 
-**3. 答案必須能回溯到語料。** 候選片段經 rerank 後仍須通過證據門檻，每個引用都綁定到已儲存的片段與其來源版本；沒有片段達標就明確拒答。
+**3. 答案必須能回溯到語料：** 候選片段經 rerank 後仍須通過證據門檻，每個引用都綁定到已儲存的片段與其來源版本；沒有片段達標就明確拒答。
 
 ## 架構設計
 
