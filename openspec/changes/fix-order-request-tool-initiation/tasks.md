@@ -43,10 +43,10 @@ npm run build
 ## 6. Live 驗收（需要 Master 提供模型與隔離資料庫）
 
 - [x] 6.1 以 qwen3.7-plus 對 prompt v3 執行 `order-request-golden-v2`，依 Requirement 門檻判定。未通過時依 design D8 停止並回報，不得調整門檻或新增 v4 prompt。驗證：Golden 結果檔。（2026-10-31 v1 對 prompt v2 未通過，v2 對 prompt v3 未通過，結果都保留。依 design D9 以 `--rescore` 重新計分 v2 結果，不重跑模型；結果須為 `passed_with_known_limitation` 才可繼續。）
-- [ ] 6.2 Golden 通過且本 Change 的程式由 Master 提交後，從乾淨基準重跑 `commerce:evaluate --mode live`，以新日期目錄保存；不修改 `chain-eval-v1`，不得在未提交的工作樹上發布結果。驗證：`run.json`、`report.md`、`provenance.json`。
-- [ ] 6.3 判定每個失敗案例的層級，並依 design D6 回報是否可解除 F-L1；新發現的問題如實列出，由 CCR 仲裁、Master 決定修復或接受；語意模糊訊息的 live 行為依 design D8 記為已知限制，不計入門檻。驗證：evidence 摘要。
+- [x] 6.2 Golden 通過且本 Change 的程式由 Master 提交後，從乾淨基準重跑 `commerce:evaluate --mode live`，以新日期目錄保存；不修改 `chain-eval-v1`，不得在未提交的工作樹上發布結果。驗證：`run.json`、`report.md`、`provenance.json`。
+- [x] 6.3 判定每個失敗案例的層級，並依 design D6 回報是否可解除 F-L1；新發現的問題如實列出，由 CCR 仲裁、Master 決定修復或接受；語意模糊訊息的 live 行為依 design D8 記為已知限制，不計入門檻。驗證：evidence 摘要。
 
 ## 7. 文件與交付
 
-- [ ] 7.1 live 結果經 Master 接受後，更新 `docs/evaluation.md` 與 README 中受影響的數字與 F-L1 描述，並標明模型與日期。驗證：Diff 只含受影響內容，數字與 `run.json` 一致。
+- [x] 7.1 live 結果經 Master 接受後，更新 `docs/evaluation.md` 與 README 中受影響的數字與 F-L1 描述，並標明模型與日期。驗證：Diff 只含受影響內容，數字與 `run.json` 一致。
 - [x] 7.2 implementation_result 列出修改檔案、Git Diff 摘要、已執行命令與結果、未驗證項目。
