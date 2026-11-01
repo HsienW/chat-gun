@@ -82,7 +82,11 @@ Frontend 的模型選單提供 `qwen-plus`、`qwen-max` 與 `qwen-turbo`，預�
 </p>
 
 <p align="center">
-  <img src="../assets/chat-gun-04.png" alt="Tool-assisted agent result" width="1280" />
+  <img src="../assets/chat-gun-04.png" alt="Mock refund request confirmed for order ORD-1001" width="1280" />
+</p>
+
+<p align="center">
+  <img src="../assets/chat-gun-05.png" alt="Prompt to stay or leave while refund approval is pending" width="1280" />
 </p>
 
 ## 並行與回歸驗證
