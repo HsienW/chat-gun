@@ -544,8 +544,8 @@ const SECRET_PATTERNS = Object.freeze({
   private_key: /-----BEGIN (?:[A-Z ]*PRIVATE KEY)-----/i,
   bearer_token: /\bBearer\s+[a-zA-Z0-9._~+/-]{8,}/i,
   jwt: /\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/i,
-  // A value that is only a variable interpolation, optionally after a scheme word, holds no credential.
-  credential_assignment: /["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|client[_-]?secret|authorization|cookie)["']?\s*[:=]\s*(?!\\?["'`]?(?:[A-Za-z]+[ \t]+)?\$\{[A-Za-z_$][\w$.?]*\}\\?(?:["'`]|[\s,;)}]|$))["']?[^\s"',;}]{4,}/i,
+  // A value that is only a variable interpolation, optionally after a scheme word, or a bare null, holds no credential.
+  credential_assignment: /["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|client[_-]?secret|authorization|cookie)["']?\s*[:=]\s*(?!null(?![^\s"',;}]))(?!\\?["'`]?(?:[A-Za-z]+[ \t]+)?\$\{[A-Za-z_$][\w$.?]*\}\\?(?:["'`]|[\s,;)}]|$))["']?[^\s"',;}]{4,}/i,
 });
 
 export function secretCategories(text) {
