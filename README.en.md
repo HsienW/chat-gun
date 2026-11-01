@@ -25,6 +25,7 @@
   <a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://img.shields.io/badge/text--embedding--v4-Embedding-0EA5E9" alt="text-embedding-v4" /></a>
   <a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://img.shields.io/badge/qwen3--rerank-Rerank-0EA5E9" alt="qwen3-rerank" /></a>
   <a href="https://www.postgresql.org/"><img src="https://img.shields.io/badge/PostgreSQL-16-336791" alt="PostgreSQL" /></a>
+  <a href="https://github.com/HsienW/chat-gun/actions/workflows/backend-ci.yml?query=branch%3Amaster_next+event%3Apush"><img src="https://github.com/HsienW/chat-gun/actions/workflows/backend-ci.yml/badge.svg?branch=master_next&event=push" alt="Backend CI" /></a>
 </p>
 
 <p align="center">
@@ -243,6 +244,8 @@ Only the **test split** is listed below
 **Known limitations:** the order request Golden largely passes; live citation accuracy is about 0.380.
 
 For full results, run counts, the dev split, latency, metric definitions, why faithfulness is not published, methodology, and how to rerun, see [Evaluation](./docs/evaluation.md) (Traditional Chinese).
+
+**CI scope:** the [Backend CI](https://github.com/HsienW/chat-gun/actions/workflows/backend-ci.yml?query=branch%3Amaster_next+event%3Apush) badge covers only backend lint, default tests, and build, including the deterministic Weather Golden Eval, scorer unit tests, and mock integration; it excludes integration tests that need a database or model and live evaluations, does not cover frontend or BFF, and does not represent the evaluation numbers in this section.
 
 ## Security and Limitations
 
