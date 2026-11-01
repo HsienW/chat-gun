@@ -84,7 +84,7 @@ const run = (answer: Answer, items = cases) =>
 describe("order request golden dataset", () => {
   it("is frozen", () => {
     expect(goldenDatasetSha256(raw)).toBe(FROZEN_SHA256);
-    expect(goldenDatasetSha256(raw.replace(/\n/gu, "\r\n"))).toBe(FROZEN_SHA256);
+    expect(goldenDatasetSha256(raw.replace(/\r?\n/gu, "\r\n"))).toBe(FROZEN_SHA256);
   });
 
   it("is synthetic and covers what the acceptance requires", () => {
