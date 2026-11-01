@@ -63,7 +63,7 @@ Chat Gun 是一套由 Frontend、BFF 與 LangGraph Runtime 組成的全端 Agent
   <img src="./assets/chat-gun-03.png" alt="Entry screen" width="1280" />
 </p>
 
-**其他操作的畫面見[操作畫面](./docs/gun-shop.md#操作畫面)。**
+其他操作的畫面見[操作畫面](./docs/gun-shop.md#操作畫面)。
 
 ## 核心能力
 
@@ -76,7 +76,7 @@ Chat Gun 是一套由 Frontend、BFF 與 LangGraph Runtime 組成的全端 Agent
     - Math Solver 執行算式與數值運算。
     - MCP Agent 透過 Tool Calling 使用 native 與 MCP tools。
 - **Streaming**：即時串流回答與執行活動，可中途取消，錯誤以明確狀態呈現。
-- **HITL**：Human-in-the-Loop 訂單操作先經人工核准；天氣地點不明確時列出候選地點請使用者確認，再接續原本的對話。
+- **HITL**：Human-in-the-Loop 操作經人工核准；不明確時列出候選地點請使用者確認，再接續原本的對話。
 - **Multimodal input**：接受 PNG、JPEG 與 WebP 圖片，經 vision model 分析後納入回答或研究流程。
 - **Model providers**：支援 Qwen、OpenAI-compatible 與 CC-compatible endpoints，由 LLM Gateway 統一處理模型能力檢查與呼叫。
 - **Native Tools 與 MCP**：內建計算、網路搜尋（Tavily）、網頁擷取、天氣、知識庫檢索與模擬訂單操作；可選擇載入 Filesystem 與 Brave Search MCP Server。見 [Tools 與 MCP](./docs/tools-and-mcp.md)。
@@ -93,7 +93,7 @@ Chat Gun 是一套由 Frontend、BFF 與 LangGraph Runtime 組成的全端 Agent
 
 使用 Agent 平台的能力搭建的業務場景，不新增 Runtime 機制。它的數字同時是平台保證的端到端驗證。
 
-- **售後客服鏈路**： 意圖分流 → 商品卡片 → 政策問答（帶引用）→ 退款申請 → 人工核准 → 冪等執行 → 狀態卡片。live 意圖路由準確率 1.000（18 輪）、禁止結果 0。見[流程走查](./docs/gun-shop.md#gun-shop-流程走查)與[流程評測](./docs/evaluation.md#流程評測)。
+- **售後客服鏈路**： 意圖分流 → 商品卡片 → 政策問答（帶引用）→ 退款申請 → 人工核准 → 冪等執行 → 狀態卡片。意圖路由準確率、禁止結果等見[流程走查](./docs/gun-shop.md#gun-shop-流程走查)與[流程評測](./docs/evaluation.md#流程評測)。
 - **訂單操作狀態**： 等待核准、執行中、已確認、已去重、失敗、生效前已取消、結果未知、核准被拒、核准逾期，九種狀態在介面上互相可辨識；不提供 undo。deterministic test 10 / 10（含核准被拒、逾期、生效前取消）。見[操作狀態](./docs/gun-shop.md#gun-shop-流程走查)與[訂單冪等整合測試](./backend/src/agents/shopping-assistant/order-idempotency.integration.test.ts)。
 - **模擬邊界**： 商品與政策答案只落在合成語料並帶引用；退款與取消作用在模擬訂單系統，不觸及真實交易。見[範圍與限制](./docs/scope-and-limitations.md)。
 

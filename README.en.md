@@ -63,7 +63,7 @@ Chat Gun is a full-stack agent application composed of a Frontend, a BFF, and a 
   <img src="./assets/chat-gun-03.png" alt="Entry screen" width="1280" />
 </p>
 
-**Screens for other operations are in [Operation Screens](./docs/gun-shop.md#操作畫面) (Traditional Chinese).**
+Screens for other operations are in [Operation Screens](./docs/gun-shop.md#操作畫面) (Traditional Chinese).
 
 ## Capabilities
 
