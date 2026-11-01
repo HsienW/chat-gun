@@ -238,10 +238,9 @@ flowchart LR
 | `vector_rerank` | 1.000 | 0.917 | 1.000 | 1.000 | 0.100 |
 
 **流程评测（业务实现）：**
-- deterministic test 10 / 10；live 意图路由准确率 1.000（18 轮，`qwen3.7-plus`）、禁止结果 0。
-- 数据集 `chain-eval-v1`（15 题）、订单数据 `synthetic-orders-v1`（合成）、prompt `shopping-intent-v1` / `shopping-policy-answer-v1`。
+- deterministic test 10 / 10；live test 10 / 10、意图路由准确率 1.000、禁止结果 0。
 
-**已知限制：** live test split 3 / 10 通过，其余 7 题为同一现象（订单操作返回空结果），尚未修正。同一组案例在 deterministic 层全部通过。
+**已知限制：** 订单请求 Golden 大致上通过；live 引用准确率约 0.380。
 
 完整结果、执行次数、dev split、延迟、指标定义、忠实度未发布的原因、方法学与重跑方式见[评测](./docs/evaluation.md)（繁中）。
 
