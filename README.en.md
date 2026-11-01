@@ -142,11 +142,11 @@ Taking the Gun Shop AI customer service as an example, the table below compares 
 | The corpus has no answer | May answer from the model's own knowledge instead | Explicitly refuses |
 | Source of the answer | A text description | Every citation resolves to a stored chunk and its source version |
 
-**1. The model produces a request, not a side effect.** Tool calls for refunds and cancellations first stop at approval; the approval record is stored on the server, bound to the conversation, and can be consumed only once. Tool Dispatch performs the submission after approval and writes the result to the side-effect ledger.
+**1. The model produces a request, not a side effect:** Tool calls for refunds and cancellations first stop at approval; the approval record is stored on the server, bound to the conversation, and can be consumed only once. Tool Dispatch performs the submission after approval and writes the result to the side-effect ledger.
 
-**2. The idempotency key describes a business operation, not a single call.** The key is derived from the operation kind, the order, and the normalized line items, and excludes the retry count and call identifiers, so concurrent or repeated submissions converge into the same operation. When a response is lost after submission, the system admits it "does not know" instead of guessing an outcome.
+**2. The idempotency key describes a business operation, not a single call:** The key is derived from the operation kind, the order, and the normalized line items, and excludes the retry count and call identifiers, so concurrent or repeated submissions converge into the same operation. When a response is lost after submission, the system admits it "does not know" instead of guessing an outcome.
 
-**3. Answers must trace back to the corpus.** Candidate chunks must still pass the evidence threshold after rerank, and every citation is bound to a stored chunk and its source version; if no chunk meets the threshold, the system explicitly refuses.
+**3. Answers must trace back to the corpus:** Candidate chunks must still pass the evidence threshold after rerank, and every citation is bound to a stored chunk and its source version; if no chunk meets the threshold, the system explicitly refuses.
 
 ## Architecture
 
