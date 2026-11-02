@@ -19,7 +19,7 @@ jobs:
   backend-validation:
     name: backend-validation
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 1
     defaults:
       run:
         working-directory: backend
@@ -40,6 +40,8 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: backend/package-lock.json
+      - name: ci-probe-wait
+        run: sleep 120
       - name: install-backend
         id: install-backend
         run: npm ci
