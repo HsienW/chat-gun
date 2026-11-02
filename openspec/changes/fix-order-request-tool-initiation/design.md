@@ -128,6 +128,28 @@ Golden v2 對 prompt v3 未通過：單筆 29/29、多筆 4/4、聲稱預先核�
 - **重跑直到通過**：不可接受。
 - **新增 v4 prompt**：違反 D8 停止線。
 
+### D10：全量回歸以基準比對歸因既有失敗
+
+backend 全量測試有 2 項失敗：`runtime/tool-dispatch/pipeline.test.ts`（`DATABASE_URL` 有值時失敗）與 `evaluation/opik/experiment.live-smoke.test.ts`（成因未查）。實作者的歸因只是單方說法，沒有基準比對；獨立驗收者也沒能在其 sandbox 重現結果（readiness-result-01 R1、R3）。Master 接受列為後續修復，不等於原 Task 5.2 已滿足。CCR 於 2026-11-01（UTC）仲裁後修訂 Task 5.2。
+
+**這是看到結果後修訂驗收規則**，因此 MUST 公開標示，並遵守：
+
+- lint 與 build MUST 通過，不設例外。
+- test MUST 在隔離 Postgres 上執行，使用 `npm run test` 的預設 opt-in 設定：`RUN_OPIK_EVALUATION` MUST 未設定。`evaluation/opik/experiment.live-smoke.test.ts` 以 `describe.runIf` 設計為 opt-in 的託管 live smoke，未啟用時由測試本身跳過；跳過不算失敗，也不算通過，MUST 在 readiness_result 列為「opt-in live smoke，未啟用」。先前的失敗發生在該變數已設定的環境，屬於 live smoke 的問題，依下方追蹤要求另立追蹤，不在本 Task 範圍。其他測試 MUST NOT 以環境變數跳過；若 HEAD 的跳過數多於基準，多出的項目 MUST 逐項說明。
+- 失敗項目只有在下列條件全部成立時，才判定為既有問題：
+  1. 在本 Change 之前的基準 commit `740cc4e`，以相同的環境變數、資料庫狀態與命令執行，下列項目全部一致：(a) 測試檔完整路徑、(b) 測試案例完整名稱、(c) 錯誤類型與錯誤訊息（去除時間戳、隨機 ID、port 與暫存路徑後比對）、(d) 第一個位於 repository 程式碼內的 stack frame（檔案與函式）。
+  2. 失敗的測試檔不在本 Change 的修改範圍內。
+  3. 已另立追蹤，至少包含：Change ID 或 Issue 編號、owner、目標 Change 或預計解決時間，並在 readiness_result 中逐項列出。
+- 任一比對項目不一致，或錯誤屬於無法確認根因相同的泛失敗（逾時、EPERM、connection refused 等），MUST 判定為本 Change 的回歸，退回 `IMPLEMENTING`；不得以「看起來無關」判定為既有問題。readiness_result MUST 逐項列出 (a)–(d) 的比對結果。
+- 基準無法執行時，預設判定為回歸。若原因是環境無法建置舊 commit（例如依賴無法安裝），驗收者 MUST 在 readiness_result 記錄具體原因與命令輸出，由 CCR 仲裁是否屬於本 Change 的責任；仲裁前 Task 5.2 MUST NOT 勾選。
+- HEAD 與基準的完整輸出 MUST 保存，由非實作者的獨立驗收者執行，且環境要允許暫存檔的 hard link 與 rename。
+
+替代方案：
+- **在本 Change 修正 `pipeline.test.ts`**：那是 tool-dispatch 的測試隔離問題，和訂單 prompt 無關，混入本 Change 會擴大範圍，違反最小修改原則。
+- **維持原條文**：原條文沒有區分 opt-in live smoke 與回歸測試，也沒有歸因方法，Change 無法歸檔，也不會讓這兩項失敗被修好。
+- **live smoke 必須啟用並通過**：它依賴託管 Opik 與 3 個模型設定，和訂單 prompt 無關；本 Change 也沒有修改 `evaluation/opik/`。把它放進門檻，等於讓外部服務決定本 Change 能否歸檔。
+- **直接豁免這兩項**：沒有基準證據，不能排除回歸，CCR 否決。
+
 ## 安全與權限分析
 
 - Tool 清單、manifest、權限與 Risk Policy 都不變。

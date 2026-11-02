@@ -38,7 +38,7 @@ npm run build
 ## 5. 回歸
 
 - [x] 5.1 `commerce:evaluate --mode deterministic` 全部通過，結果不覆寫既有目錄。驗證：實際輸出摘要。
-- [ ] 5.2 backend 全量 `npm run lint`、`npm run test`、`npm run build` 通過。驗證：實際輸出摘要。
+- [ ] 5.2 依 design D10，由非實作者的獨立驗收者在隔離 Postgres 上執行 backend 全量 `npm run lint`、`npm run test`、`npm run build`。`RUN_OPIK_EVALUATION` MUST 未設定，opt-in live smoke 列為未啟用。lint 與 build MUST 通過；test MUST 全部通過，或失敗項目符合 D10 的既有問題條件：在基準 `740cc4e` 以相同環境重現，且測試檔、案例名稱、錯誤類型與訊息、第一個 repository 內的 stack frame 全部一致；失敗測試檔不在本 Change 修改範圍內；已另立追蹤並寫明 ID、owner 與目標。任一項不一致、泛失敗無法確認根因，或基準未重現，判定為回歸，退回 `IMPLEMENTING`；基準無法建置時由 CCR 仲裁，仲裁前不得勾選。（此條文是看到結果後修訂，依 coordinator-result-11 的 R1 仲裁與 review-plan-result-09 的 Finding。）驗證：HEAD 與基準兩份完整輸出，readiness_result 逐項列出比對結果、跳過項目與追蹤資訊。
 
 ## 6. Live 驗收（需要 Master 提供模型與隔離資料庫）
 
