@@ -31,4 +31,4 @@ openspec validate adopt-adapter-null-credential-rule --strict
 - [x] 4.1 前置：Master 依 design D4 擇一，為 Codex 新增涵蓋本 Change readiness handoff 的 `self_acceptance` 授權，或由 Master 本人驗收。CCR 不得驗收。驗證：readiness handoff 的 `authorizationRef` 指向該授權，或 readiness_result 由 Master 產出。
 - [x] 4.2 readiness-check：確認 spec 每個 Scenario 有測試證據、兩份雙版本掃描證據皆為 `passed`、沒有未解決的 Blocker／Major。驗證：readiness_result 的 producer 不是 CCR；若為 Codex，inputRefs 帶 authorizationId 與 authorizationSnapshot。
 - [x] 4.3 依 archive-change 階段契約歸檔，spec delta 合併進主規格；git commit 由 Master 執行。驗證：`openspec validate --strict` 通過，主規格含新的 Requirement。
-- [ ] 4.4 歸檔後，CCR 通知 `fix-order-request-tool-initiation` 的協調工作階段：本 Change 已歸檔，可重跑 review-result-04。驗證：本 Change 的 archive_result 或 CCR coordinator_result 記錄通知內容與時間。
+- [x] 4.4 歸檔後，CCR 通知 `fix-order-request-tool-initiation` 的協調工作階段：本 Change 已歸檔，可重跑 review-result-04。驗證：本 Change 的 archive_result 或 CCR coordinator_result 記錄通知內容與時間。
