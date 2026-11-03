@@ -20,8 +20,10 @@ type DatasetItem = {
 
 /** Flattens a case result into the task output that Opik scores; absent metrics stay absent. */
 export function caseScores(result: CaseResult): Record<string, unknown> {
-  if (result.status !== "completed") return { status: "failed", errorCode: result.errorCode };
+  const metadata = { ...(result.stageLatency ? { stageLatency: result.stageLatency } : {}), ...(result.tags ? { tags: result.tags } : {}), ...(result.origin ? { origin: result.origin } : {}) };
+  if (result.status !== "completed") return { ...metadata, status: "failed", errorCode: result.errorCode };
   return {
+    ...metadata,
     status: "completed",
     kbOutcome: result.kbOutcome,
     retrievalMode: result.retrievalMode,

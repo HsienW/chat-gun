@@ -7,6 +7,8 @@ import type { KnowledgeModelGateway } from "../model-gateway.js";
 import { buildSearchResult, retrieveCandidates } from "../retrieval.js";
 import type { KnowledgeStore } from "../store.js";
 import type { EvalCase } from "./eval-case.js";
+import { readCaseOrigin, type CaseOrigin } from "./dataset-v2.js";
+import { createStageLatency, instrumentEvaluation, retrievalLatency, summarizeStages, type StageLatency, type StageLatencySummary } from "./stage-latency.js";
 import { citationAccuracy, mean, percentile, rankedSources, recallAtK, reciprocalRank, type CitationJudgement } from "./scorers.js";
 import type { AnswerSynthesizer, FaithfulnessJudge } from "./synthesis.js";
 
@@ -26,7 +28,13 @@ export interface EvidenceBlock {
   content: string;
 }
 
-export type CaseResult =
+interface CaseMetadata {
+  stageLatency?: StageLatency;
+  tags?: string[];
+  origin?: CaseOrigin;
+  authoredBy?: string;
+}
+export type CaseResult = CaseMetadata & (
   | {
       caseId: string;
       split: "dev" | "test";
@@ -64,7 +72,7 @@ export type CaseResult =
       requestId?: string;
       errorCode: string;
       latencyMs: number;
-    };
+    });
 
 export interface EvaluationRunInput {
   cases: readonly EvalCase[];
@@ -80,6 +88,8 @@ export interface EvaluationRunInput {
   now?: () => number;
   /** Shared runId for every case in this evaluation run. */
   evaluationRunId?: string;
+  datasetVersion?: string;
+  datasetSha256?: string;
 }
 
 const CANDIDATE_SCORE_LIMIT = 10;
@@ -87,20 +97,21 @@ const CANDIDATE_SCORE_LIMIT = 10;
 export async function evaluateCase(input: EvaluationRunInput, item: EvalCase): Promise<CaseResult> {
   const now = input.now ?? (() => Date.now());
   const startedAt = now();
+  const measured = instrumentEvaluation(input, now);
   const requestId = `kb-eval-req-${randomUUID()}`;
   const context = createSystemExecutionContext("kb-evaluation", {
     ...(input.evaluationRunId ? { runId: input.evaluationRunId } : {}),
     requestId,
     taskId: item.caseId,
   });
-  const base = { caseId: item.caseId, split: item.split, expectedKind: item.expected.kind, requestId };
+  const base = { caseId: item.caseId, split: item.split, expectedKind: item.expected.kind, requestId, tags: [...item.tags], origin: readCaseOrigin(item), ...(typeof item.provenance.authoredBy === "string" ? { authoredBy: item.provenance.authoredBy } : {}), stageLatency: measured.stageLatency };
   try {
     const retrieved = await retrieveCandidates({
       query: item.input.question,
       tenantId: input.tenantId,
       strategy: input.strategy === "vector_only" ? "vector_only" : "auto",
-      store: input.store,
-      gateway: input.gateway,
+      store: measured.store,
+      gateway: measured.gateway,
       credential: input.credential,
       config: input.config,
       context,
@@ -120,13 +131,13 @@ export async function evaluateCase(input: EvaluationRunInput, item: EvalCase): P
     let accuracy: ReturnType<typeof citationAccuracy> | undefined;
     let faithfulness: { score: number; unsupportedClaims: string[]; supportedClaims?: number; totalClaims?: number } | undefined;
     if (result.outcome === "evidence_found") {
-      const synthesized = await input.synthesizer.synthesize(item.input.question, result, input.signal);
+      const synthesized = await measured.synthesizer.synthesize(item.input.question, result, input.signal);
       abstained = synthesized.abstained;
       answer = synthesized.answer;
       const evidence = new Map(result.citations.map((citation) => [citation.citationId, citation.sourceId]));
       if (!abstained) {
         accuracy = citationAccuracy(synthesized.citations, evidence, relevant);
-        if (input.judge) faithfulness = await input.judge.judge(item.input.question, synthesized.answer, result, input.signal);
+        if (measured.judge) faithfulness = await measured.judge.judge(item.input.question, synthesized.answer, result, input.signal);
       }
     }
 
@@ -172,6 +183,10 @@ export async function evaluateCase(input: EvaluationRunInput, item: EvalCase): P
 }
 
 export interface SplitSummary {
+  stageLatency?: StageLatencySummary;
+  retrievalP50Ms?: number | null;
+  retrievalP95Ms?: number | null;
+  degradedCases?: number;
   cases: number;
   answerableCases: number;
   abstainCases: number;
@@ -186,6 +201,9 @@ export interface SplitSummary {
 }
 
 export interface EvaluationRun {
+  datasetVersion?: string;
+  datasetSha256?: string;
+  strata?: Record<"dev" | "test" | "all", Record<string, SplitSummary>>;
   strategy: EvaluationStrategy;
   evaluationRunId: string;
   /** Incomplete runs are reported but never published as scores. */
@@ -201,6 +219,10 @@ export function summarize(results: readonly CaseResult[]): SplitSummary {
   const abstain = completed.filter((result) => result.expectedKind === "abstain");
   const answered = answerable.filter((result) => !result.abstained);
   return {
+    stageLatency: summarizeStages(results),
+    retrievalP50Ms: percentile(completed.flatMap((result) => retrievalLatency(result.stageLatency)), 0.5),
+    retrievalP95Ms: percentile(completed.flatMap((result) => retrievalLatency(result.stageLatency)), 0.95),
+    degradedCases: completed.filter((result) => result.retrievalMode === "vector_only_degraded").length,
     cases: results.length,
     answerableCases: answerable.length,
     abstainCases: abstain.length,
@@ -215,19 +237,26 @@ export function summarize(results: readonly CaseResult[]): SplitSummary {
   };
 }
 
+export function summarizeStrata(results: readonly CaseResult[]): Record<string, SplitSummary> {
+  const keys = new Set(["origin:hand_authored", "origin:template", "origin:unclassified", ...results.flatMap((result) => (result.tags ?? []).map((tag) => `tag:${tag}`))]);
+  return Object.fromEntries([...keys].sort().map((key) => [key, summarize(results.filter((result) => key.startsWith("origin:") ? `origin:${result.origin ?? "unclassified"}` === key : (result.tags ?? []).includes(key.slice(4))))]));
+}
 export async function runEvaluation(rawInput: EvaluationRunInput): Promise<EvaluationRun> {
   const evaluationRunId = rawInput.evaluationRunId ?? `kb-eval-run-${randomUUID()}`;
   const input = { ...rawInput, evaluationRunId };
   const results: CaseResult[] = [];
   for (const item of input.cases) {
     if (input.signal?.aborted) {
-      results.push({ caseId: item.caseId, split: item.split, expectedKind: item.expected.kind, status: "failed", errorCode: "KB_CANCELLED", latencyMs: 0 });
+      results.push({ caseId: item.caseId, split: item.split, expectedKind: item.expected.kind, tags: [...item.tags], origin: readCaseOrigin(item), stageLatency: createStageLatency(), status: "failed", errorCode: "KB_CANCELLED", latencyMs: 0 });
       continue;
     }
     results.push(await evaluateCase(input, item));
   }
   const failedCases = results.filter((result) => result.status === "failed").map((result) => result.caseId);
   return {
+    ...(input.datasetVersion ? { datasetVersion: input.datasetVersion } : {}),
+    ...(input.datasetSha256 ? { datasetSha256: input.datasetSha256 } : {}),
+    strata: { dev: summarizeStrata(results.filter((result) => result.split === "dev")), test: summarizeStrata(results.filter((result) => result.split === "test")), all: summarizeStrata(results) },
     strategy: input.strategy,
     evaluationRunId,
     status: failedCases.length === 0 ? "completed" : "incomplete",
