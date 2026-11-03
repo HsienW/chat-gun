@@ -356,6 +356,7 @@ export const InputForm: React.FC<InputFormProps> = ({
               size="icon"
               className="text-[#E7D9C1] hover:text-white hover:bg-muted p-2 cursor-pointer rounded-full transition-all duration-200"
               onClick={onCancel}
+              data-testid="chat-cancel"
             >
               <StopCircle className="h-5 w-5" />
             </Button>
@@ -370,6 +371,7 @@ export const InputForm: React.FC<InputFormProps> = ({
                   : 'text-[#E7D9C1] hover:text-white hover:bg-muted'
               } p-2 cursor-pointer rounded-full transition-all duration-200 text-base`}
               disabled={isSubmitDisabled}
+              data-testid="chat-submit"
             >
               <Send className="h-5 w-5" />
             </Button>

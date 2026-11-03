@@ -1,0 +1,52 @@
+name: Frontend deterministic E2E
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/frontend-e2e.yml
+      - frontend/**
+  push:
+    paths:
+      - .github/workflows/frontend-e2e.yml
+      - frontend/**
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: Playwright (Chromium, scripted responses)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run E2E (no retries)
+        working-directory: frontend
+        run: npm run test:e2e
+      - name: Upload Playwright report and traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-e2e-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 5
+          if-no-files-found: ignore
