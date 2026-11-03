@@ -62,10 +62,12 @@
 
 ## 7. 徽章上線（驗收點三，合併後）
 
-- [ ] 7.1 由 Master 合併後，確認 `master_next` 的 push 執行完成。
+- [x] 7.1 由 Master 合併後，確認 `master_next` 的 push 執行完成。
   驗證：`gh run list --workflow=backend-ci.yml --branch master_next --event push --limit 1 --json conclusion,headSha` 的 `headSha` 為合併提交，並記錄結論。
-- [ ] 7.2 確認徽章與連結。
+  紀錄：Backend CI run #9，headSha 為合併提交 `1b52e36`，結論 success（1m55s）。
+- [x] 7.2 確認徽章與連結。
   驗證：`curl -sL "https://github.com/HsienW/chat-gun/actions/workflows/backend-ci.yml/badge.svg?branch=master_next&event=push"` 回傳的 SVG 狀態與 7.1 一致；瀏覽器開啟三個 README 的徽章連結，都顯示篩選後的執行紀錄。
+  紀錄：徽章 SVG 為 passing，與 7.1 一致；三個 README 的徽章與範圍說明連結都指向 `branch:master_next` + `event:push` 的篩選頁。SVG 以瀏覽器開啟同一 URL 確認，未使用 curl。
 
 ## 8. 完成回報
 
