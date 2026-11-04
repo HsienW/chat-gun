@@ -111,7 +111,9 @@ Master 接受為已知限制的測試，只能以下列方式處置（見 D11）
 
 新增 `.github/workflows/frontend-e2e.yml`，與既有 workflow 一致：
 
-- `ubuntu-latest`、Node 24、`actions/checkout@v4`、`actions/setup-node@v4`、`permissions: contents: read`。
+- `ubuntu-24.04`、Node 24、`actions/checkout@v4`、`actions/setup-node@v4`、`permissions: contents: read`。
+
+> 2026-11-04 修訂：runner 由 `ubuntu-latest` 改為固定 `ubuntu-24.04`。`ubuntu-latest` 已遷移到 Ubuntu 26.04，Playwright 1.56.1 不支援該版本，`npx playwright install --with-deps chromium` 直接失敗（PR #169，job 126581585948）。固定 runner 版本也符合本 Change 的確定性目標。其他沒有使用 Playwright 的 workflow 不受影響，維持 `ubuntu-latest`。之後升級 Playwright 時，再評估是否改回 `ubuntu-latest`。
 - 觸發：`pull_request` 與 `push`，路徑過濾為 `frontend/**` 與 workflow 本身。
 - 步驟：`npm ci` → `npx playwright install --with-deps chromium` → `npm run test:e2e`。
 - 設定 `timeout-minutes`；失敗時上傳 Playwright report 與 trace，保存天數設短。

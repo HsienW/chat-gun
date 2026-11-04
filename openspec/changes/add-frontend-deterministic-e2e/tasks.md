@@ -21,7 +21,7 @@ npm run test:e2e
 - [x] 2.1 新增精確版本的 `@playwright/test` devDependency 與 `test:e2e` script；Playwright 只設定 Chromium、`retries: 0`；新增 E2E 用 tsconfig；`.gitignore` 加入 Playwright 輸出目錄（Requirement「E2E 時序 MUST 由情境控制而非固定延遲」「E2E MUST 在 CI 執行且不影響既有驗證」）。驗證：`npm run build` 通過；`git diff -- package-lock.json` 只含 Playwright 相關套件。
 - [x] 2.2 Vitest 排除 E2E 目錄；ESLint 對 E2E 檔案禁止 `waitForTimeout` 與以 `setTimeout` 包成的等待（design D6）。驗證：`npm run test` 的測試檔數與套用前相同；在暫存檔加入 `page.waitForTimeout(1)` 時 `npm run lint` 失敗，移除後通過（結果寫入 evidence，暫存檔不得提交）。
 - [x] 2.3 新增 `.env.e2e` 與 `vite build --mode e2e` 流程，只含非機密值（design D2）。驗證：檢查 `.env.e2e` 內容沒有 Key、Token 或正式 URL；E2E build 的 bundle 以同 origin `/api/langgraph` 連線。
-- [x] 2.4 實作 fixture server：同 origin 提供 `/app/` 靜態檔、`/api/langgraph/*` 情境回應、`/__e2e/*` 控制介面；每個測試一個 server、只綁 `127.0.0.1`；gate 釋放；請求紀錄；unexpected 請求、`pageerror`、非 test origin 連線使測試失敗（design D1、D5；Requirement「E2E MUST 只依確定性回應執行」）。驗證：harness 自測，涵蓋 unexpected 請求使測試失敗、外部連線被拒、gate 未釋放前不送出後續內容。
+- [x] 2.4 實作 fixture server：同 origin 提供 `/app/` 靜態檔、`/api/langgraph/*` 情境回應；控制介面為與測試同 worker 的行程內 API（腳本化 run、gate 釋放與到達通知、請求紀錄），不開 HTTP 控制路由；每個測試一個 server、只綁 `127.0.0.1`；gate 釋放；請求紀錄；unexpected 請求、`pageerror`、非 test origin 連線使測試失敗（design D1、D5；Requirement「E2E MUST 只依確定性回應執行」）。驗證：harness 自測，涵蓋 unexpected 請求使測試失敗、外部連線被拒、gate 未釋放前不送出後續內容。
 - [x] 2.5 情境載入時以 Frontend 既有 parser 驗證 envelope 與 card payload；刻意無效的內容需明確標記（design D4）。驗證：harness 自測，未標記的無效 payload 使測試失敗。
 
 ## 3. 串流
