@@ -50,7 +50,7 @@ npm run test:e2e
 
 ## 9. CI
 
-- [ ] 9.1 新增 `.github/workflows/frontend-e2e.yml`（design D10）。驗證：以 `actionlint` 或等價工具檢查語法（無法執行時標示未執行）；在 PR 上實際執行一次並記錄 run URL 與結果；若無法在 PR 執行，標示未執行，不得宣稱 CI 通過。
+- [x] 9.1 新增 `.github/workflows/frontend-e2e.yml`（design D10）。驗證：以 `actionlint` 或等價工具檢查語法（無法執行時標示未執行）；在 PR 上實際執行一次並記錄 run URL 與結果；若無法在 PR 執行，標示未執行，不得宣稱 CI 通過。
 
 ## 10. 收尾驗證
 
