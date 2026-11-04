@@ -25,6 +25,7 @@
   <a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://img.shields.io/badge/text--embedding--v4-Embedding-0EA5E9" alt="text-embedding-v4" /></a>
   <a href="https://www.alibabacloud.com/help/en/model-studio/models"><img src="https://img.shields.io/badge/qwen3--rerank-Rerank-0EA5E9" alt="qwen3-rerank" /></a>
   <a href="https://www.postgresql.org/"><img src="https://img.shields.io/badge/PostgreSQL-16-336791" alt="PostgreSQL" /></a>
+  <a href="https://github.com/HsienW/chat-gun/actions/workflows/backend-ci.yml?query=branch%3Amaster_next+event%3Apush"><img src="https://github.com/HsienW/chat-gun/actions/workflows/backend-ci.yml/badge.svg?branch=master_next&event=push" alt="Backend CI" /></a>
 </p>
 
 <p align="center">
@@ -243,6 +244,8 @@ flowchart LR
 **已知限制：** 订单请求 Golden 大致上通过；live 引用准确率约 0.380。
 
 完整结果、执行次数、dev split、延迟、指标定义、忠实度未发布的原因、方法学与重跑方式见[评测](./docs/evaluation.md)（繁中）。
+
+**CI 范围：** [Backend CI](https://github.com/HsienW/chat-gun/actions/workflows/backend-ci.yml?query=branch%3Amaster_next+event%3Apush) 徽章只代表 backend 的 lint、默认测试与 build，包含 deterministic Weather Golden Eval、评分器单元测试与 mock integration；不包含需要数据库或模型的集成测试与 live 评测，不涵盖 frontend 与 BFF，也不代表本章节的评测数字。
 
 ## 安全与限制
 

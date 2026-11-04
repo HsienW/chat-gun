@@ -1,0 +1,54 @@
+name: Backend CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master_next
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  # Only superseded PR runs are cancelled; a running master_next validation always finishes.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  backend-validation:
+    name: backend-validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    # Other database URLs stay unset on purpose: some tests skip only when the variable is undefined.
+    env:
+      DATABASE_URL: ''
+      RUN_OPIK_EVALUATION: 'false'
+      RUN_QWEN_LIVE_SMOKE: 'false'
+      RUN_DEEP_RESEARCHER_WEATHER_LIVE_SMOKE: 'false'
+      OPEN_METEO_LIVE_SMOKE: 'false'
+      OPIK_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: install-backend
+        id: install-backend
+        run: npm ci
+      - name: backend-lint
+        id: backend-lint
+        run: npm run lint
+      - name: backend-test
+        id: backend-test
+        run: npm run test
+      - name: backend-build
+        id: backend-build
+        run: npm run build
