@@ -544,8 +544,26 @@ const SECRET_PATTERNS = Object.freeze({
   private_key: /-----BEGIN (?:[A-Z ]*PRIVATE KEY)-----/i,
   bearer_token: /\bBearer\s+[a-zA-Z0-9._~+/-]{8,}/i,
   jwt: /\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/i,
-  // A value that is only a variable interpolation, optionally after a scheme word, or a bare null, holds no credential.
-  credential_assignment: /["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|client[_-]?secret|authorization|cookie)["']?\s*[:=]\s*(?!null(?![^\s"',;}]))(?!\\?["'`]?(?:[A-Za-z]+[ \t]+)?\$\{[A-Za-z_$][\w$.?]*\}\\?(?:["'`]|[\s,;)}]|$))["']?[^\s"',;}]{4,}/i,
+  // Preserve the bare-null, single-interpolation and literal-value rules, including their JSON-escaped behavior.
+  // Bare booleans and interpolation composites contain no credential literal. Only closed separators are allowed;
+  // calls accept identifiers, never literal arguments. A semicolon ends the credential before header attributes.
+  credential_assignment: (() => {
+    const identifier = String.raw`[A-Za-z_$][\w$]*`;
+    const spacing = String.raw`(?:\s|\\[nrt])*`;
+    const argumentsList = String.raw`${spacing}(?:${identifier}(?:${spacing},${spacing}${identifier})*${spacing})?`;
+    const expression = String.raw`${identifier}(?:(?:\??\.)${identifier}|\(${argumentsList}\))*`;
+    const interpolation = String.raw`\$\{${expression}\}`;
+    const separators = String.raw`[=.:/\-_@#?&+|]*`;
+    const composite = String.raw`${separators}(?:${interpolation}${separators})+`;
+    const boundary = String.raw`(?=$|[\s"',;)}\]]|\\["nrtbf])`;
+    return new RegExp(
+      String.raw`["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|client[_-]?secret|authorization|cookie)["']?\s*[:=]\s*`
+      + String.raw`(?!null(?![^\s"',;}]))(?!\\?["'\x60]?(?:[A-Za-z]+[ \t]+)?\$\{[A-Za-z_$][\w$.?]*\}\\?(?:["'\x60]|[\s,;)}]|$))`
+      + String.raw`(?!(?:true|false)${boundary})`
+      + String.raw`(?!(?:(\\?["'\x60])${composite}(?:\1${boundary}|(?=;))|${composite}${boundary}))`
+      + String.raw`["']?[^\s"',;}]{4,}`, "i",
+    );
+  })(),
 });
 
 export function secretCategories(text) {
