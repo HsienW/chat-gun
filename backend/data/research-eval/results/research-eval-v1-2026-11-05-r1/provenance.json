@@ -3,6 +3,7 @@
   "datasetSha256": "d27b1a738e8e61d076dadd7646310a11908a6f37bb7848938ea18a7c679c690d",
   "runnerVersion": "research-eval-runner-v1",
   "rankings": [
+    "guard",
     "rerank",
     "rule"
   ],
@@ -12,11 +13,12 @@
   "searchProvider": "Tavily Search API (basic depth, 8 results per query)",
   "rerankModel": "qwen3-rerank",
   "caseCount": 26,
-  "runCount": 2,
+  "runCount": 3,
   "date": "2026-11-05",
   "commits": {
     "rule": "0ff19ff",
-    "rerank": "5aed561"
+    "rerank": "5aed561",
+    "guard": "ec8c1a3"
   },
   "notes": [
     "Executed in-process via vitest without Postgres: graph task admission and the tool authorization decision store were replaced by no-op test doubles; tool governance, egress policy and the graph itself were unchanged.",

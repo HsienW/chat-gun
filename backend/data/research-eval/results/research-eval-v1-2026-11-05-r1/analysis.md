@@ -1,9 +1,10 @@
 # research-eval-v1 · 2026-11-05 · analysis
 
-Hand-written interpretation of `report.md` (generated). All numbers come from `run-rule.json` and
-`run-rerank.json`; 26 cases, one run per arm, qwen-plus planner and synthesis, Tavily search,
-qwen3-rerank for the rerank arm. Commits: rule@0ff19ff, rerank@5aed561 (rerank off by default; the
-rerank arm sets `DEEP_RESEARCH_SOURCE_RERANK=true`).
+Hand-written interpretation of `report.md` (generated). All numbers come from `run-rule.json`,
+`run-rerank.json` and `run-guard.json`; 26 cases, one run per arm, qwen-plus planner and
+synthesis, Tavily search, qwen3-rerank for the rerank arm. Commits: rule@0ff19ff, rerank@5aed561,
+guard@ec8c1a3. Each arm turns on only its own feature (`DEEP_RESEARCH_SOURCE_RERANK`,
+`DEEP_RESEARCH_CITATION_GUARD`); the rule arm has both off.
 
 ## Baseline (rule ranking)
 
@@ -65,7 +66,43 @@ Reading the comparison:
 
 Decision: keep rerank behind the flag, off by default. Enabling it is cheap (~0.5s P50) and
 fail-safe, but this evaluation does not show a quality benefit; a relevance label per fetched
-source, or a citation guard in synthesis, is needed before rerank can be judged on quality.
+source is needed before rerank can be judged on quality.
+
+## Citation guard arm versus rule
+
+The guard (commit ec8c1a3) has two layers: the synthesis evidence numbers only usable sources and
+the no-source policy forbids unsupported dates, versions and statuses (prompt layer), then a
+deterministic step removes `[n]` markers that do not point at a usable source and URLs that are not
+a usable source's URL (post-processing layer). Answers are scored after both layers.
+
+| Metric | rule | guard |
+|---|---|---|
+| Citation verification pass rate | 3/14 | 14/14 |
+| Citation precision | 31/54 | 37/37 |
+| No-source automatic refusal pass | 1/6 | 6/6 |
+| No-source manual pass (no unsupported claim) | 1/6 | 3/6 |
+| Answerable latency P50 / P90 | 30.0s / 42.4s | 29.5s / 43.1s |
+
+How much is the deterministic step:
+
+- It modified 14 of 20 research answers: 10 of 14 answerable (8 markers, 7 URLs removed) and 4 of
+  6 no-source (11 markers, 3 URLs removed).
+- Without it, the guard arm's own answers would pass citation verification only 4/14 (the four
+  unmodified answers) and the automatic refusal check 3/6. That is within the noise seen between
+  the rule and rerank arms, so the prompt layer alone shows no measurable citation gain; the
+  14/14 and 6/6 are enforced by the post-processing layer.
+- Unsupported claims on no-source cases (manual 3/6) are not something the guard can remove; the
+  rerank arm, without any guard, also reached 3/6, so this is not a demonstrated improvement.
+- Every guarded answerable answer still cites at least one usable source (cited items 37, all
+  resolving), so the guard did not strip answers to nothing. Latency cost is a regex pass
+  (differences are within run-to-run noise).
+- Side effect found in this run: 5 of 26 answers kept empty brackets or a dangling colon where a
+  URL was removed (e.g. "官網（）"). Fixed after the run with a unit test; the recorded answers
+  predate that fix.
+
+Decision: keep the guard on by default. It guarantees that every citation the user sees points at
+a source the graph actually fetched and judged usable, at negligible latency. It does not make the
+model ground its claims better; that needs a separate change and evaluation.
 
 ## Caveats
 

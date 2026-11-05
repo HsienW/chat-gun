@@ -59,6 +59,13 @@ describe("deep researcher citation guard", () => {
     expect(result.report).toMatchObject({ modified: true, removedMarkers: [1, 2], removedUrls: ["https://example.com/a"] });
   });
 
+  it("cleans empty brackets and dangling colons left by a removed URL", () => {
+    const answer = "請查閱國家統計局官網（https://www.stats.gov.cn）正式公布，或訪問最新官方文檔：https://unknown.example/docs，並查閱章節。";
+    expect(guardCitations(answer, sources).answer).toBe("請查閱國家統計局官網正式公布，或訪問最新官方文檔，並查閱章節。");
+    const untouched = "Keep (this) and （這個）: as written [1].";
+    expect(guardCitations(untouched, sources).answer).toBe(untouched);
+  });
+
   it("does not treat years or long ranges as citation markers", () => {
     const answer = "Released in [2026] per the [1-40] appendix.";
     expect(guardCitations(answer, sources).answer).toBe(answer);

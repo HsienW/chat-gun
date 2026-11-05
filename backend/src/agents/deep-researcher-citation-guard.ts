@@ -102,6 +102,13 @@ export function guardCitations(answer: string, sources: readonly GuardSource[]):
     return `${match.startsWith(" ") ? " " : ""}${kept.map((value) => `[${value}]`).join("")}`;
   });
 
+  if (removedUrls.size > 0) {
+    // research-eval-v1 guard run: 5/26 answers kept "官網（）" or "官網：，" after a URL was removed.
+    guarded = guarded
+      .replace(/\s*(?:（\s*）|\(\s*\))/gu, "")
+      .replace(/[：:][ \t]*(?=[，,。；;])/gu, "")
+      .replace(/[ \t]+$/gmu, "");
+  }
   guarded = dropEmptiedLines(answer, guarded);
   const modified = guarded !== answer;
   return {

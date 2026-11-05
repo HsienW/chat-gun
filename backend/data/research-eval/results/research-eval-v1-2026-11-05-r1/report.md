@@ -1,6 +1,6 @@
 # Deep Researcher evaluation — research-eval-v1
 
-Date: 2026-11-05 · Cases: 26 · Runs: 2 · LLM: qwen/qwen-plus · Search: Tavily Search API (basic depth, 8 results per query) · Rerank: qwen3-rerank · Commits: rule@0ff19ff, rerank@5aed561
+Date: 2026-11-05 · Cases: 26 · Runs: 3 · LLM: qwen/qwen-plus · Search: Tavily Search API (basic depth, 8 results per query) · Rerank: qwen3-rerank · Commits: rule@0ff19ff, rerank@5aed561, guard@ec8c1a3
 
 Small sample, single run per arm: treat differences of one or two cases as noise.
 
@@ -12,28 +12,64 @@ Small sample, single run per arm: treat differences of one or two cases as noise
 - **Clarify rate**: clarify cases routed by the planner to `answerMode=clarify`.
 - **Fetched usable ratio**: usable sources / fetched sources over answerable cases (the top-N sources the ranking selected).
 - **Latency**: wall-clock time of one graph invocation, sequential execution, nearest-rank P50 / P90.
+- **Citation guard (guard arms only)**: answers are scored after the guard; "answers modified" counts research answers where the guard removed at least one marker or URL, i.e. answers that would have failed citation verification without the deterministic step.
 - **Rerank (rerank arm only)**: one rerank call per case that reaches rankSources; call latency is measured around the provider call; a changed top-N means at least one fetched source differs from the rule-order top-N on the same deduped candidates.
 
 ## Summary
 
-| Metric | rerank | rule |
-|---|---|---|
-| Completed / cases | 26/26 | 26/26 |
-| Citation verification pass rate | 28.6% (4/14) | 21.4% (3/14) |
-| Citation precision | 54.5% (36/66) | 57.4% (31/54) |
-| Answerable answers with usable sources but no citation | 0 | 0 |
-| Answerable cases with zero usable sources | 2 | 2 |
-| No-source refusal rate | 33.3% (2/6) | 16.7% (1/6) |
-| No-source stub effective (0 usable) | 6/6 | 6/6 |
-| Clarify rate | 100.0% (4/4) | 100.0% (4/4) |
-| Fetched usable ratio (answerable) | 62.9% (44/70) | 61.4% (43/70) |
-| Latency P50 / P90 — all | 20.9s / 41.6s (n=26) | 24.9s / 37.3s (n=26) |
-| Latency P50 / P90 — answerable | 32.1s / 41.6s (n=16) | 30.0s / 42.4s (n=16) |
-| Latency P50 / P90 — no_source | 14.5s / 20.5s (n=6) | 14.3s / 18.0s (n=6) |
-| Latency P50 / P90 — clarify | 2.9s / 3.7s (n=4) | 2.9s / 3.8s (n=4) |
-| Rerank calls (failed → rule fallback) | 18 (0) | - |
-| Rerank call latency P50 / P90 | 0.5s / 1.1s (n=18) | - |
-| Cases where rerank changed the fetched top-N | 88.9% (16/18) | - |
+| Metric | guard | rerank | rule |
+|---|---|---|---|
+| Completed / cases | 26/26 | 26/26 | 26/26 |
+| Citation verification pass rate | 100.0% (14/14) | 28.6% (4/14) | 21.4% (3/14) |
+| Citation precision | 100.0% (37/37) | 54.5% (36/66) | 57.4% (31/54) |
+| Answerable answers with usable sources but no citation | 0 | 0 | 0 |
+| Answerable cases with zero usable sources | 2 | 2 | 2 |
+| No-source refusal rate | 100.0% (6/6) | 33.3% (2/6) | 16.7% (1/6) |
+| No-source stub effective (0 usable) | 6/6 | 6/6 | 6/6 |
+| Clarify rate | 100.0% (4/4) | 100.0% (4/4) | 100.0% (4/4) |
+| Fetched usable ratio (answerable) | 64.3% (45/70) | 62.9% (44/70) | 61.4% (43/70) |
+| Latency P50 / P90 — all | 23.8s / 42.8s (n=26) | 20.9s / 41.6s (n=26) | 24.9s / 37.3s (n=26) |
+| Latency P50 / P90 — answerable | 29.5s / 43.1s (n=16) | 32.1s / 41.6s (n=16) | 30.0s / 42.4s (n=16) |
+| Latency P50 / P90 — no_source | 12.0s / 22.5s (n=6) | 14.5s / 20.5s (n=6) | 14.3s / 18.0s (n=6) |
+| Latency P50 / P90 — clarify | 2.8s / 4.2s (n=4) | 2.9s / 3.7s (n=4) | 2.9s / 3.8s (n=4) |
+| Rerank calls (failed → rule fallback) | - | 18 (0) | - |
+| Rerank call latency P50 / P90 | - | 0.5s / 1.1s (n=18) | - |
+| Cases where rerank changed the fetched top-N | - | 88.9% (16/18) | - |
+| Citation guard: research answers modified | 70.0% (14/20) | - | - |
+| Citation guard: markers / URLs removed | 19 / 10 | - | - |
+
+## Cases — guard
+
+| Case | Status | Mode | Latency | Usable/Fetched | Cited | Unresolved | Result |
+|---|---|---|---|---|---|---|---|
+| ans-01 | completed | research | 25.0s | 4/5 | 4 | - | citation pass |
+| ans-02 | completed | research | 23.8s | 4/5 | 4 | - | citation pass |
+| ans-03 | completed | research | 33.7s | 3/5 | 6 | - | citation pass |
+| ans-04 | completed | research | 29.4s | 2/5 | 2 | - | citation pass |
+| ans-05 | completed | direct | 6.6s | 0/0 | 0 | - | no citation |
+| ans-06 | completed | research | 29.6s | 5/5 | 1 | - | citation pass |
+| ans-07 | completed | research | 29.5s | 3/5 | 1 | - | citation pass |
+| ans-08 | completed | research | 43.1s | 1/5 | 1 | - | citation pass |
+| ans-09 | completed | research | 42.8s | 1/5 | 1 | - | citation pass |
+| ans-10 | completed | research | 28.8s | 5/5 | 1 | - | citation pass |
+| ans-11 | completed | research | 43.7s | 3/5 | 2 | - | citation pass |
+| ans-12 | completed | research | 24.5s | 4/5 | 4 | - | citation pass |
+| ans-13 | completed | direct | 15.1s | 0/0 | 0 | - | no citation |
+| ans-14 | completed | research | 37.8s | 2/5 | 2 | - | citation pass |
+| ans-15 | completed | research | 29.7s | 3/5 | 3 | - | citation pass |
+| ans-16 | completed | research | 30.5s | 5/5 | 5 | - | citation pass |
+| nos-01 | completed | research | 7.8s | 0/3 | 0 | - | refusal pass |
+| nos-02 | completed | research | 11.6s | 0/0 | 0 | - | refusal pass |
+| nos-03 | completed | research | 12.4s | 0/0 | 0 | - | refusal pass |
+| nos-04 | completed | research | 12.0s | 0/5 | 0 | - | refusal pass |
+| nos-05 | completed | research | 13.3s | 0/5 | 0 | - | refusal pass |
+| nos-06 | completed | research | 22.5s | 0/5 | 0 | - | refusal pass |
+| clr-01 | completed | clarify | 2.8s | 0/0 | 0 | - | clarify pass |
+| clr-02 | completed | clarify | 2.6s | 0/0 | 0 | - | clarify pass |
+| clr-03 | completed | clarify | 4.2s | 0/0 | 0 | - | clarify pass |
+| clr-04 | completed | clarify | 3.3s | 0/0 | 0 | - | clarify pass |
+
+Routing: answerable:research=14, answerable:direct=2, no_source:research=6, clarify:clarify=4
 
 ## Cases — rerank
 
@@ -100,6 +136,23 @@ Routing: answerable:research=14, answerable:direct=2, no_source:research=6, clar
 | clr-04 | completed | clarify | 2.8s | 0/0 | 0 | - | clarify pass |
 
 Routing: answerable:research=14, answerable:direct=2, no_source:research=6, clarify:clarify=4
+
+## Manual inspection (no_source) — run-guard.json
+
+Inspector: Claude Code (CCR, implementation_secondary) — not an independent reviewer
+
+Criterion: Pass = the answer states that no usable source was obtained AND asserts no specific fact (date, number, version, decision, publication status) that is absent from the evidence, even when hedged ('would have', 'should be', 'estimated').
+
+No unsupported claims: 3/6
+
+| Case | Pass | Unsupported claims |
+|---|---|---|
+| nos-01 | yes | - |
+| nos-02 | no | states October 2026 CPI is not yet published and expects release on 2026-11-09 from the usual schedule |
+| nos-03 | no | states meetings are usually held quarterly in mid-March, June, September and December |
+| nos-04 | yes | - |
+| nos-05 | no | states rebalances usually take effect on the second Friday of June and December |
+| nos-06 | yes | - |
 
 ## Manual inspection (no_source) — run-rerank.json
 
