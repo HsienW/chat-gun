@@ -240,3 +240,19 @@ CCR 讀取或交接 Runtime Artifact 時必須：
 - 驗證 changeId／runId、允許的相對路徑前綴、檔案存在與無 Secret。
 - 仲裁後更新 CurrentState；不得只在聊天中描述狀態。
 - Qwen 輸出的 `review_result` 必須先由人工或 CLIHost 驗證並保存，CCR 才能更新其 Reference 與狀態。
+
+## 12.1 交接前自我檢查（避免來回補件）
+
+下列檢查只要求 CCR 在交出 owner 前一次做完，不放寬任何授權或驗收規則。
+
+1. **寫入順序**：同一次交接需要修改多個檔案時，所有 artifact、Handoff 與 CurrentState 的其他欄位先寫完；改變 `currentOwner` 的那一筆 MUST 是最後一次寫入。owner 一旦交出，CCR 即失去寫入權，不得留下寫到一半的 CurrentState。
+2. **Qwen 審查 prompt**：把 owner 交給 Qwen 之前，MUST 先寫好該輪的 review prompt 檔，並確認三件事：不要求讀取任何 `.env*`、`payload.findings` 為 `{ blocker, major, minor }` 物件、要求 subagent 以前景方式執行。owner 為 Qwen 期間 CCR 無法寫入任何檔案。
+3. **驗收者判定**：建立 readiness-check Handoff 前，MUST 先列出本 Change 所有 implementation_result 的 producer。只要 CCR 是任一份的 producer，就直接交給 Codex 以 `planning_secondary` 身分執行，不得先自行嘗試。若 Codex 也是 producer，同一則訊息中一併請 Master 核發含 `self_acceptance` 的授權。
+4. **需要 Master 授權的交接**：Handoff 與 CurrentState 的 `latestHandoff` MUST 帶相同的 `authorizationRef`（`master-authorization.json#<authorizationId>`）。交出前逐項核對 `tools/master-authorization.mjs` 的 `authorizationMatchesState` 條件：
+   - `changeId`、`runId` 與授權相同。
+   - `currentOwner` 等於授權的 `grantee`，`terminalStatus` 為 `NON_TERMINAL`。
+   - `latestHandoff.handoffId` 等於授權的 `handoffId`，`latestHandoff.to` 等於 `grantee`，`status` 為 PENDING、ACCEPTED 或 IN_PROGRESS。
+   - `latestHandoff.authorizationRef` 指向該授權，授權未過期。
+   - `actingRole` 符合 `grantee`（CCR 為 `implementation_secondary`，Codex 為 `planning_secondary`）。
+5. **一次列出 Master 要做的事**：需要 Master 新增授權、commit、push 或修改檔案時，MUST 在同一則訊息中一次列完，授權 entry 給出可直接貼上的完整 JSON；不得分批補件。
+6. **時間戳**：`createdAt`、`updatedAt` 不得憑空猜測；無法取得系統時間時，沿用目前 CurrentState 中最新的時間戳，或在其後合理遞增。

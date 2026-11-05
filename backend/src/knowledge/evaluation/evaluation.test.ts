@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { prepareCorpus } from "../corpus.js";
 import { KnowledgeError } from "../errors.js";
@@ -116,6 +116,62 @@ const PROVENANCE: EvaluationProvenance = {
 };
 
 describe("retrieval evaluation runner", () => {
+  async function timedInput(failure?: string, shouldCancel = false): Promise<EvaluationRunInput> {
+    let clock = 0;
+    const controller = new AbortController();
+    const input = await evaluationInput({ now: () => clock, signal: controller.signal });
+    input.cases = [input.cases[0]];
+    const wrap = <Args extends unknown[], Result>(stage: string, operation: (...args: Args) => Promise<Result>) => async (...args: Args): Promise<Result> => {
+      clock += 10;
+      if (stage === failure) {
+        if (shouldCancel) controller.abort();
+        throw new KnowledgeError(shouldCancel ? "KB_CANCELLED" : "KB_PROVIDER_TIMEOUT");
+      }
+      return operation(...args);
+    };
+    const embed = input.gateway.embed.bind(input.gateway);
+    const rerank = input.gateway.rerank.bind(input.gateway);
+    const recall = input.store.recall.bind(input.store);
+    const synthesize = input.synthesizer.synthesize.bind(input.synthesizer);
+    const judge = input.judge?.judge.bind(input.judge);
+    vi.spyOn(input.gateway, "embed").mockImplementation(wrap("embedding", embed));
+    vi.spyOn(input.gateway, "rerank").mockImplementation(wrap("rerank", rerank));
+    vi.spyOn(input.store, "recall").mockImplementation(wrap("recall", recall));
+    vi.spyOn(input.synthesizer, "synthesize").mockImplementation(wrap("generation", synthesize));
+    if (input.judge && judge) vi.spyOn(input.judge, "judge").mockImplementation(wrap("judge", judge));
+    return input;
+  }
+  it("measures five sequential stages without changing total elapsed time", async () => {
+    const run = await runEvaluation(await timedInput());
+    expect(run.results[0]).toMatchObject({ latencyMs: 50, stageLatency: Object.fromEntries(["embedding", "recall", "rerank", "generation", "judge"].map((name) => [name, { status: "completed", ms: 10 }])) });
+    expect(run.summary.test).toMatchObject({ retrievalP50Ms: 30, retrievalP95Ms: 30, stageLatency: { rerank: { completed: 1, failed: 0, notRun: 0, p50Ms: 10, p95Ms: 10 } } });
+    expect(caseScores(run.results[0])).toHaveProperty("stageLatency");
+  });
+  it("leaves uncalled rerank, generation and judge unmeasured", async () => {
+    const input = await timedInput();
+    input.strategy = "vector_only";
+    input.config = { ...input.config, vectorThreshold: 2 };
+    const run = await runEvaluation(input);
+    expect(run.results[0]).toMatchObject({ stageLatency: { rerank: { status: "not_run" }, generation: { status: "not_run" }, judge: { status: "not_run" } } });
+  });
+  it.each(["embedding", "recall", "generation", "judge"])("marks %s timeout failed and preserves completed earlier-stage measurements (M2)", async (stage) => {
+    const run = await runEvaluation(await timedInput(stage));
+    expect(run.status).toBe("incomplete");
+    expect(run.results[0]).toMatchObject({ stageLatency: { [stage]: { status: "failed", ms: 10 } } });
+    if (stage === "embedding" || stage === "recall") expect(run.summary.test).toMatchObject({ retrievalP50Ms: null, retrievalP95Ms: null });
+    if (stage === "recall") expect(run.summary.test).toMatchObject({ stageLatency: { embedding: { completed: 1, p50Ms: 10 }, recall: { failed: 1, p50Ms: null } } });
+  });
+  it("excludes failed rerank from its percentile but includes its wait in retrieval latency (M2)", async () => {
+    const run = await runEvaluation(await timedInput("rerank"));
+    expect(run.status).toBe("completed");
+    expect(run.results[0]).toMatchObject({ retrievalMode: "vector_only_degraded", stageLatency: { rerank: { status: "failed", ms: 10 } } });
+    expect(run.summary.test).toMatchObject({ retrievalP50Ms: 30, stageLatency: { rerank: { failed: 1, completed: 0, p50Ms: null } } });
+  });
+  it.each(["embedding", "recall", "rerank", "generation", "judge"])("cancels during %s without completing that stage", async (stage) => {
+    const run = await runEvaluation(await timedInput(stage, true));
+    expect(run.status).toBe("incomplete");
+    expect(run.results[0]).toMatchObject({ errorCode: "KB_CANCELLED", stageLatency: { [stage]: { status: "failed" } } });
+  });
   it("scores answerable and abstain cases end to end", async () => {
     const run = await runEvaluation(await evaluationInput());
     expect(run.status).toBe("completed");

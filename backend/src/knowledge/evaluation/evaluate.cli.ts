@@ -22,7 +22,7 @@ import {
 } from "../connection.js";
 import { HttpKnowledgeModelGateway } from "../model-gateway.js";
 import { PgKnowledgeStore } from "../store.js";
-import { parseEvalDataset } from "./eval-case.js";
+import { loadEvaluationDataset } from "./dataset-loader.js";
 import { publishEvaluationToOpik } from "./opik-publisher.js";
 import {
   isPublishable,
@@ -35,7 +35,6 @@ import { runEvaluation, type EvaluationRun, type EvaluationStrategy } from "./ru
 import { LlmAnswerSynthesizer, LlmFaithfulnessJudge, KB_ANSWER_PROMPT_VERSION, KB_FAITHFULNESS_PROMPT_VERSION } from "./synthesis.js";
 
 const BACKEND_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const DATASET_FILE = join(BACKEND_ROOT, "data", "knowledge-eval", "kb-eval-v1.json");
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -51,8 +50,10 @@ async function readJsonIfPresent(file: string): Promise<unknown> {
 }
 
 async function main(): Promise<void> {
+  if (process.argv.includes("--dataset") && (!argument("--dataset") || argument("--dataset")!.startsWith("--"))) throw new Error("EVAL_DATASET_NAME_INVALID");
+  const loaded = await loadEvaluationDataset(join(BACKEND_ROOT, "data", "knowledge-eval"), argument("--dataset"));
+  const { dataset } = loaded;
   const config = readKnowledgeConfig();
-  const dataset = parseEvalDataset(JSON.parse(await readFile(DATASET_FILE, "utf8")));
   if (dataset.rejected.length > 0) {
     throw new Error(`Dataset has rejected cases: ${dataset.rejected.map((item) => `${item.caseId ?? item.index}:${item.code}`).join(", ")}`);
   }
@@ -90,6 +91,8 @@ async function main(): Promise<void> {
           gateway,
           credential,
           config,
+          datasetVersion: dataset.datasetVersion,
+          datasetSha256: loaded.datasetSha256,
           synthesizer: new LlmAnswerSynthesizer(jsonModel(generationModel), generationModel),
           ...(judgeModel ? { judge: new LlmFaithfulnessJudge(jsonModel(judgeModel), judgeModel) } : {}),
         })
@@ -103,6 +106,8 @@ async function main(): Promise<void> {
   const inspection = readManualInspection(await readJsonIfPresent(join(outDirectory, "manual-inspection.json")));
   const provenanceFor = (split: EvaluationProvenance["split"]): EvaluationProvenance => ({
     datasetVersion: dataset.datasetVersion,
+    datasetSha256: loaded.datasetSha256,
+    queryMode: loaded.queryMode,
     corpusVersion: dataset.corpusVersion,
     split,
     embeddingModel: config.embeddingModel,

@@ -1766,6 +1766,8 @@ for (const [label, line, expected] of [
   ["a bare template", `api_key = \`\${config.apiKey}\`;`, []],
   ["a null field", `pending${"Authorization"}: null,`, []],
   ["a bare null", `password = null;`, []],
+  ["a bare null followed by another credential", `pass${"word"}: null, api_${"key"}: abcd${"1234"}`, ["credential_assignment"]],
+  ["an upper-case bare null", `pass${"word"}: ${"NULL"},`, []],
   ["a value starting with null", `password=null${"hunter22"}`, ["credential_assignment"]],
   ["a null-prefixed value", `password: null-${"hunter22"}`, ["credential_assignment"]],
   ["a quoted null", `password: "null"`, ["credential_assignment"]],
@@ -1779,6 +1781,9 @@ for (const [label, line, expected] of [
   ["a hex provider key", `sk-${"0a1b2c3d4e5f6a7b8c9d"}`, ["provider_key"]],
   ["an upper-case prefix", `SK-${"Ab3dE5gH7jK9mN1p"}`, ["provider_key"]],
   ["a random key under the test prefix", `sk-${"test-a8f3k29xQ7mN1p"}`, ["provider_key"]],
+  ["a cloud access key", `AK${"IA"}${"A1".repeat(8)}`, ["cloud_access_key"]],
+  ["a private key header", `-----BEGIN ${"PRIVATE KEY"}-----`, ["private_key"]],
+  ["a JWT", `ey${"JhbGciOiJIUzI1NiJ9"}.${"eyJzdWIiOiIxMjM0In0"}.${"c2lnbmF0dXJl"}`, ["jwt"]],
   ["a word fixture", `sk-${"test-credential-value-123456"}`, []],
   ["a key embedded after a word fixture", `sk-${"test-credential-value-123456"} sk-${"proj-Ab3dE5gH7jK9"}`, ["provider_key"]],
 ]) {
@@ -1792,4 +1797,23 @@ test("a failed spawn records the error code", async (t) => {
   await assert.rejects(f.capture({ processResult: undefined, command: path.join(f.workspaceRoot, "no-such-binary"), commandArgs: [] }), /process_nonzero_exit/);
   const evidence = JSON.parse(await readFile(artifactPath(f, ".capture.json"), "utf8"));
   assert.equal(evidence.spawnError, "ENOENT");
+});
+
+test("a credential after bare null suppresses stdout and keeps the verdict INCOMPLETE", async (t) => {
+  const f = await captureFixture(t);
+  const credentialLine = `pass${"word"}: null, api_${"key"}: abcd${"1234"}`;
+  const stdout = stream(f.review, rows => rows.splice(2, 0,
+    reviewerMessage("assistant", [{ type: "text", text: credentialLine }]),
+  ));
+  const evidence = await captureEvidence(f, { processResult: { exitCode: 0, stderr: "", stdout } });
+  assert.equal(evidence.redactedForSecret.stdout, true);
+  assert.equal(evidence.evidenceGate.passed, false);
+  assert.ok(evidence.evidenceGate.reasons.includes("raw_output_contains_secret"));
+  assert.ok(evidence.secretHits.stdout.hits.some(hit => hit.categories.includes("credential_assignment")));
+  await assert.rejects(access(artifactPath(f, ".stdout.ndjson")), /ENOENT/);
+  const state = JSON.parse(await readFile(f.statePath, "utf8"));
+  assert.equal(state.currentPhase, "INCOMPLETE");
+  assert.equal(state.currentOwner, "CCR");
+  assert.equal(state.gateStatus.reviewPassed, false);
+  assert.equal(state.latestArtifactRefs.reviewRawStdout, undefined);
 });

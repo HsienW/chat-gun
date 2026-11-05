@@ -1,0 +1,11 @@
+{
+  "datasetVersion": "kb-eval-v2",
+  "contentSha256": "d5bbc21529c931dd6536dc0cbc842448b564bc31e3f3873e56e141c71f05af6d",
+  "caseCount": 90,
+  "frozenAt": "2026-11-02T07:46:48Z",
+  "review": {
+    "reviewedBy": "Master",
+    "reviewedAt": "2026-11-02T02:57:58Z",
+    "note": "Master approved all 30 hand-authored drafts in chat without revisions (coordinator-result-harden-kb-evaluation-baseline-run-01-task-4-3-master-review). Template cases were checked by the composition validator."
+  }
+}
