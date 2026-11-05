@@ -18,6 +18,7 @@
     "knowledge:ingest": "tsx src/knowledge/ingest.cli.ts",
     "knowledge:eval-dataset": "tsx scripts/knowledge/build-eval-dataset.ts",
     "knowledge:evaluate": "tsx src/knowledge/evaluation/evaluate.cli.ts",
+    "research:evaluate": "vitest run src/evaluation/research/research-eval.live.test.ts",
     "commerce:eval-dataset": "tsx scripts/commerce/build-chain-eval-dataset.ts",
     "commerce:evaluate": "tsx src/evaluation/commerce/evaluate.cli.ts",
     "commerce:order-golden": "tsx src/evaluation/commerce/order-request-golden.cli.ts",
