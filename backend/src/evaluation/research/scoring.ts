@@ -39,6 +39,8 @@ export interface CaseObservation {
   answer: string;
   /** Present when the run had source rerank enabled and the graph reached rankSources. */
   rerank?: RerankObservation;
+  /** Present when the citation guard ran on a research answer; the answer above is post-guard. */
+  citationGuard?: { modified: boolean; removedMarkers: number; removedUrls: number };
 }
 
 export interface RerankObservation {
@@ -238,6 +240,12 @@ export interface RunSummary {
     /** Cases where rerank changed at least one fetched source versus the rule order. */
     casesWithChangedSelection: Rate;
   };
+  citationGuard?: {
+    /** Research answers the guard changed, over research answers it ran on. */
+    answersModified: Rate;
+    removedMarkers: number;
+    removedUrls: number;
+  };
 }
 
 export function summarizeRun(observations: readonly CaseObservation[], scores: readonly CaseScore[]): RunSummary {
@@ -279,8 +287,18 @@ export function summarizeRun(observations: readonly CaseObservation[], scores: r
       }
     : undefined;
 
+  const guarded = completed.filter((observation) => observation.citationGuard !== undefined);
+  const guardSummary: RunSummary["citationGuard"] = guarded.length
+    ? {
+        answersModified: rate(guarded.filter((observation) => observation.citationGuard!.modified).length, guarded.length),
+        removedMarkers: guarded.reduce((sum, observation) => sum + observation.citationGuard!.removedMarkers, 0),
+        removedUrls: guarded.reduce((sum, observation) => sum + observation.citationGuard!.removedUrls, 0),
+      }
+    : undefined;
+
   return {
     ...(rerankSummary ? { rerank: rerankSummary } : {}),
+    ...(guardSummary ? { citationGuard: guardSummary } : {}),
     cases: observations.length,
     completed: completed.length,
     failedOrTimeout: observations.length - completed.length,

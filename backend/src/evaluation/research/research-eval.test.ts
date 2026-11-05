@@ -204,6 +204,19 @@ describe("research-eval runner", () => {
     });
   });
 
+  it("summarizes citation guard interventions", async () => {
+    const base: AgentTrace = { answerMode: "research", queries: [], searchResultCount: 8, rankedUrls: [], sources: SOURCES, answer: "x [1]" };
+    const run = await runResearchEvaluation(
+      dataset(),
+      async (item) =>
+        item.caseId === "clr-01"
+          ? { ...base, answerMode: "clarify" }
+          : { ...base, citationGuard: { modified: item.caseId === "ans-01", removedMarkers: item.caseId === "ans-01" ? 2 : 0, removedUrls: 1 } },
+      { ranking: "guard" }
+    );
+    expect(run.summary.citationGuard).toEqual({ answersModified: { passed: 1, n: 2, rate: 0.5 }, removedMarkers: 2, removedUrls: 2 });
+  });
+
   it("marks a case that exceeds its timeout", async () => {
     const run = await runResearchEvaluation(
       dataset(),

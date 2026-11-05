@@ -67,6 +67,7 @@ export const METRIC_DEFINITIONS = [
   "- **Clarify rate**: clarify cases routed by the planner to `answerMode=clarify`.",
   "- **Fetched usable ratio**: usable sources / fetched sources over answerable cases (the top-N sources the ranking selected).",
   "- **Latency**: wall-clock time of one graph invocation, sequential execution, nearest-rank P50 / P90.",
+  "- **Citation guard (guard arms only)**: answers are scored after the guard; \"answers modified\" counts research answers where the guard removed at least one marker or URL, i.e. answers that would have failed citation verification without the deterministic step.",
   "- **Rerank (rerank arm only)**: one rerank call per case that reaches rankSources; call latency is measured around the provider call; a changed top-N means at least one fetched source differs from the rule-order top-N on the same deduped candidates.",
 ];
 
@@ -110,6 +111,10 @@ export function renderReport(
     row("Rerank calls (failed → rule fallback)", (run) => (run.summary.rerank ? `${run.summary.rerank.calls} (${run.summary.rerank.failed})` : "-"));
     row("Rerank call latency P50 / P90", (run) => (run.summary.rerank ? latency(run.summary.rerank.latency) : "-"));
     row("Cases where rerank changed the fetched top-N", (run) => (run.summary.rerank ? pct(run.summary.rerank.casesWithChangedSelection) : "-"));
+  }
+  if (runs.some((run) => run.summary.citationGuard)) {
+    row("Citation guard: research answers modified", (run) => (run.summary.citationGuard ? pct(run.summary.citationGuard.answersModified) : "-"));
+    row("Citation guard: markers / URLs removed", (run) => (run.summary.citationGuard ? `${run.summary.citationGuard.removedMarkers} / ${run.summary.citationGuard.removedUrls}` : "-"));
   }
 
   for (const run of runs) {

@@ -5,8 +5,9 @@
  *   RUN_RESEARCH_EVAL=true npm run research:evaluate
  *
  * Optional:
- *   RESEARCH_EVAL_RANKING=rule|rerank   label of the ranking arm (default: rule); rerank also sets
- *                                       DEEP_RESEARCH_SOURCE_RERANK=true for the graph
+ *   RESEARCH_EVAL_RANKING=rule|rerank|guard|rerank+guard
+ *                                       arm label (default: rule); "rerank" sets DEEP_RESEARCH_SOURCE_RERANK
+ *                                       and "guard" sets DEEP_RESEARCH_CITATION_GUARD, otherwise both are off
  *   RESEARCH_EVAL_RUN_LABEL=<dir>       results/<dir> (default: research-eval-v1-<date>-r1)
  *   RESEARCH_EVAL_CASES=ans-01,nos-01   subset for smoke runs; written to RESEARCH_EVAL_SMOKE_OUT
  *                                       (default: <os tmpdir>/research-eval-smoke.json), never to results/
@@ -107,7 +108,10 @@ describe.runIf(liveEnabled)("deep researcher live evaluation", () => {
     async () => {
       const ranking = process.env.RESEARCH_EVAL_RANKING?.trim() || "rule";
       vi.stubEnv("OPIK_ENABLED", "false");
-      vi.stubEnv("DEEP_RESEARCH_SOURCE_RERANK", ranking === "rerank" ? "true" : "false");
+      // Arms are labels: "rerank" turns on source rerank, "guard" turns on the citation guard.
+      const arm = new Set(ranking.split("+"));
+      vi.stubEnv("DEEP_RESEARCH_SOURCE_RERANK", arm.has("rerank") ? "true" : "false");
+      vi.stubEnv("DEEP_RESEARCH_CITATION_GUARD", arm.has("guard") ? "true" : "false");
 
       if (process.env.RESEARCH_EVAL_DOH_URL?.trim()) {
         const { setEgressPolicyTestDependencies } = await import("../../runtime/tool-dispatch/egress-policy.js");
@@ -185,8 +189,19 @@ describe.runIf(liveEnabled)("deep researcher live evaluation", () => {
                 ...(rerankCall.errorCode ? { errorCode: rerankCall.errorCode } : {}),
               }
             : undefined;
+          const verification = isRecord(output.verification) ? output.verification : {};
+          const guard = isRecord(verification.citationGuard) ? verification.citationGuard : undefined;
           return {
             ...(rerank ? { rerank } : {}),
+            ...(guard
+              ? {
+                  citationGuard: {
+                    modified: guard.modified === true,
+                    removedMarkers: Array.isArray(guard.removedMarkers) ? guard.removedMarkers.length : 0,
+                    removedUrls: Array.isArray(guard.removedUrls) ? guard.removedUrls.length : 0,
+                  },
+                }
+              : {}),
             answerMode: typeof plan.answerMode === "string" ? plan.answerMode : undefined,
             queries: Array.isArray(plan.queries) ? plan.queries.map(String) : [],
             searchResultCount: Array.isArray(output.searchResults) ? output.searchResults.length : 0,
@@ -264,7 +279,7 @@ describe.runIf(liveEnabled)("deep researcher live evaluation", () => {
         plannerModel: researchModel,
         synthesisModel: researchModel,
         searchProvider: "Tavily Search API (basic depth, 8 results per query)",
-        rerankModel: runs.some((candidate) => candidate.ranking === "rerank")
+        rerankModel: runs.some((candidate) => candidate.ranking.split("+").includes("rerank"))
           ? process.env.KB_RERANK_MODEL?.trim() || "qwen3-rerank"
           : null,
         caseCount: loaded.dataset.cases.length,
