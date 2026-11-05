@@ -171,11 +171,30 @@ describe("research-eval runner", () => {
       caseCount: 3,
       runCount: 1,
       date: "2026-11-05",
-      commit: "abc1234",
+      commits: { rule: "abc1234" },
       notes: [],
     });
     expect(report).toContain("| Citation verification pass rate | 100.0% (1/1) |");
     expect(report).toContain("| nos-01 | failed |");
+  });
+
+  it("summarizes rerank calls, fallbacks and changed selections", async () => {
+    const base: AgentTrace = { answerMode: "research", queries: [], searchResultCount: 8, rankedUrls: [], sources: SOURCES, answer: "x [1]" };
+    const reranks = {
+      "ans-01": { ok: true, latencyMs: 300, candidates: 12, selected: 5, changedSelections: 2 },
+      "nos-01": { ok: false, latencyMs: 900, candidates: 3, selected: 3, changedSelections: null, errorCode: "EGRESS_DENIED" },
+    };
+    const run = await runResearchEvaluation(
+      dataset(),
+      async (item) => ({ ...base, ...(item.caseId in reranks ? { rerank: reranks[item.caseId as keyof typeof reranks] } : {}) }),
+      { ranking: "rerank" }
+    );
+    expect(run.summary.rerank).toMatchObject({
+      calls: 2,
+      failed: 1,
+      latency: { n: 2, p50Ms: 300, p90Ms: 900 },
+      casesWithChangedSelection: { passed: 1, n: 1 },
+    });
   });
 
   it("marks a case that exceeds its timeout", async () => {

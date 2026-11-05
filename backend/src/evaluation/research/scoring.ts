@@ -37,6 +37,19 @@ export interface CaseObservation {
   rankedUrls: string[];
   sources: ObservedSource[];
   answer: string;
+  /** Present when the run had source rerank enabled and the graph reached rankSources. */
+  rerank?: RerankObservation;
+}
+
+export interface RerankObservation {
+  ok: boolean;
+  latencyMs: number;
+  candidates: number;
+  /** Sources the graph kept after ranking (top-N). */
+  selected: number;
+  /** How many of the rerank top-N were outside the rule-order top-N on the same candidates. */
+  changedSelections: number | null;
+  errorCode?: string;
 }
 
 export interface CitationScore {
@@ -217,6 +230,13 @@ export interface RunSummary {
   fetchedUsable: Rate;
   routing: Record<string, number>;
   latency: { all: LatencySummary } & Partial<Record<ResearchEvalCategory, LatencySummary>>;
+  rerank?: {
+    calls: number;
+    failed: number;
+    latency: LatencySummary;
+    /** Cases where rerank changed at least one fetched source versus the rule order. */
+    casesWithChangedSelection: Rate;
+  };
 }
 
 export function summarizeRun(observations: readonly CaseObservation[], scores: readonly CaseScore[]): RunSummary {
@@ -245,7 +265,21 @@ export function summarizeRun(observations: readonly CaseObservation[], scores: r
     );
   }
 
+  const reranked = completed.filter((observation) => observation.rerank !== undefined);
+  const rerankSummary: RunSummary["rerank"] = reranked.length
+    ? {
+        calls: reranked.length,
+        failed: reranked.filter((observation) => !observation.rerank!.ok).length,
+        latency: summarizeLatency(reranked.map((observation) => observation.rerank!.latencyMs)),
+        casesWithChangedSelection: rate(
+          reranked.filter((observation) => (observation.rerank!.changedSelections ?? 0) > 0).length,
+          reranked.filter((observation) => observation.rerank!.ok).length
+        ),
+      }
+    : undefined;
+
   return {
+    ...(rerankSummary ? { rerank: rerankSummary } : {}),
     cases: observations.length,
     completed: completed.length,
     failedOrTimeout: observations.length - completed.length,

@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import { HumanMessage } from "@langchain/core/messages";
 import { describe, expect, it, vi } from "vitest";
 
+import type { RerankScore } from "../../knowledge/model-gateway.js";
 import type { ResearchEvalCase, ResearchEvalStub } from "./dataset.js";
 import { loadResearchDataset } from "./dataset.js";
 import { renderReport, type ResearchEvalProvenance } from "./report.js";
@@ -127,12 +128,38 @@ describe.runIf(liveEnabled)("deep researcher live evaluation", () => {
         activeStub ? "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)" : realFetch(input, config)
       );
 
+      // Time the provider call itself and keep the scores so the rule-order top-N can be compared.
+      type RerankCall = { ok: boolean; latencyMs: number; candidates: number; scores: RerankScore[]; errorCode?: string };
+      const rerankState: { call?: RerankCall } = {};
+      // A function call stops TypeScript from narrowing the reset above to undefined.
+      const takeRerankCall = (): RerankCall | undefined => rerankState.call;
+      const { HttpKnowledgeModelGateway } = await import("../../knowledge/model-gateway.js");
+      const realRerank = HttpKnowledgeModelGateway.prototype.rerank;
+      vi.spyOn(HttpKnowledgeModelGateway.prototype, "rerank").mockImplementation(async function (
+        this: InstanceType<typeof HttpKnowledgeModelGateway>,
+        query,
+        documents,
+        options
+      ) {
+        const started = performance.now();
+        try {
+          const scores = await realRerank.call(this, query, documents, options);
+          rerankState.call = { ok: true, latencyMs: Math.round(performance.now() - started), candidates: documents.length, scores };
+          return scores;
+        } catch (error) {
+          const code = isRecord(error) && typeof error.code === "string" ? error.code : "UNKNOWN";
+          rerankState.call = { ok: false, latencyMs: Math.round(performance.now() - started), candidates: documents.length, scores: [], errorCode: code };
+          throw error;
+        }
+      });
+
       const { deepResearcherGraph } = await import("../../agents/deep-researcher.js");
       const { describeLlmGatewayConfig, resolveModelForPurpose } = await import("../../platform/llm-gateway.js");
       const { messageContentToString } = await import("../../state.js");
 
       const agent = async (item: ResearchEvalCase, signal: AbortSignal): Promise<AgentTrace> => {
         activeStub = item.stub;
+        rerankState.call = undefined;
         try {
           const output: unknown = await deepResearcherGraph.invoke(
             { messages: [new HumanMessage(item.question)] },
@@ -143,7 +170,22 @@ describe.runIf(liveEnabled)("deep researcher live evaluation", () => {
           const fetched = Array.isArray(output.fetchedSources) ? output.fetchedSources.filter(isRecord) : [];
           const extracted = Array.isArray(output.extractedSources) ? output.extractedSources.filter(isRecord) : [];
           const messages = Array.isArray(output.messages) ? output.messages : [];
+          const selected = Array.isArray(output.rankedSources) ? output.rankedSources.length : 0;
+          const rerankCall = takeRerankCall();
+          const rerank = rerankCall
+            ? {
+                ok: rerankCall.ok,
+                latencyMs: rerankCall.latencyMs,
+                candidates: rerankCall.candidates,
+                selected,
+                changedSelections: rerankCall.ok
+                  ? [...rerankCall.scores].sort((left, right) => right.score - left.score).slice(0, selected).filter((score) => score.index >= selected).length
+                  : null,
+                ...(rerankCall.errorCode ? { errorCode: rerankCall.errorCode } : {}),
+              }
+            : undefined;
           return {
+            ...(rerank ? { rerank } : {}),
             answerMode: typeof plan.answerMode === "string" ? plan.answerMode : undefined,
             queries: Array.isArray(plan.queries) ? plan.queries.map(String) : [],
             searchResultCount: Array.isArray(output.searchResults) ? output.searchResults.length : 0,
@@ -195,6 +237,23 @@ describe.runIf(liveEnabled)("deep researcher live evaluation", () => {
       }
       const gateway = describeLlmGatewayConfig();
       const researchModel = resolveModelForPurpose("research");
+      const readJson = async (file: string): Promise<unknown> => {
+        try {
+          return JSON.parse(await readFile(join(outDir, file), "utf8"));
+        } catch {
+          return undefined;
+        }
+      };
+      // Each arm may run at a different commit; keep the commit every arm was produced at.
+      const previous = await readJson("provenance.json");
+      const commits: Record<string, string> = {};
+      if (isRecord(previous)) {
+        if (isRecord(previous.commits)) Object.assign(commits, previous.commits);
+        else if (typeof previous.commit === "string" && Array.isArray(previous.rankings) && previous.rankings.length === 1) {
+          commits[String(previous.rankings[0])] = previous.commit;
+        }
+      }
+      commits[ranking] = execSync("git rev-parse --short HEAD", { cwd: BACKEND_ROOT }).toString().trim();
       const provenance: ResearchEvalProvenance = {
         datasetVersion: loaded.dataset.datasetVersion,
         datasetSha256: loaded.sha256,
@@ -210,7 +269,7 @@ describe.runIf(liveEnabled)("deep researcher live evaluation", () => {
         caseCount: loaded.dataset.cases.length,
         runCount: runs.length,
         date,
-        commit: execSync("git rev-parse --short HEAD", { cwd: BACKEND_ROOT }).toString().trim(),
+        commits,
         notes: [
           "Executed in-process via vitest without Postgres: graph task admission and the tool authorization decision store were replaced by no-op test doubles; tool governance, egress policy and the graph itself were unchanged.",
           "no_source cases stub web_search (empty_search: zero results, and planner-supplied URLs unreachable) or web_fetch (fetch_fail: every fetch returns an error) at the tool boundary. All other cases used live Tavily search and live page fetches.",
@@ -221,7 +280,7 @@ describe.runIf(liveEnabled)("deep researcher live evaluation", () => {
         ],
       };
       await writeFile(join(outDir, "provenance.json"), `${JSON.stringify(provenance, null, 2)}\n`);
-      await writeFile(join(outDir, "report.md"), renderReport(runs, provenance));
+      await writeFile(join(outDir, "report.md"), renderReport(runs, provenance, await readJson("manual-inspection.json")));
     },
     LIVE_TIMEOUT_MS
   );

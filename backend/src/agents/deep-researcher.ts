@@ -74,6 +74,7 @@ import { getLatestUserMessage, getResearchTopic, messageContentToString } from "
 import { validateLocationInput } from "../tools/geocoding/location-normalizer.js";
 import { loadAgentTools } from "../tools/registry.js";
 import { normalizeAiMessageForStream } from "./message-normalization.js";
+import { rerankCandidates } from "./deep-researcher-source-rerank.js";
 import {
   assembleAgentContext,
   contextHardLimitErrorMessage,
@@ -2538,15 +2539,18 @@ async function rankSources(
     }
   }
 
-  const ranked = [...deduped.values()]
+  const ruleRanked = [...deduped.values()]
     .map((result) => {
       const scoring = sourceScore(result, plan.question);
       return { ...result, score: scoring.score, rankReason: scoring.reason };
     })
-    .sort((left, right) => right.score - left.score)
-    .slice(0, Math.max(plan.requiredSourceCount, getMaxFetchedSources(state)));
+    .sort((left, right) => right.score - left.score);
+  // Opt-in (DEEP_RESEARCH_SOURCE_RERANK); falls back to the rule order on any rerank failure.
+  const { ranked } = await rerankCandidates(plan.question, ruleRanked, {
+    context: readCanonicalExecutionContext(_config) ?? undefined,
+  });
 
-  return { rankedSources: ranked };
+  return { rankedSources: ranked.slice(0, Math.max(plan.requiredSourceCount, getMaxFetchedSources(state))) };
 }
 
 function parseFetchOutput(output: string): { content: string; contentType?: string; error?: string } {

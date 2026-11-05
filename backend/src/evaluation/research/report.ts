@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import type { ResearchRun } from "./runner.js";
 import type { LatencySummary, Rate } from "./scoring.js";
 
@@ -14,8 +16,36 @@ export interface ResearchEvalProvenance {
   caseCount: number;
   runCount: number;
   date: string;
-  commit: string;
+  /** Short commit each ranking arm ran at. */
+  commits: Record<string, string>;
   notes: string[];
+}
+
+const manualInspectionSchema = z.object({
+  inspector: z.string(),
+  run: z.string(),
+  criterion: z.string(),
+  items: z.array(z.object({ caseId: z.string(), pass: z.boolean(), unsupportedClaims: z.array(z.string()).default([]) })),
+});
+
+function renderManualInspection(input: unknown): string[] {
+  const parsed = manualInspectionSchema.safeParse(input);
+  if (!parsed.success) return [];
+  const { items } = parsed.data;
+  return [
+    "",
+    "## Manual inspection (no_source)",
+    "",
+    `Run: ${parsed.data.run} · Inspector: ${parsed.data.inspector}`,
+    "",
+    `Criterion: ${parsed.data.criterion}`,
+    "",
+    `No unsupported claims: ${items.filter((item) => item.pass).length}/${items.length}`,
+    "",
+    "| Case | Pass | Unsupported claims |",
+    "|---|---|---|",
+    ...items.map((item) => `| ${item.caseId} | ${item.pass ? "yes" : "no"} | ${item.unsupportedClaims.join("; ") || "-"} |`),
+  ];
 }
 
 function pct(value: Rate): string {
@@ -37,13 +67,14 @@ export const METRIC_DEFINITIONS = [
   "- **Clarify rate**: clarify cases routed by the planner to `answerMode=clarify`.",
   "- **Fetched usable ratio**: usable sources / fetched sources over answerable cases (the top-N sources the ranking selected).",
   "- **Latency**: wall-clock time of one graph invocation, sequential execution, nearest-rank P50 / P90.",
+  "- **Rerank (rerank arm only)**: one rerank call per case that reaches rankSources; call latency is measured around the provider call; a changed top-N means at least one fetched source differs from the rule-order top-N on the same deduped candidates.",
 ];
 
-export function renderReport(runs: readonly ResearchRun[], provenance: ResearchEvalProvenance): string {
+export function renderReport(runs: readonly ResearchRun[], provenance: ResearchEvalProvenance, manualInspection?: unknown): string {
   const lines: string[] = [
     `# Deep Researcher evaluation — ${provenance.datasetVersion}`,
     "",
-    `Date: ${provenance.date} · Cases: ${provenance.caseCount} · Runs: ${provenance.runCount} · LLM: ${provenance.llmProvider}/${provenance.plannerModel} · Search: ${provenance.searchProvider}${provenance.rerankModel ? ` · Rerank: ${provenance.rerankModel}` : ""} · Commit: ${provenance.commit}`,
+    `Date: ${provenance.date} · Cases: ${provenance.caseCount} · Runs: ${provenance.runCount} · LLM: ${provenance.llmProvider}/${provenance.plannerModel} · Search: ${provenance.searchProvider}${provenance.rerankModel ? ` · Rerank: ${provenance.rerankModel}` : ""} · Commits: ${Object.entries(provenance.commits).map(([ranking, commit]) => `${ranking}@${commit}`).join(", ")}`,
     "",
     "Small sample, single run per arm: treat differences of one or two cases as noise.",
     "",
@@ -71,6 +102,11 @@ export function renderReport(runs: readonly ResearchRun[], provenance: ResearchE
   row("Latency P50 / P90 — answerable", (run) => latency(run.summary.latency.answerable));
   row("Latency P50 / P90 — no_source", (run) => latency(run.summary.latency.no_source));
   row("Latency P50 / P90 — clarify", (run) => latency(run.summary.latency.clarify));
+  if (runs.some((run) => run.summary.rerank)) {
+    row("Rerank calls (failed → rule fallback)", (run) => (run.summary.rerank ? `${run.summary.rerank.calls} (${run.summary.rerank.failed})` : "-"));
+    row("Rerank call latency P50 / P90", (run) => (run.summary.rerank ? latency(run.summary.rerank.latency) : "-"));
+    row("Cases where rerank changed the fetched top-N", (run) => (run.summary.rerank ? pct(run.summary.rerank.casesWithChangedSelection) : "-"));
+  }
 
   for (const run of runs) {
     lines.push("", `## Cases — ${run.ranking}`, "", "| Case | Status | Mode | Latency | Usable/Fetched | Cited | Unresolved | Result |", "|---|---|---|---|---|---|---|---|");
@@ -90,6 +126,7 @@ export function renderReport(runs: readonly ResearchRun[], provenance: ResearchE
     lines.push("", `Routing: ${Object.entries(run.summary.routing).map(([key, count]) => `${key}=${count}`).join(", ")}`);
   }
 
+  lines.push(...renderManualInspection(manualInspection));
   if (provenance.notes.length) lines.push("", "## Notes", "", ...provenance.notes.map((note) => `- ${note}`));
   return `${lines.join("\n")}\n`;
 }
