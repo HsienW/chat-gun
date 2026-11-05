@@ -112,7 +112,8 @@ export function normalizeUrl(raw: string): string {
 }
 
 export function extractUrls(answer: string): string[] {
-  return [...new Set([...answer.matchAll(/https?:\/\/[^\s<>"'`）)\]]+/gu)].map((match) => normalizeUrl(match[0])))];
+  // Full-width punctuation ends a URL: answers often write "https://host/path（說明）".
+  return [...new Set([...answer.matchAll(/https?:\/\/[^\s<>"'`）)\]（，。、；：！？「」【】《》]+/gu)].map((match) => normalizeUrl(match[0])))];
 }
 
 export function scoreCitations(answer: string, sources: readonly ObservedSource[]): CitationScore {

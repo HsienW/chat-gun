@@ -1,0 +1,76 @@
+# research-eval-v1 · 2026-11-05 · analysis
+
+Hand-written interpretation of `report.md` (generated). All numbers come from `run-rule.json` and
+`run-rerank.json`; 26 cases, one run per arm, qwen-plus planner and synthesis, Tavily search,
+qwen3-rerank for the rerank arm. Commits: rule@0ff19ff, rerank@5aed561 (rerank off by default; the
+rerank arm sets `DEEP_RESEARCH_SOURCE_RERANK=true`).
+
+## Baseline (rule ranking)
+
+| Metric | Value |
+|---|---|
+| Citation verification pass rate | 3/14 (21.4%) |
+| Citation precision | 31/54 (57.4%) |
+| — `[n]` markers resolving to a usable source | 25/37 |
+| — raw URLs resolving to a usable source | 6/17 |
+| No-source: states the failure | 6/6 |
+| No-source: automatic refusal pass (no `[n]` evidence marker) | 1/6 |
+| No-source: manual pass (no unsupported specific claim) | 1/6 |
+| Clarify routed to clarify | 4/4 |
+| Fetched usable ratio | 43/70 (61.4%) |
+| Latency P50 / P90, all 26 | 24.9s / 37.3s |
+| Latency P50 / P90, answerable 16 | 30.0s / 42.4s |
+
+Two answerable questions (ans-05, ans-13) were answered by the planner in `direct` mode without
+search, so the citation metrics cover 14 answers.
+
+What fails is synthesis, not retrieval: every citing answer had at least one usable source, yet 11
+of 14 cited something unusable. Failures split into `[n]` markers that point at sources whose fetch
+failed or returned under 200 characters (7 answers), and URLs the model wrote that were never
+fetched or were not usable (6 answers; 2 answers have both). On no-source cases the graph never
+fabricated an answer outright — all 6 said no usable source was obtained — but 5 of 6 still added
+specific dates, versions or publication-status claims from prior knowledge (see
+`manual-inspection-rule.json`), and nos-03 emitted `[1][2]` with zero sources.
+
+## Rerank arm versus rule
+
+| Metric | rule | rerank |
+|---|---|---|
+| Citation verification pass rate | 3/14 | 4/14 |
+| Citation precision | 31/54 | 36/66 |
+| Fetched usable ratio | 43/70 | 44/70 |
+| No-source automatic refusal pass | 1/6 | 2/6 |
+| No-source manual pass | 1/6 | 3/6 |
+| Answerable latency P50 / P90 | 30.0s / 42.4s | 32.1s / 41.6s |
+| Rerank calls / failures | — | 18 / 0 |
+| Rerank call latency P50 / P90 | — | 0.5s / 1.1s |
+| Cases where rerank changed the fetched top-5 | — | 16/18 |
+
+Reading the comparison:
+
+- **Ranking does change what gets fetched**: on 16 of 18 calls the reranked top-5 differed from the
+  rule top-5 over the same 3–27 deduped candidates.
+- **No measurable quality gain at this sample size.** Answerable differences are one case (3→4 of
+  14) and one fetched source (43→44 of 70). The no-source cases show how large run-to-run noise
+  is: every fetch there is stubbed to fail, so whichever sources ranking picks, none becomes usable
+  and the evidence the model sees is the same kind of failure in both arms. Ranking cannot explain
+  their swing from 1/6 to 3/6 — that is LLM variance between two runs, larger than any answerable
+  difference.
+- **The metric limits what rerank can show.** "Usable" means fetched without error and ≥ 200
+  characters; it measures reachability, not relevance, and the dominant failure (synthesis citing
+  unusable or unfetched sources) happens after ranking.
+- **Cost**: one extra provider call per researched question, P50 0.5s / P90 1.1s, no failures in 18
+  calls; end-to-end latency differences between arms (±2s at P50/P90) are within run-to-run noise.
+  Rerank token usage was not recorded in this run.
+
+Decision: keep rerank behind the flag, off by default. Enabling it is cheap (~0.5s P50) and
+fail-safe, but this evaluation does not show a quality benefit; a relevance label per fetched
+source, or a citation guard in synthesis, is needed before rerank can be judged on quality.
+
+## Caveats
+
+- 26 hand-written cases, one run per arm; no gold answers. Live web results change over time.
+- The no-source refusal detector is a keyword heuristic; manual inspection was done by the coding
+  agent that wrote the evaluation, not an independent reviewer.
+- Ran in-process via vitest without Postgres; admission and the authorization decision store were
+  no-op doubles. DNS for egress used DoH because the local resolver returned fake-ip answers.

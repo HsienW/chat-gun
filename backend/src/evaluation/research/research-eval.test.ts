@@ -66,6 +66,13 @@ describe("citation scoring", () => {
     expect(extractCitationMarkers("依據來源 [2]、[3]，以及 [1，2]")).toEqual([1, 2, 3]);
   });
 
+  it("ends a URL at full-width punctuation", () => {
+    expect(extractUrls("官方頁面 https://kubernetes.io/releases/（官方發布日曆）與 https://github.com/k/k/releases，原始")).toEqual([
+      "https://kubernetes.io/releases",
+      "https://github.com/k/k/releases",
+    ]);
+  });
+
   it("normalizes URLs from prose and markdown links", () => {
     expect(extractUrls("See (https://Example.org/b/). Also [x](https://example.com/a#top)")).toEqual([
       "https://example.org/b",

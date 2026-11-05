@@ -32,6 +32,7 @@ import type { RerankScore } from "../../knowledge/model-gateway.js";
 import type { ResearchEvalCase, ResearchEvalStub } from "./dataset.js";
 import { loadResearchDataset } from "./dataset.js";
 import { renderReport, type ResearchEvalProvenance } from "./report.js";
+import { readManualInspections } from "./rescore.cli.js";
 import { runResearchEvaluation, type AgentTrace, type ResearchRun } from "./runner.js";
 
 vi.mock("../../tools/authorization/tool-authorization.js", async (importOriginal) => {
@@ -280,7 +281,7 @@ describe.runIf(liveEnabled)("deep researcher live evaluation", () => {
         ],
       };
       await writeFile(join(outDir, "provenance.json"), `${JSON.stringify(provenance, null, 2)}\n`);
-      await writeFile(join(outDir, "report.md"), renderReport(runs, provenance, await readJson("manual-inspection.json")));
+      await writeFile(join(outDir, "report.md"), renderReport(runs, provenance, await readManualInspections(outDir)));
     },
     LIVE_TIMEOUT_MS
   );

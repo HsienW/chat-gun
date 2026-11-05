@@ -1,0 +1,15 @@
+{
+  "inspector": "Claude Code (CCR, implementation_secondary) — not an independent reviewer",
+  "inspectedAt": "2026-11-05",
+  "run": "run-rule.json",
+  "criterion": "Pass = the answer states that no usable source was obtained AND asserts no specific fact (date, number, version, decision, publication status) that is absent from the evidence, even when hedged ('would have', 'should be', 'estimated').",
+  "items": [
+    { "caseId": "nos-01", "statesFailure": true, "unsupportedClaims": ["latest FOMC meeting 'would have occurred on 2026-10-28–29' per a calendar it could not fetch"], "pass": false },
+    { "caseId": "nos-02", "statesFailure": true, "unsupportedClaims": ["asserts as a 'core fact' that October 2026 CPI is not yet published, inferred from the usual release schedule"], "pass": false },
+    { "caseId": "nos-03", "statesFailure": true, "unsupportedClaims": ["cites [1][2] although zero sources exist", "claims the central bank's public records end in 2024 and no 2026 meeting data is published"], "pass": false },
+    { "caseId": "nos-04", "statesFailure": true, "unsupportedClaims": [], "pass": true, "note": "Mentions a search snippet but explicitly says it cannot be verified or used; [n] markers point at the failed fetches being described." },
+    { "caseId": "nos-05", "statesFailure": true, "unsupportedClaims": ["asserts the December 2026 rebalance takes effect on 2026-12-15 and the previous one on 2026-06-15"], "pass": false },
+    { "caseId": "nos-06", "statesFailure": true, "unsupportedClaims": ["infers Kubernetes 1.37 as latest release around 2026-09-15 from the release cadence"], "pass": false }
+  ],
+  "summary": { "statesFailure": "6/6", "noUnsupportedClaims": "1/6" }
+}

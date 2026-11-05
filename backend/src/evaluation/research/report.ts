@@ -34,9 +34,9 @@ function renderManualInspection(input: unknown): string[] {
   const { items } = parsed.data;
   return [
     "",
-    "## Manual inspection (no_source)",
+    `## Manual inspection (no_source) — ${parsed.data.run}`,
     "",
-    `Run: ${parsed.data.run} · Inspector: ${parsed.data.inspector}`,
+    `Inspector: ${parsed.data.inspector}`,
     "",
     `Criterion: ${parsed.data.criterion}`,
     "",
@@ -70,7 +70,11 @@ export const METRIC_DEFINITIONS = [
   "- **Rerank (rerank arm only)**: one rerank call per case that reaches rankSources; call latency is measured around the provider call; a changed top-N means at least one fetched source differs from the rule-order top-N on the same deduped candidates.",
 ];
 
-export function renderReport(runs: readonly ResearchRun[], provenance: ResearchEvalProvenance, manualInspection?: unknown): string {
+export function renderReport(
+  runs: readonly ResearchRun[],
+  provenance: ResearchEvalProvenance,
+  manualInspections: readonly unknown[] = []
+): string {
   const lines: string[] = [
     `# Deep Researcher evaluation — ${provenance.datasetVersion}`,
     "",
@@ -126,7 +130,7 @@ export function renderReport(runs: readonly ResearchRun[], provenance: ResearchE
     lines.push("", `Routing: ${Object.entries(run.summary.routing).map(([key, count]) => `${key}=${count}`).join(", ")}`);
   }
 
-  lines.push(...renderManualInspection(manualInspection));
+  for (const inspection of manualInspections) lines.push(...renderManualInspection(inspection));
   if (provenance.notes.length) lines.push("", "## Notes", "", ...provenance.notes.map((note) => `- ${note}`));
   return `${lines.join("\n")}\n`;
 }
