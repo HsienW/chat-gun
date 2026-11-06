@@ -1759,6 +1759,42 @@ test("a search filter holding a credential is not copied into the findings", asy
 
 const AUTH = ["author", "ization"].join("");
 const BEARER = "Bea" + "rer";
+const CREDENTIAL_FIELD = `pass${"word"}`;
+// Independent structural reconstructions, not product source or captured evidence.
+const BOOLEAN_RECONSTRUCTION = `attached${"Cookie"} = ${"false"},`;
+const COMPOSITE_RECONSTRUCTION = `response${"Cookie"}: \`\${COOKIE_ALIAS}=\${chunk}.\${codec.seal(chunk)}; Secure; SameSite=Strict\``;
+const streamJsonToolResult = content => JSON.stringify({ type: "user", message: { role: "user", content: [
+  { type: "tool_result", tool_use_id: "scan-fixture", content },
+] } });
+const credentialValueCases = [
+  ["a reconstructed boolean evidence field", BOOLEAN_RECONSTRUCTION, []],
+  ["an upper-case boolean before a brace", `${CREDENTIAL_FIELD}: ${"TRUE"}}`, []],
+  ["a mixed-case boolean and compound field", `db${"PaSsWoRd"}: ${"FaLsE"}]`, []],
+  ["an unchanged non-boolean language literal", `${CREDENTIAL_FIELD}=${"None"}`, ["credential_assignment"]],
+  ["a quoted boolean literal", `${CREDENTIAL_FIELD}: "${"false"}"`, ["credential_assignment"], []],
+  ["a boolean-prefixed literal", `${CREDENTIAL_FIELD}=false${"suffix"}`, ["credential_assignment"]],
+  ["a reconstructed three-interpolation cookie header", COMPOSITE_RECONSTRUCTION, []],
+  ["a composite with a literal segment", `${CREDENTIAL_FIELD}=\${alias}=abcd${"1234"}`, ["credential_assignment"]],
+  ["a call with a quoted literal argument", `${CREDENTIAL_FIELD}=\`\${codec.seal('literal')}\``, ["credential_assignment"]],
+  ["a call with a numeric literal argument", `${CREDENTIAL_FIELD}=\`\${codec.seal(1234)}\``, ["credential_assignment"]],
+  ["a numeric argument after long spacing", `${CREDENTIAL_FIELD}=\`\${codec.seal(${" ".repeat(8000)}1234)}\``, ["credential_assignment"]],
+  ["a credential-name constant with a quoted literal", `SESSION_${"COOKIE"} = "fixture_session"`, ["credential_assignment"], []],
+  ["an unquoted interpolation composite", `${CREDENTIAL_FIELD}=\${first}.\${second}`, []],
+  ["a double-quoted interpolation composite", `${CREDENTIAL_FIELD}="\${first}:\${second}"`, []],
+  ["a single-quoted interpolation composite", `${CREDENTIAL_FIELD}='\${first}/\${second}'`, []],
+  ["a function interpolation with identifier arguments", `${CREDENTIAL_FIELD}=\`\${codec.seal(first, second)}\``, []],
+  ["a function interpolation with escaped whitespace", `${CREDENTIAL_FIELD}=\`\${codec.seal(\n first,\tsecond\n)}\``, []],
+  ["every closed composite separator", `${CREDENTIAL_FIELD}=\`=.:/-_@#?&+|\${first}=.:/-_@#?&+|\${second}=.:/-_@#?&+|\``, []],
+  ["a composite with an unsupported separator", `${CREDENTIAL_FIELD}=\`\${first}%\${second}\``, ["credential_assignment"]],
+  ["a composite with a literal suffix", `${CREDENTIAL_FIELD}=\`\${first}.\${second}suffix\``, ["credential_assignment"]],
+  ["a boolean followed by another credential", `attached${"Cookie"}=false, api_${"key"}=abcd${"1234"}`, ["credential_assignment"]],
+  ["a composite followed by another credential", `${CREDENTIAL_FIELD}=\`\${first}.\${second}\`; api_${"key"}=abcd${"1234"}`, ["credential_assignment"]],
+  ["a literal backslash after a boolean prefix", `${CREDENTIAL_FIELD}=false\\suffix`, ["credential_assignment"]],
+  ["the unchanged bare-null parenthesis boundary", `${CREDENTIAL_FIELD}=${"null"})`, ["credential_assignment"]],
+  ["the unchanged escaped quoted null", `${CREDENTIAL_FIELD}: "${"null"}"`, ["credential_assignment"], []],
+  ...["", " ", "\t", "\n", "\r", '"', "'", ",", ";", "}", ")", "]"].map((suffix, index) =>
+    [`a bare boolean boundary ${index}`, `${CREDENTIAL_FIELD}=${"false"}${suffix}`, []]),
+];
 for (const [label, line, expected] of [
   ["a template header", `headers: { ${AUTH}: \`${BEARER} \${options.credential}\` },`, []],
   ["a double-quoted template", `"${AUTH}": "${BEARER} \${token}"`, []],
@@ -1786,6 +1822,10 @@ for (const [label, line, expected] of [
   ["a JWT", `ey${"JhbGciOiJIUzI1NiJ9"}.${"eyJzdWIiOiIxMjM0In0"}.${"c2lnbmF0dXJl"}`, ["jwt"]],
   ["a word fixture", `sk-${"test-credential-value-123456"}`, []],
   ["a key embedded after a word fixture", `sk-${"test-credential-value-123456"} sk-${"proj-Ab3dE5gH7jK9"}`, ["provider_key"]],
+  ...credentialValueCases.flatMap(([label, line, expected, escapedExpected = expected]) => [
+    [label, line, expected],
+    [`stream-json ${label}`, streamJsonToolResult(line), escapedExpected],
+  ]),
 ]) {
   test(`secret rules for ${label}`, () => {
     assert.deepEqual(secretCategories(line), expected);
