@@ -51,7 +51,7 @@ export type ModelStreamOutputKind = (typeof MODEL_STREAM_OUTPUT_KINDS)[number];
 ```
 
 - `messageId` 沿用模組內既有 `opaqueIdSchema`（trim、1–256），與其他事件的識別碼一致，不另定長度。
-  - 注意：`opaqueIdSchema` 含 `.trim()`，Zod 會回傳去除前後空白的值。為符合 spec「值原樣保留」，測試只使用不含前後空白的合法值；含前後空白的輸入屬於輸入正規化，不視為改寫語意。若審查認為必須拒收含前後空白的值，改為 `z.string().min(1).max(256).regex(/^\S(?:.*\S)?$/)` 並於本 design 記錄。
+  - 決定（Master 2026-11-04，回應 review-plan-qwen-02 M1）：沿用 `opaqueIdSchema` 的 `.trim()`。spec 寫明「訊息身分依既有不透明識別碼規則去除前後空白，其餘合法值原樣保留」；trim 是契約層對 `messageId` 唯一的正規化。含前後空白但 trim 後合法的 `messageId` 通過，結果為 trim 後的值（D6 第 11 案）。不採用 regex 拒收方案 `z.string().min(1).max(256).regex(/^\S(?:.*\S)?$/)`：會與其他事件識別碼的既有行為分歧。
 - `textOffset` 使用 `.int().nonnegative().safe()`，對齊既有 `sequence` 的 `.int().positive().safe()` 寫法；`NaN`、`Infinity`、小數、負數、超過安全整數皆被拒。
 - 三個欄位各自 `.optional()`，不加 `.default()`，不使用 `z.coerce`。
 - 維持 `.strict()`；`delta` 定義不變。
@@ -65,11 +65,13 @@ export type ModelStreamOutputKind = (typeof MODEL_STREAM_OUTPUT_KINDS)[number];
 
 kernel 兩個入口都委派 contracts schema，擴充後自動生效。新增測試鎖定行為（見 D6），避免未來在 kernel 加入白名單時剝除欄位。
 
+保留註記（回應 review-plan-qwen-02 m3）：在 `packages/kernel/src/events.ts` 的 `parseRuntimeEventPayload` JSDoc 加一句「payload 欄位由 contracts `RUNTIME_EVENT_PAYLOAD_SCHEMAS` 單一定義；kernel MUST NOT 另設欄位白名單、剝除或轉換欄位」。只加註解，不改任何執行行為；欄位保留仍以 D6 第 8–10 案測試為準。
+
 ### D4：版本與 schemaVersion
 
 - contracts、kernel、sdk、testkit 一起升為 `0.1.0-alpha.4`；kernel、sdk、testkit 對其他 harness 套件的相依改為 `0.1.0-alpha.4`；root lockfile 同步。
 - `RUNTIME_EVENT_SCHEMA_VERSION` 維持 `"1.0.0"`，依 alpha.3 前例。理由：envelope 結構不變；payload 擴充為選用欄位；版本相容性由套件精確版本與 chat-gun 的功能開關管理。CHANGELOG 必須明載「alpha.3 以前的 strict 消費端不接受帶新欄位的 payload，producer 只能在消費端升級後發送」。
-- 此項列為 Open Question 1，由 Master 確認。
+- 決定（Master 2026-11-04，原 Open Question 1，回應 review-plan-qwen-02 M2）：維持 `"1.0.0"`，`RUNTIME_EVENT_SCHEMA_VERSION` 不修改。
 
 ### D5：CHANGELOG
 
@@ -89,6 +91,10 @@ contracts（`packages/contracts/src/contracts.test.ts` 新增 `describe("model.s
 5. 不合法值，逐一一案：`messageId` 為 `""`、`"   "`、257 字元、數字；`outputKind` 為 `"reasoning"`、`""`；`textOffset` 為 `-1`、`1.5`、`Number.NaN`、`Number.POSITIVE_INFINITY`、`Number.MAX_SAFE_INTEGER + 1`、字串 `"0"`。全部失敗。
 6. `delta` 長度 65,537 且身分欄位合法：失敗。
 7. 以 `MODEL_STREAM_OUTPUT_KINDS` 逐值驗證皆通過。
+11. `messageId: "  message-1  "`（其餘欄位合法）：通過，結果 `messageId` 為 `"message-1"`，其餘欄位值不變。
+12. `textOffset: Number.MAX_SAFE_INTEGER`（其餘欄位合法）：通過，值不變（回應 review-plan-qwen-02 m2，與第 5 案的 `MAX_SAFE_INTEGER + 1` 構成邊界）。
+
+> 編號說明：第 11、12 案為規劃審查後追加，屬 contracts 測試；為維持既有引用（第 8–10 案為 kernel、D7 引用第 2、4、5 案），不重新編號。
 
 contracts API surface：既有 `src/api-surface.test.ts` 在更新 `api-surface.json` 後須通過；不更新時必須失敗（以實際執行確認）。
 
@@ -127,11 +133,15 @@ Codex 依序執行並保存輸出：
 
 ## Risks / Trade-offs
 
-- `messageId` 的 `.trim()` 正規化（D2 注意事項）。
-- schemaVersion 不升版的相容性取捨（D4、Open Question 1）。
+- `messageId` 的 `.trim()` 正規化：已決定接受（D2），producer 若依賴含前後空白的原值做去重或對帳會錯配；以 spec 明文與 D6 第 11 案鎖定行為。
+- schemaVersion 不升版的相容性取捨（D4）：alpha.3 以前的 strict 消費端拒收帶新欄位的 payload，以 CHANGELOG 與 chat-gun 功能開關管理。
+- kernel 欄位保留只以測試與 JSDoc 註記防護，沒有程式碼級強制（D3）。
 - 四套件同步升版會讓 sdk、testkit 出現「無行為變更」的版本，換取相依樹一致。
 
-## Open Questions
+## Resolved Questions
 
-1. **`RUNTIME_EVENT_SCHEMA_VERSION` 是否維持 `1.0.0`**：CCR 建議維持（alpha.3 前例、envelope 不變、版本由精確套件版本管理）。若 Master 要求升為 `1.1.0`，需另外評估 chat-gun 與 kernel 的版本相容檢查，並回到 PLAN_DRAFT 修訂。
-2. **gun-harness 施工基準分支**：目前 checkout 為 `v0.0.3/feat/deduplicated-governed-outcome-alpha.3` @ `3d9f25f`。請 Master 指定從哪個分支切出施工分支（建議以已發布 alpha.3 的提交為基準）。
+Master 於 2026-11-04 決定（依據 review-plan-qwen-02 的 M1、M2）：
+
+1. **`RUNTIME_EVENT_SCHEMA_VERSION` 是否維持 `1.0.0`**：維持 `1.0.0`，不升版（D4）。
+2. **gun-harness 施工基準分支**：從 `3d9f25f` 切出新分支 `v0.0.4/feat/model-stream-answer-identity` 施工（Task 1.1）。
+3. **`messageId` trim 與「原樣保留」**：沿用 `opaqueIdSchema` 的 trim；spec 寫明「依既有不透明識別碼規則去除前後空白，其餘合法值原樣保留」（D2）。
