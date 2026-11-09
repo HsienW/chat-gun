@@ -5,6 +5,11 @@ import { join } from "node:path";
 import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { TRUSTED_PRINCIPAL_HEADERS } from "../../runtime/authorization/principal.js";
+import { executionContextSchema } from "../../runtime/execution-context/execution-context.js";
+import { createGraphEntryContextResolver } from "../../runtime/execution-context/graph-entry.js";
+import { instrumentGraphWithExecutionContext } from "../../runtime/execution-context/instrument-graph.js";
+import { TRUSTED_SCOPE_FIELDS } from "../../runtime/execution-context/read-execution-context.js";
 import { createNoopOpikTracer } from "../../platform/tracing/opik/opik-tracer.js";
 import type {
   AgentRunMetadata,
@@ -513,5 +518,151 @@ describe("runExperiment", () => {
       "COMPLETED",
       "SKIPPED",
     ]);
+  });
+});
+
+describe("default agent runner trusted identity", () => {
+  const authenticatedAt = new Date("2026-11-09T00:00:00.000Z");
+  const admittedTaskId = "admitted-task-1";
+
+  function agentContext(threadId: string, itemId: string) {
+    return {
+      signal: new AbortController().signal,
+      agentConfig: { model: "agent-a", provider: "qwen", promptVersion: "weather-v1" },
+      threadId,
+      runId: `${threadId}:${itemId}`,
+      taskId: itemId,
+    };
+  }
+
+  // The real graph entry and instrumentation around a stub graph, so the test exercises the same
+  // identity resolution the deep-researcher graph uses without a database or model.
+  function entryWrappedStubGraph() {
+    const received: Array<{ configurable: Record<string, unknown> }> = [];
+    const stub = {
+      invoke: vi.fn(async (_input: unknown, config: { configurable: Record<string, unknown> }) => {
+        received.push(config);
+        return { messages: [new AIMessage("Sunny in Tokyo")] };
+      }),
+      getState: vi.fn(async () => ({ values: {} })),
+    };
+    const admission = { admit: vi.fn(async () => admittedTaskId) };
+    const graph = instrumentGraphWithExecutionContext(
+      stub,
+      createGraphEntryContextResolver(stub, admission),
+    );
+    return { graph, received, admission };
+  }
+
+  it("builds the trusted gateway fields the graph entry accepts for each item", () => {
+    const build = experimentTestInternals.createEvaluationGraphConfigurable;
+    const tokyo = build(agentContext("experiment-1", "tokyo"), authenticatedAt);
+    const taipei = build(agentContext("experiment-1", "taipei"), authenticatedAt);
+
+    expect(Object.keys(tokyo).sort()).toEqual([
+      "thread_id",
+      "run_id",
+      "request_id",
+      TRUSTED_PRINCIPAL_HEADERS.principalId,
+      TRUSTED_PRINCIPAL_HEADERS.principalType,
+      TRUSTED_PRINCIPAL_HEADERS.tenantId,
+      TRUSTED_PRINCIPAL_HEADERS.roles,
+      TRUSTED_PRINCIPAL_HEADERS.scopes,
+      TRUSTED_PRINCIPAL_HEADERS.authSource,
+      TRUSTED_PRINCIPAL_HEADERS.authenticatedAt,
+      TRUSTED_SCOPE_FIELDS.scopeId,
+      TRUSTED_SCOPE_FIELDS.scopeType,
+    ].sort());
+    expect(tokyo).toMatchObject({
+      thread_id: "experiment-1",
+      run_id: "experiment-1:tokyo",
+      [TRUSTED_PRINCIPAL_HEADERS.principalType]: "user",
+      [TRUSTED_PRINCIPAL_HEADERS.roles]: "",
+      [TRUSTED_PRINCIPAL_HEADERS.scopes]: "",
+      [TRUSTED_PRINCIPAL_HEADERS.authSource]: "trusted_gateway",
+      [TRUSTED_PRINCIPAL_HEADERS.authenticatedAt]: authenticatedAt.toISOString(),
+      [TRUSTED_SCOPE_FIELDS.scopeType]: "tenant",
+    });
+    expect(tokyo[TRUSTED_SCOPE_FIELDS.scopeId]).toBe(tokyo[TRUSTED_PRINCIPAL_HEADERS.tenantId]);
+    expect(tokyo.request_id).not.toBe(taipei.request_id);
+    expect(tokyo.run_id).not.toBe(taipei.run_id);
+  });
+
+  it("isolates the evaluation identity of different experiments", () => {
+    const build = experimentTestInternals.createEvaluationGraphConfigurable;
+    const first = build(agentContext("experiment-1", "tokyo"), authenticatedAt);
+    const second = build(agentContext("experiment-2", "tokyo"), authenticatedAt);
+
+    expect(first[TRUSTED_PRINCIPAL_HEADERS.principalId]).not.toBe(second[TRUSTED_PRINCIPAL_HEADERS.principalId]);
+    expect(first[TRUSTED_PRINCIPAL_HEADERS.tenantId]).not.toBe(second[TRUSTED_PRINCIPAL_HEADERS.tenantId]);
+    expect(first[TRUSTED_SCOPE_FIELDS.scopeId]).not.toBe(second[TRUSTED_SCOPE_FIELDS.scopeId]);
+  });
+
+  it("reaches the graph through the real entry with a canonical execution context", async () => {
+    const { graph, received, admission } = entryWrappedStubGraph();
+    const context = agentContext("experiment-1", "tokyo");
+    const expected = experimentTestInternals.createEvaluationGraphConfigurable(context, authenticatedAt);
+
+    const result = await experimentTestInternals.runDefaultAgent(dataset.items[0], context, graph);
+
+    expect(result.response).toBe("Sunny in Tokyo");
+    expect(admission.admit).toHaveBeenCalledTimes(1);
+    expect(received).toHaveLength(1);
+    const executionContext = executionContextSchema.parse(received[0].configurable.execution_context);
+    expect(executionContext).toMatchObject({
+      requestId: expected.request_id,
+      threadId: "experiment-1",
+      runId: "experiment-1:tokyo",
+      taskId: admittedTaskId,
+      principal: {
+        principalId: expected[TRUSTED_PRINCIPAL_HEADERS.principalId],
+        principalType: "user",
+        tenantId: expected[TRUSTED_PRINCIPAL_HEADERS.tenantId],
+        roles: [],
+        scopes: [],
+        authSource: "trusted_gateway",
+      },
+      scope: {
+        scopeId: expected[TRUSTED_SCOPE_FIELDS.scopeId],
+        scopeType: "tenant",
+        tenantId: expected[TRUSTED_PRINCIPAL_HEADERS.tenantId],
+      },
+    });
+  });
+
+  it("keeps rejecting entry calls without trusted identity and ignores caller-supplied context", async () => {
+    const { graph, received } = entryWrappedStubGraph();
+    const callerContext = {
+      requestId: "caller-request",
+      threadId: "experiment-1",
+      runId: "experiment-1:tokyo",
+      taskId: "caller-task",
+      attempt: 1,
+      principal: {
+        principalId: "caller-principal",
+        principalType: "user",
+        tenantId: "caller-tenant",
+        roles: [],
+        scopes: [],
+        authSource: "trusted_gateway",
+        authenticatedAt: authenticatedAt.toISOString(),
+      },
+      scope: { scopeId: "caller-tenant", scopeType: "tenant", tenantId: "caller-tenant" },
+    };
+
+    await expect(
+      graph.invoke(
+        { messages: [] },
+        {
+          configurable: {
+            thread_id: "experiment-1",
+            run_id: "experiment-1:tokyo",
+            request_id: "request-1",
+            execution_context: callerContext,
+          },
+        },
+      ),
+    ).rejects.toThrow();
+    expect(received).toHaveLength(0);
   });
 });

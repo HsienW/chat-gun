@@ -20,7 +20,7 @@ export type {
   PrincipalType,
 } from "@gun-ai/harness-contracts";
 
-const TRUSTED_PRINCIPAL_HEADERS = {
+export const TRUSTED_PRINCIPAL_HEADERS = {
   principalId: "x-bff-principal-id",
   principalType: "x-bff-principal-type",
   tenantId: "x-bff-tenant-id",

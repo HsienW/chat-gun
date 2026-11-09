@@ -6,6 +6,12 @@ import { executionContextSchema, executionIdSchema, type ExecutionContext } from
 
 export type ExecutionEnvironment = "development" | "production" | "unknown";
 
+/** Trusted gateway fields that carry the runtime scope next to the trusted principal headers. */
+export const TRUSTED_SCOPE_FIELDS = {
+  scopeId: "x-bff-scope-id",
+  scopeType: "x-bff-scope-type",
+} as const;
+
 const CORRELATION_KEYS = {
   requestId: ["requestId", "request_id", "x-request-id"],
   threadId: ["threadId", "thread_id"],
@@ -160,8 +166,8 @@ function readTrustedIdentity(
   }
   const principalResult = parseTrustedPrincipal(trustedHeaders);
   if (principalResult.ok) {
-    const scopeId = configurable["x-bff-scope-id"];
-    const scopeType = configurable["x-bff-scope-type"];
+    const scopeId = configurable[TRUSTED_SCOPE_FIELDS.scopeId];
+    const scopeType = configurable[TRUSTED_SCOPE_FIELDS.scopeType];
     const parsedScopeType = SCOPE_TYPES.find((candidate) => candidate === scopeType);
     if (
       typeof scopeId !== "string" ||

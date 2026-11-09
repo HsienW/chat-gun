@@ -276,6 +276,8 @@ describe("RuntimeToolDispatchPipeline", () => {
     const pipeline = createRuntimeToolDispatchPipeline({
       ...dependencies,
       taskStepAdapter: undefined,
+      // Without an explicit null pool, production defaults build a PostgreSQL adapter from DATABASE_URL.
+      pool: null,
     });
     const executor = pipeline.createExecutor(descriptor.toolName, createSourceExecutor());
 
@@ -285,6 +287,33 @@ describe("RuntimeToolDispatchPipeline", () => {
       type: "rejected_before_dispatch",
       errorCode: "TOOL_DISPATCH_DEPENDENCY_UNAVAILABLE",
     });
+    expect(dependencies.runnerExecute).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the assembled task-step adapter cannot start", async () => {
+    const descriptor = createDescriptor(true);
+    const dependencies = createDependencies(createRegistry(descriptor));
+    const taskStepAdapter: ToolDispatchTaskStepAdapter = {
+      start: vi.fn(async () => {
+        throw new Error("task-step store unavailable");
+      }),
+      complete: vi.fn(async () => undefined),
+      fail: vi.fn(async () => undefined),
+    };
+    const pipeline = createRuntimeToolDispatchPipeline({
+      ...dependencies,
+      taskStepAdapter,
+      pool: null,
+    });
+    const executor = pipeline.createExecutor(descriptor.toolName, createSourceExecutor());
+
+    const outcome = await executor.executeTyped({ value: "x" }, runnableConfig);
+
+    expect(outcome).toEqual({
+      type: "rejected_before_dispatch",
+      errorCode: "TASK_STEP_UNAVAILABLE",
+    });
+    expect(taskStepAdapter.start).toHaveBeenCalled();
     expect(dependencies.runnerExecute).not.toHaveBeenCalled();
   });
 
