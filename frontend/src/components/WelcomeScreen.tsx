@@ -1,7 +1,8 @@
-import { InputForm, type DeepResearchToggle, type SubmitHandler } from './InputForm';
+import { InputForm, type ComposerText, type DeepResearchToggle, type SubmitHandler } from './InputForm';
 import { LOGO_SRC, type EntryDefinition } from '@/lib/entries';
 
 interface WelcomeScreenProps {
+  draft?: ComposerText;
   entry: EntryDefinition;
   handleSubmit: SubmitHandler;
   onCancel: () => void;
@@ -22,6 +23,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   deepResearch,
   onNewConversation,
   newConversationDisabled,
+  draft,
 }) => (
   <div className="flex flex-col items-center justify-center text-center px-4 flex-1 mb-16 w-full max-w-3xl mx-auto gap-4">
     <div className="flex flex-col items-center gap-6">
@@ -40,6 +42,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
     </div>
     <div className="w-full mt-4">
       <InputForm
+        draft={draft}
         onSubmit={handleSubmit}
         isLoading={isLoading}
         onCancel={onCancel}

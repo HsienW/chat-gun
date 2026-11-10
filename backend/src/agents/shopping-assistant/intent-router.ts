@@ -46,9 +46,11 @@ export type ShoppingIntentRouteResult =
   | { status: "provider_error"; failureCode: "INTENT_ROUTING_PROVIDER_ERROR"; attempts: number }
   | { status: "cancelled"; failureCode: "INTENT_ROUTING_CANCELLED"; attempts: number };
 
+import type { UsageAttribution } from "../../platform/usage/attribution.js";
+
 export interface ShoppingIntentRouter {
   readonly promptVersion: string;
-  route(message: string, signal?: AbortSignal): Promise<ShoppingIntentRouteResult>;
+  route(message: string, signal?: AbortSignal, attribution?: UsageAttribution): Promise<ShoppingIntentRouteResult>;
 }
 
 export interface LlmShoppingIntentRouterOptions {
@@ -107,7 +109,7 @@ export class LlmShoppingIntentRouter implements ShoppingIntentRouter {
     this.maxAttempts = options.maxAttempts ?? 2;
   }
 
-  async route(message: string, signal?: AbortSignal): Promise<ShoppingIntentRouteResult> {
+  async route(message: string, signal?: AbortSignal, attribution?: UsageAttribution): Promise<ShoppingIntentRouteResult> {
     const prompt = [
       new SystemMessage(SHOPPING_INTENT_SYSTEM_PROMPT),
       new HumanMessage(`Customer message:\n${message}`),
@@ -119,7 +121,7 @@ export class LlmShoppingIntentRouter implements ShoppingIntentRouter {
       try {
         response = await this.options
           .createModel()
-          .invoke(prompt, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+          .invoke(prompt, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout, attribution });
       } catch (error) {
         // A timeout is an upstream failure; only the caller's signal means cancellation.
         if (signal?.aborted) return { status: "cancelled", failureCode: "INTENT_ROUTING_CANCELLED", attempts: attempt };

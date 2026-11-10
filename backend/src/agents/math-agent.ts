@@ -1,5 +1,6 @@
 import { AIMessage, BaseMessage } from "@langchain/core/messages";
 import { RunnableConfig } from "@langchain/core/runnables";
+import { REGISTERED_GRAPH_IDS, instrumentGraphWithUsageAttribution, readUsageAttribution } from "../platform/usage/attribution.js";
 import { END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph";
 import { createHash } from "node:crypto";
 
@@ -121,7 +122,7 @@ async function callModel(
       model: getEnv("MATH_MODEL").trim() || undefined,
       temperature: Number(process.env.MATH_TEMPERATURE ?? 0.1),
     });
-    const response = await llm.invoke(modelInput);
+    const response = await llm.invoke(modelInput, { signal: config.signal, attribution: readUsageAttribution(config) });
     return { messages: [response] };
   } catch (error) {
     if (!isContextHardLimitError(error)) throw error;
@@ -145,10 +146,10 @@ function resolveMathExecutionContext(input: unknown, config: unknown) {
     : readExecutionContext(input, config, "production");
 }
 
-export const mathAgentGraph = mathDispatchPipelineEnabled
+export const mathAgentGraph = instrumentGraphWithUsageAttribution(mathDispatchPipelineEnabled
   ? instrumentGraphWithExecutionContext(
       governedMathGraph,
       resolveMathExecutionContext,
       getRuntimeIdentityStatusInstrumentation(),
     )
-  : governedMathGraph;
+  : governedMathGraph, REGISTERED_GRAPH_IDS.mathAgent);

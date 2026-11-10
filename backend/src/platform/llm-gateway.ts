@@ -33,16 +33,39 @@ import {
   StructuredOutputRefusalError,
 } from "./structured-output-repair.js";
 import type { RepairStrategy } from "./llm-fallback.js";
+import type { UsageAttribution } from "./usage/attribution.js";
+import { callKindForPurpose, recordProviderUsage } from "./usage/runtime.js";
+import { tokenUsageFromText } from "./usage/token-usage.js";
+import type { EnabledUsageModel } from "./usage/budget-configuration.js";
 
 configureNetwork();
 
 export type ModelPurpose = "chat" | "math" | "research" | "vision" | "tool";
+
+let configuredChatDefaults: Pick<ChatModelOptions, "thinkingEnabled"> = {};
+export function configureChatModelDefaults(defaults: Pick<ChatModelOptions, "thinkingEnabled">): void {
+  configuredChatDefaults = Object.freeze({ ...defaults });
+}
+export function chatModelDefaults(): Readonly<Pick<ChatModelOptions, "thinkingEnabled">> { return configuredChatDefaults; }
+export function supportsConfiguredThinkingControl(): boolean { return getConfiguredLlmProvider() === "qwen"; }
+let usageModelValidator: (model: EnabledUsageModel) => void = () => {};
+export function configureUsageModelValidator(validator: (model: EnabledUsageModel) => void): void { usageModelValidator = validator; }
+
+export function enabledChatModels(requests: readonly Pick<ChatModelOptions, "purpose" | "model">[]) {
+  const config = getAgentRuntimeConfig();
+  const providers = [...new Set([getConfiguredLlmProvider(), ...(config.llmFallbackEnabled ? getDefaultFallbackPolicy().fallbackProviders : [])])];
+  return requests.flatMap(request => providers.map(provider => ({ provider,
+    model: resolveProviderModel(provider, request.purpose ?? "chat", request.model),
+    callKind: callKindForPurpose(request.purpose ?? "chat"),
+  })));
+}
 
 export type ChatResponseFormat = {
   type: "json_object";
 };
 
 export interface ChatModelOptions {
+  thinkingEnabled?: boolean;
   model?: string;
   purpose?: ModelPurpose;
   temperature?: number;
@@ -55,6 +78,7 @@ type ChatModelInput = unknown;
 type ChatModelOutput = BaseMessage;
 
 export type ChatModelInvokeOptions = {
+  attribution?: UsageAttribution;
   signal?: AbortSignal;
   runId?: string;
   taskId?: string;
@@ -1280,6 +1304,7 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
   constructor(
     private readonly options: Required<Pick<ChatModelOptions, "temperature" | "maxRetries">> & {
       model: string;
+      thinkingEnabled?: boolean;
       baseUrl: string;
       provider: Extract<LlmProviderName, "openai-compatible" | "qwen">;
       apiKey?: string;
@@ -1360,6 +1385,7 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
       try {
         const body = {
           model: this.options.model,
+          ...(this.options.thinkingEnabled === undefined ? {} : { enable_thinking: this.options.thinkingEnabled }),
           temperature: this.options.temperature,
           messages: toOpenAiMessages(requestInput),
           ...(this.options.responseFormat ? { response_format: this.options.responseFormat } : {}),
@@ -1375,6 +1401,12 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
           signal: invokeOptions?.signal,
         });
         const responseText = await response.text();
+
+        recordProviderUsage({
+          provider: this.options.provider, model: this.options.model,
+          callKind: callKindForPurpose(this.options.purpose),
+          ...tokenUsageFromText(responseText, endpointKind, runtimeConfig.llmProviderResponseMaxBytes),
+        }, invokeOptions?.attribution);
 
         if (!response.ok) {
           throw createProviderHttpError(
@@ -1514,6 +1546,7 @@ class QwenGateway implements ProviderGateway {
     const purpose = options.purpose ?? "chat";
     return new OpenAiCompatibleChatModel({
       model: resolveProviderModel("qwen", purpose, options.model),
+      thinkingEnabled: options.thinkingEnabled,
       baseUrl: getQwenBaseUrl(),
       provider: "qwen",
       apiKey: getQwenApiKey() || undefined,
@@ -1532,6 +1565,7 @@ class CcrAnthropicChatModel implements ChatModelInvoker {
       model: string;
       baseUrl: string;
       apiKey?: string;
+      purpose: ModelPurpose;
     }
   ) {}
 
@@ -1571,6 +1605,11 @@ class CcrAnthropicChatModel implements ChatModelInvoker {
           signal: invokeOptions?.signal,
         });
         const responseText = await response.text();
+
+        recordProviderUsage({
+          provider, model: this.options.model, callKind: callKindForPurpose(this.options.purpose),
+          ...tokenUsageFromText(responseText, endpointKind, runtimeConfig.llmProviderResponseMaxBytes),
+        }, invokeOptions?.attribution);
 
         if (!response.ok) {
           throw createProviderHttpError(
@@ -1635,6 +1674,7 @@ class CcrGateway implements ProviderGateway {
     }
 
     return new CcrAnthropicChatModel({
+      purpose,
       model: resolveProviderModel(provider, purpose, options.model),
       baseUrl,
       apiKey: getCcrApiKey() || undefined,
@@ -1720,6 +1760,7 @@ class ConfiguredLlmGateway implements LlmGateway {
     invoker: ChatModelInvoker
   ): ChatModelInvoker {
     const purpose = options.purpose ?? "chat";
+    usageModelValidator({ provider, model: resolveProviderModel(provider, purpose, options.model), callKind: callKindForPurpose(purpose) });
     return new TracedChatModelInvoker(
       invoker,
       provider,

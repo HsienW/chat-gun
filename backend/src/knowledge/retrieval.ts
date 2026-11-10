@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { ExecutionContext } from "../runtime/execution-context/execution-context.js";
+import type { UsageAttribution } from "../platform/usage/attribution.js";
 import {
   egressPolicyErrorCodeSchema,
   observedEgressReasonCodeSchema,
@@ -82,6 +83,7 @@ export type RetrievalEvidence = z.infer<typeof retrievalEvidenceSchema>;
 export type Citation = z.infer<typeof citationSchema>;
 
 export interface KnowledgeSearchRequest {
+  attribution?: UsageAttribution;
   query: string;
   topK?: number;
   sourceTypes?: readonly KnowledgeSourceType[];
@@ -167,6 +169,7 @@ export async function retrieveCandidates(request: KnowledgeSearchRequest): Promi
   const { config, gateway, store } = request;
   const callOptions = {
     credential: request.credential,
+    attribution: request.attribution,
     ...(request.signal ? { signal: request.signal } : {}),
     ...(request.context ? { context: request.context } : {}),
   };

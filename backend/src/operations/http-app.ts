@@ -16,6 +16,8 @@ type SubjectRightsHttpDependencies = Parameters<typeof createSubjectRightsHttpAp
 export interface OperationsHttpAppDependencies {
   healthProbe(): Promise<RuntimeHealthProjection> | RuntimeHealthProjection;
   subjectRightsProvider?(): SubjectRightsHttpDependencies | undefined;
+  usageMetadata?(): Promise<{ version: "usage-ledger@1"; currency: string | null; timeZone: string; keyPrefix: string; shared: boolean; pricesComplete: boolean; ready: boolean }>;
+  acceptNewWorkCheck?(): Promise<boolean>;
 }
 
 let subjectRightsHttpDependencies: SubjectRightsHttpDependencies | undefined;
@@ -72,11 +74,19 @@ export function createOperationsHttpApp(
 ) {
   const app = new Hono();
 
+  app.get("/internal/usage-ledger/metadata", async (context) => {
+    try {
+      if (!dependencies.usageMetadata) return context.json({ code: "usage_budget_unavailable" }, 503);
+      const metadata = await dependencies.usageMetadata();
+      return context.json(metadata, metadata.ready ? 200 : 503);
+    } catch { return context.json({ code: "usage_budget_unavailable" }, 503); }
+  });
+
   app.route("/", metricsApp);
   app.route(
     "/internal/subject-rights",
     createSubjectRightsProxy(
-      dependencies.subjectRightsProvider ?? (() => undefined),
+      dependencies.subjectRightsProvider ?? (() => subjectRightsHttpDependencies),
     ),
   );
   app.get("/health/live", async (context) => {
@@ -85,6 +95,8 @@ export function createOperationsHttpApp(
   });
   app.get("/health/readiness", async (context) => {
     const health = await dependencies.healthProbe();
+    const ready = dependencies.acceptNewWorkCheck ? await dependencies.acceptNewWorkCheck().catch(() => false) : true;
+    if (!ready) return context.json({ ...health.acceptNewWork, status: "not_ready", reasonCodes: [...health.acceptNewWork.reasonCodes, "usage_ledger_unavailable"], degraded: health.degraded }, 503);
     return context.json(
       { ...health.acceptNewWork, degraded: health.degraded },
       health.acceptNewWork.status === "ready" ? 200 : 503,

@@ -10,6 +10,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { END, START, type BaseCheckpointSaver } from "@langchain/langgraph";
 
 import type { ChatModelInvoker } from "../../platform/llm-gateway.js";
+import { REGISTERED_GRAPH_IDS, readUsageAttribution } from "../../platform/usage/attribution.js";
 import type { AuditPayload } from "../../platform/observability.js";
 import { withOpikNode } from "../../platform/tracing/opik/opik-graph.js";
 import type {
@@ -47,7 +48,7 @@ import {
   type ShoppingTurnEvidence,
 } from "./state.js";
 
-export const SHOPPING_ASSISTANT_GRAPH_ID = "shopping_assistant";
+export const SHOPPING_ASSISTANT_GRAPH_ID = REGISTERED_GRAPH_IDS.shoppingAssistant;
 export const SHOPPING_PRODUCT_REQUEST_PROMPT_VERSION = "shopping-product-request-v1";
 export const SHOPPING_POLICY_REQUEST_PROMPT_VERSION = "shopping-policy-request-v1";
 
@@ -193,7 +194,8 @@ export function createShoppingAssistantGraph(
     const turnId = human?.id ?? `turn:${state.messages.length}`;
     const result = await dependencies.intentRouter.route(
       human ? messageText(human.content) : "",
-      config.signal
+      config.signal,
+      readUsageAttribution(config)
     );
     const turn: ShoppingTurn =
       result.status === "routed"
@@ -259,7 +261,7 @@ export function createShoppingAssistantGraph(
       .bindTools([kbSearchTool])
       .invoke(
         [new SystemMessage(KB_REQUEST_SYSTEM_PROMPTS[intent]), human],
-        config.signal ? { signal: config.signal } : undefined
+        { signal: config.signal, attribution: readUsageAttribution(config) }
       );
     // Only one kb_search call may leave this node, whatever the model produced.
     const toolCalls = (isAIMessage(response) ? response.tool_calls ?? [] : [])
@@ -446,7 +448,8 @@ export function createShoppingAssistantGraph(
       answer = await dependencies.policyAnswerSynthesizer.synthesize(
         human ? messageText(human.content) : "",
         outcome.result,
-        config.signal
+        config.signal,
+        readUsageAttribution(config)
       );
     } catch {
       await audit("shopping.policy.synthesis_failed", {

@@ -40,6 +40,8 @@ export type SubmitHandler = (
   attachments: ProcessedImageAttachment[]
 ) => void;
 
+export type ComposerText = { value: string; onChange: (value: string) => void };
+
 /** The explicit, user-controlled deep research switch of Gun Chat. */
 export interface DeepResearchToggle {
   enabled: boolean;
@@ -53,6 +55,7 @@ const DEEP_RESEARCH_LABELS = {
 } as const;
 
 interface InputFormProps {
+  draft?: ComposerText;
   onSubmit: SubmitHandler;
   onCancel: () => void;
   isLoading: boolean;
@@ -73,8 +76,11 @@ export const InputForm: React.FC<InputFormProps> = ({
   deepResearch,
   onNewConversation,
   newConversationDisabled,
+  draft,
 }) => {
-  const [internalInputValue, setInternalInputValue] = useState('');
+  const [localInputValue, setLocalInputValue] = useState('');
+  const internalInputValue = draft?.value ?? localInputValue;
+  const setInternalInputValue = draft?.onChange ?? setLocalInputValue;
   const [effort, setEffort] = useState('medium');
   const [model, setModel] = useState(DEFAULT_MODEL);
   const [imageItems, setImageItems] = useState<ImageUploadItem[]>([]);
@@ -385,6 +391,7 @@ export const InputForm: React.FC<InputFormProps> = ({
             <button
               type="button"
               role="switch"
+              aria-label={DEEP_RESEARCH_LABELS.label}
               aria-checked={deepResearch.enabled}
               aria-describedby={deepResearch.locked ? deepResearchHintId : undefined}
               disabled={deepResearch.locked}

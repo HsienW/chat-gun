@@ -1,4 +1,5 @@
 import { RunnableConfig } from "@langchain/core/runnables";
+import { REGISTERED_GRAPH_IDS, instrumentGraphWithUsageAttribution, readUsageAttribution } from "../platform/usage/attribution.js";
 import { Annotation, END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph";
 
 import { getEnv } from "../platform/env.js";
@@ -118,7 +119,7 @@ async function callModel(
     if (!llm.bindTools) {
       throw new Error("The selected model does not support bindTools.");
     }
-    const response = await llm.bindTools(tools).invoke(modelInput);
+    const response = await llm.bindTools(tools).invoke(modelInput, { signal: config.signal, attribution: readUsageAttribution(config) });
     return { executionTaskId, messages: [normalizeAiMessageForStream(response)] };
   } catch (error) {
     if (!isContextHardLimitError(error)) throw error;
@@ -176,7 +177,7 @@ function resolveMcpExecutionContext(input: unknown, config: unknown) {
 
 const compiledMcpAgentGraph = builder.compile();
 
-export const mcpAgentGraph = instrumentGraphWithExecutionContext(
+export const mcpAgentGraph = instrumentGraphWithUsageAttribution(instrumentGraphWithExecutionContext(
   applyInteractionGovernance(
     instrumentGraphWithOpik(compiledMcpAgentGraph, "mcp_agent"),
     productionInteractionOrchestrator
@@ -187,4 +188,4 @@ export const mcpAgentGraph = instrumentGraphWithExecutionContext(
     resolveMcpExecutionContext,
   ),
   getRuntimeIdentityStatusInstrumentation(),
-);
+), REGISTERED_GRAPH_IDS.mcpAgent);

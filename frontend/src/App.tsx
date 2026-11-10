@@ -16,6 +16,8 @@ import { House } from 'lucide-react';
 import { WelcomeScreen } from '@/components/WelcomeScreen';
 import { ChatMessagesView } from '@/components/ChatMessagesView';
 import { ChatSettings } from '@/components/ChatSettings';
+import { AdmissionNotice } from '@/components/AdmissionNotice';
+import { createAdmissionTransport, parseAdmissionFailure, type AdmissionFailure } from '@/lib/admission-error';
 import { HomeScreen } from '@/components/HomeScreen';
 import { LeaveConfirmDialog } from '@/components/LeaveConfirmDialog';
 import { ModeSwitcher } from '@/components/ModeSwitcher';
@@ -283,6 +285,10 @@ function ChatWorkspace({
     createInitialStreamActivityState
   );
   const [deepResearchEnabled, setDeepResearchEnabled] = useState(false);
+  const [admissionFailure, setAdmissionFailure] = useState<AdmissionFailure>();
+  const [researchBlockedUntil, setResearchBlockedUntil] = useState<number>();
+  const [inputDraft, setInputDraft] = useState('');
+  const submittedDraftRef = useRef('');
   const [pendingNavigation, setPendingNavigation] = useState<EntryState | null>(null);
   const [streamErrorMessage, setStreamErrorMessage] = useState<string | null>(null);
   const [cancelledMessage, setCancelledMessage] = useState<Message | null>(null);
@@ -312,7 +318,7 @@ function ChatWorkspace({
   const activeRunHintRef = useRef<InteractionActiveRunHint | undefined>(undefined);
   const runtimeEventBufferRef = useRef(new BoundedRuntimeEventBuffer());
   const interactionMetadataFetch = useMemo(
-    () => createInteractionMetadataFetch(),
+    () => createAdmissionTransport(createInteractionMetadataFetch()),
     []
   );
 
@@ -360,6 +366,19 @@ function ChatWorkspace({
     }
     clarificationResumePendingRef.current = false;
     setIdentityFailure(parseIdentityFailure(error));
+    const admission = parseAdmissionFailure(error);
+    if (admission) {
+      setAdmissionFailure(admission);
+      setStreamErrorMessage(null);
+      setRateLimitRetryAfter(null);
+      setInputDraft(submittedDraftRef.current);
+      if (admission.code === 'usage_budget_exhausted' && admission.budgetScope === 'deep_research') {
+        setDeepResearchEnabled(false);
+        setResearchBlockedUntil(admission.retryAt ?? Number.MAX_SAFE_INTEGER);
+      }
+      dispatchStreamActivity({ type: 'streamFinished', messagesLengthAtTerminal: messagesRef.current.length });
+      return;
+    }
     // Best-effort fast path; reducer terminal idempotency is the primary guard.
     if (
       isStreamAbortError(error) &&
@@ -509,7 +528,7 @@ function ChatWorkspace({
     onError: handleStreamError,
     onFinish: handleStreamFinish,
     onUpdateEvent: handleStreamUpdate,
-    callerOptions: { fetch: interactionMetadataFetch },
+    callerOptions: interactionMetadataFetch,
   });
 
   useEffect(() => {
@@ -540,6 +559,7 @@ function ChatWorkspace({
     (request: ToolConfirmationRequest, decision: ToolConfirmationDecision) => {
       if (rateLimitRetryAfter !== null) return;
       if (!beginDispatch()) return;
+
       dispatchStreamActivity({ type: 'resetForAgentOrSubmit' });
       dispatchStreamActivity({ type: 'streamStarted' });
       setStreamErrorMessage(null);
@@ -632,6 +652,8 @@ function ChatWorkspace({
 
       if (!submittedInputValue.trim() && attachments.length === 0) return;
       if (!beginDispatch()) return;
+      submittedDraftRef.current = submittedInputValue;
+      setAdmissionFailure(undefined);
 
       // Toggling deep research only changes the target; it never resets the
       // workspace, so archived activity and the thread stay (design D4).
@@ -854,7 +876,7 @@ function ChatWorkspace({
   const deepResearch = entryDefinition.supportsDeepResearch
     ? {
         enabled: deepResearchEnabled,
-        locked: isRunActive || isAwaitingClarification,
+        locked: isRunActive || isAwaitingClarification || (researchBlockedUntil !== undefined && researchBlockedUntil > Date.now()),
         onChange: setDeepResearchEnabled,
       }
     : undefined;
@@ -878,12 +900,12 @@ function ChatWorkspace({
         <LeaveConfirmDialog onConfirm={confirmNavigation} onCancel={cancelNavigation} />
       )}
       <div
-        className={`flex-1 min-h-0 ${
-          displayMessages.length === 0 ? 'flex' : ''
-        }`}
+        className="flex-1 min-h-0 flex flex-col"
       >
+        {admissionFailure && <AdmissionNotice failure={admissionFailure} />}
         {displayMessages.length === 0 ? (
           <WelcomeScreen
+            draft={{ value: inputDraft, onChange: setInputDraft }}
             entry={entryDefinition}
             handleSubmit={handleSubmit}
             isLoading={thread.isLoading || isDispatching}
@@ -895,6 +917,7 @@ function ChatWorkspace({
           />
         ) : (
           <ChatMessagesView
+            draft={{ value: inputDraft, onChange: setInputDraft }}
             messages={displayMessages}
             isLoading={isChatLoading}
             scrollAreaRef={scrollAreaRef}

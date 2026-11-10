@@ -1,5 +1,6 @@
 import { AIMessage, BaseMessage, HumanMessage, ToolMessage, coerceMessageLikeToMessage } from "@langchain/core/messages";
 import { RunnableConfig } from "@langchain/core/runnables";
+import { REGISTERED_GRAPH_IDS, instrumentGraphWithUsageAttribution, readUsageAttribution } from "../platform/usage/attribution.js";
 import { StructuredToolInterface } from "@langchain/core/tools";
 import { Annotation, Command, END, START, StateGraph, interrupt } from "@langchain/langgraph";
 import { MemorySaver } from "@langchain/langgraph-checkpoint";
@@ -812,7 +813,7 @@ async function analyzeImages(
       new HumanMessage({
         content: content as HumanMessage["content"],
       }),
-    ]);
+    ], { signal: config.signal, attribution: readUsageAttribution(config) });
 
     return {
       imageObservations: [messageContentToString(response)],
@@ -1080,7 +1081,8 @@ async function repairWeatherRequest(
   context?: {
     question?: string;
     notFound?: Extract<WeatherToolResult, { status: "not_found" }>;
-  }
+  },
+  config?: RunnableConfig
 ): Promise<WeatherRepairCandidate[]> {
   const prompt = [
     "Return only JSON. Do not use markdown.",
@@ -1113,7 +1115,7 @@ async function repairWeatherRequest(
 
   try {
     const llm = createResearchJsonChatModel(state);
-    const response = await llm.invoke(prompt);
+    const response = await llm.invoke(prompt, { signal: config?.signal, attribution: readUsageAttribution(config) });
     const rawContent = messageContentToString(response);
     const parsedResult = parseJsonObjectWithDiagnostics<WeatherRepairResponse>(rawContent);
     if (parsedResult.failureCode || !parsedResult.parsed) {
@@ -1326,7 +1328,8 @@ function coerceWeatherPlannerExtractionPlan(
 
 async function retryWeatherPlannerExtraction(
   question: string,
-  state: typeof DeepResearchState.State
+  state: typeof DeepResearchState.State,
+  config?: RunnableConfig
 ): Promise<ResearchPlan | undefined> {
   const prompt = [
     "Return only JSON. Do not use markdown.",
@@ -1350,7 +1353,7 @@ async function retryWeatherPlannerExtraction(
 
   try {
     const llm = createResearchJsonChatModel(state);
-    const response = await llm.invoke(prompt);
+    const response = await llm.invoke(prompt, { signal: config?.signal, attribution: readUsageAttribution(config) });
     const rawContent = messageContentToString(response);
     const parsedResult = parseJsonObjectWithDiagnostics<WeatherPlannerExtractionResponse>(rawContent);
     if (parsedResult.failureCode || !parsedResult.parsed) {
@@ -1384,13 +1387,14 @@ async function applyWeatherPlannerExtractionRetry(
   rawPlan: Partial<ResearchPlan> | undefined,
   plan: ResearchPlan,
   question: string,
-  state: typeof DeepResearchState.State
+  state: typeof DeepResearchState.State,
+  config?: RunnableConfig
 ): Promise<ResearchPlan> {
   if (!shouldRetryWeatherPlannerExtraction(rawPlan, plan, question)) {
     return plan;
   }
 
-  const retryPlan = await retryWeatherPlannerExtraction(question, state);
+  const retryPlan = await retryWeatherPlannerExtraction(question, state, config);
   return retryPlan ?? missingWeatherLocationPlan(
     question,
     "Weather intent was detected, but no geocoding-friendly location was provided."
@@ -1473,7 +1477,7 @@ async function planResearch(
           question,
         ].join("\n");
     const llm = createResearchJsonChatModel(state);
-    const response = await llm.invoke(prompt);
+    const response = await llm.invoke(prompt, { signal: config?.signal, attribution: readUsageAttribution(config) });
     const rawContent = messageContentToString(response);
     const parsedResult = parseJsonObjectWithDiagnostics<Partial<ResearchPlan>>(rawContent);
     const parsed = parsedResult.parsed;
@@ -1481,7 +1485,8 @@ async function planResearch(
       parsed,
       coercePlan(parsed, question, state),
       question,
-      state
+      state,
+      config
     );
     await recordWeatherLlmDiagnostic({
       phase: "planner",
@@ -1513,7 +1518,7 @@ async function planResearch(
       ...llmDiagnostics,
     });
     const fallback = fallbackPlan(question, state, formatLlmError(error));
-    const plan = await applyWeatherPlannerExtractionRetry(undefined, fallback, question, state);
+    const plan = await applyWeatherPlannerExtractionRetry(undefined, fallback, question, state, config);
     await recordWeatherLlmDiagnostic({
       phase: "planner",
       resultStatus: plan.answerMode,
@@ -1595,7 +1600,7 @@ async function targetedTools(
       const repairCandidates = await repairWeatherRequest(request, state, {
         question: plan.question,
         notFound: parsedResult,
-      });
+      }, _config);
       let firstClarification: WeatherToolResult | undefined;
       let lastNotFound: WeatherToolResult | undefined;
       let terminalRepairResult: WeatherToolResult | undefined;
@@ -2050,7 +2055,8 @@ function coerceClarificationResolution(
 async function resolveClarificationWithPlanner(
   clarification: WeatherClarificationState,
   userReply: string,
-  state: typeof DeepResearchState.State
+  state: typeof DeepResearchState.State,
+  config?: RunnableConfig
 ): Promise<WeatherClarificationResolution | undefined> {
   const prompt = [
     "Return only JSON. Do not use markdown.",
@@ -2074,7 +2080,7 @@ async function resolveClarificationWithPlanner(
   let response: BaseMessage;
   try {
     const llm = createResearchJsonChatModel(state);
-    response = await llm.invoke(prompt);
+    response = await llm.invoke(prompt, { signal: config?.signal, attribution: readUsageAttribution(config) });
   } catch (error) {
     await recordWeatherLlmDiagnostic({
       phase: "clarification_resolution",
@@ -2276,7 +2282,7 @@ async function resumeClarify(
 
   const resolution = clarification.resolution?.resolutionType === "select_candidate"
     ? clarification.resolution
-    : await resolveClarificationWithPlanner(clarification, userReply, state);
+    : await resolveClarificationWithPlanner(clarification, userReply, state, config);
 
   if (!resolution) {
     const result = createWeatherClarificationErrorResult(
@@ -3032,7 +3038,7 @@ async function synthesizeAnswer(
         ].join("\n\n");
     const model = state.reasoning_model.trim() || undefined;
     const llm = llmGateway.createChatModel({ purpose: "research", model, temperature: 0.1 });
-    const response = await llm.invoke(prompt);
+    const response = await llm.invoke(prompt, { signal: config?.signal, attribution: readUsageAttribution(config) });
     const normalized = normalizeAiMessageForStream(response);
     return {
       messages: [normalized],
@@ -3122,7 +3128,7 @@ const builder = new StateGraph(DeepResearchState)
 const deepResearcherCheckpointer = new MemorySaver();
 const compiledDeepResearcherGraph = builder.compile({ checkpointer: deepResearcherCheckpointer });
 
-export const deepResearcherGraph = instrumentGraphWithExecutionContext(
+export const deepResearcherGraph = instrumentGraphWithUsageAttribution(instrumentGraphWithExecutionContext(
   applyInteractionGovernance(
     instrumentGraphWithOpik(
       compiledDeepResearcherGraph,
@@ -3132,5 +3138,5 @@ export const deepResearcherGraph = instrumentGraphWithExecutionContext(
   ),
   createGraphEntryContextResolver(compiledDeepResearcherGraph, new PgGraphTaskAdmission()),
   getRuntimeIdentityStatusInstrumentation(),
-);
+), REGISTERED_GRAPH_IDS.deepResearcher);
 

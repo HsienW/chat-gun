@@ -10,6 +10,7 @@ import { HttpKnowledgeModelGateway, type KnowledgeModelGateway } from "../knowle
 import { KB_SEARCH_RESULT_VERSION, searchKnowledge } from "../knowledge/retrieval.js";
 import { KNOWLEDGE_SOURCE_TYPES, type KnowledgeStore } from "../knowledge/store.js";
 import { readCanonicalExecutionContext } from "../runtime/execution-context/read-execution-context.js";
+import { readUsageAttribution } from "../platform/usage/attribution.js";
 import { readResolvedSecret, type SecretReference } from "../runtime/tool-dispatch/secret-broker.js";
 
 export const KB_SEARCH_TOOL_NAME = "kb_search";
@@ -70,6 +71,7 @@ export function createKbSearchTool(dependencies: KbSearchDependencies = defaultD
       try {
         const knowledgeConfig = dependencies.config();
         const result = await searchKnowledge({
+          attribution: readUsageAttribution(config),
           query: input.query,
           ...(input.topK !== undefined ? { topK: input.topK } : {}),
           ...(input.sourceTypes !== undefined ? { sourceTypes: input.sourceTypes } : {}),
