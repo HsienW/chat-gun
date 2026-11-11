@@ -20,7 +20,7 @@ import {
   messageContentToDisplayText,
 } from '@/types/messages';
 import { ToolCall } from '@/types/tools';
-import type { DeepResearchToggle, SubmitHandler } from '@/components/InputForm';
+import type { ComposerText, DeepResearchToggle, SubmitHandler } from '@/components/InputForm';
 import type {
   ClarificationReplyPayload,
   ClarificationResumeValue,
@@ -513,6 +513,7 @@ const AiMessageBubble = React.memo(function AiMessageBubble({
 });
 
 interface ChatMessagesViewProps {
+  draft?: ComposerText;
   messages: Message[];
   isLoading: boolean;
   scrollAreaRef: React.RefObject<HTMLDivElement | null>;
@@ -543,6 +544,7 @@ export function ChatMessagesView({
   newConversationDisabled,
   onClarificationResume,
   commercePanel,
+  draft,
 }: ChatMessagesViewProps) {
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -667,6 +669,7 @@ export function ChatMessagesView({
       </ScrollArea>
       <div className="flex-shrink-0">
         <InputForm
+          draft={draft}
           onSubmit={onSubmit}
           isLoading={isLoading}
           onCancel={onCancel}

@@ -3,7 +3,7 @@ import http, { type Server } from "node:http";
 import net from "node:net";
 import { once } from "node:events";
 import { readFileSync } from "node:fs";
-import { describe, it } from "vitest";
+import { describe, it, vi } from "vitest";
 
 import { createServer } from "./server.js";
 import type { ServerDependencies } from "./server.js";
@@ -33,6 +33,151 @@ type StartedServer = {
   url: string;
   close: () => Promise<void>;
 };
+
+describe("client IP consumers", () => {
+  for (const scenario of [
+    { name: "trusted proxy", trustedProxies: ["127.0.0.1"], header: "192.0.2.9,203.0.113.8", expected: "203.0.113.8", status: "forwarded" },
+    { name: "all trusted", trustedProxies: ["127.0.0.0/8"], header: "127.0.0.3,127.0.0.2", expected: "127.0.0.3", status: "all_trusted" },
+  ]) {
+    it(`uses one resolution for rate limit, audit and forwarding: ${scenario.name}`, async () => {
+      const rateKeys: string[] = [];
+      const audit: unknown[] = [];
+      const info = vi.spyOn(console, "info").mockImplementation((line: unknown) => {
+        if (typeof line === "string") audit.push(JSON.parse(line));
+      });
+      try {
+        await withServer((req, res) => {
+          assert.equal(req.headers["x-forwarded-for"], scenario.expected);
+          res.end("{}");
+        }, async (upstream) => {
+          await withBff(createTestConfig(upstream.url, {
+            trustedProxies: scenario.trustedProxies,
+            redisRateLimitUri: "redis://fixture.invalid",
+          }), async (bff) => {
+            const response = await fetch(`${bff.url}/api/langgraph/threads/thread-ip`, {
+              headers: { "x-forwarded-for": scenario.header },
+            });
+            assert.equal(response.status, 200);
+            await response.text();
+          }, {
+            redisClient: { eval: async (_script, _count, key) => {
+              rateKeys.push(String(key));
+              return [1, 29, 0];
+            } },
+            closeRedis: async () => {},
+          });
+        });
+        assert.ok(rateKeys.some(key => key.endsWith(`rate_limit:ip:${scenario.expected}`)));
+        assert.ok(rateKeys.some(key => key.endsWith("rate_limit:user:anonymous")));
+        assert.ok(audit.some(entry => typeof entry === "object" && entry !== null &&
+          "clientIp" in entry && entry.clientIp === scenario.expected &&
+          "forwardingStatus" in entry && entry.forwardingStatus === scenario.status));
+      } finally {
+        info.mockRestore();
+      }
+    });
+  }
+});
+
+describe("run admission connection lifetime", () => {
+  it("releases an allow decision received after the browser cancels admission, without forwarding", async () => {
+    let entered: () => void = () => {}, released: () => void = () => {}, disconnected: () => void = () => {};
+    const checking = new Promise<void>(resolve => { entered = resolve; });
+    const leaseReleased = new Promise<void>(resolve => { released = resolve; });
+    const observedDisconnect = new Promise<void>(resolve => { disconnected = resolve; });
+    let finishCheck: ((value: { kind: "allow"; lease: { expiresAt: number; release: () => void } }) => void) | undefined;
+    let forwarded = 0, releases = 0;
+    await withServer((_req, res) => { forwarded++; res.end("{}"); }, async upstream => {
+      await withBff(createTestConfig(upstream.url), async bff => {
+        const browser = new AbortController();
+        const response = fetch(`${bff.url}/api/langgraph/runs/stream`, { method: "POST", headers: { "content-type": "application/json" }, body: '{"assistant_id":"chatbot"}', signal: browser.signal });
+        const aborted = response.catch(error => { assert.equal(error.name, "AbortError"); });
+        await checking; browser.abort(); await aborted; await observedDisconnect;
+        finishCheck?.({ kind: "allow", lease: { expiresAt: Date.now() + 60000, release: () => { releases++; released(); } } });
+        await leaseReleased; assert.equal(releases, 1); assert.equal(forwarded, 0);
+      }, { admissionPolicy: { check: request => new Promise(resolve => {
+        finishCheck = resolve; request.signal?.addEventListener("abort", disconnected, { once: true }); entered();
+      }) } });
+    });
+  });
+
+  it("injects a replacement policy and subject, blocks all creation routes before upstream, and leaves reads alone", async () => {
+    const checked: Array<{ subject: string; routeKind: string; isResume: boolean }> = [];
+    let forwarded = 0;
+    await withServer((_req, res) => { forwarded++; res.end("{}"); }, async upstream => {
+      await withBff(createTestConfig(upstream.url), async bff => {
+        for (const route of ["/runs", "/runs/stream", "/runs/wait", "/runs/batch", "/crons", "/threads/thread-1/runs/stream", "/threads/thread-1/runs/wait", "/threads/thread-1/crons"]) {
+          const response = await fetch(`${bff.url}/api/langgraph${route}`, { method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ assistant_id: "chatbot", on_disconnect: "cancel", command: { resume: true } }) });
+          assert.equal(response.status, 429, route);
+          assert.equal(response.headers.get("retry-after"), "10");
+          assert.equal((await response.json()).error.code, "run_quota_exhausted");
+        }
+        assert.equal(forwarded, 0);
+        const read = await fetch(`${bff.url}/api/langgraph/threads/thread-1/runs`);
+        assert.equal(read.status, 200); await read.text();
+        assert.equal(forwarded, 1); assert.equal(checked.length, 8);
+        assert.ok(checked.every(value => value.subject === "replacement-visitor" && value.isResume));
+      }, {
+        subjectResolver: { resolve: () => ({ subject: "replacement-visitor" }) },
+        admissionPolicy: { check: value => { checked.push(value); return { kind: "deny", code: "run_quota_exhausted", retryAfterSeconds: 10 }; } },
+      });
+    });
+  });
+
+  it("charges rate quota before admission, never refunds a denial, and safely rejects unknown policy codes", async () => {
+    let forwarded = 0, checked = 0;
+    await withServer((_req, res) => { forwarded++; res.end("{}"); }, async upstream => {
+      await withBff(createTestConfig(upstream.url, { rateLimitMaxRequests: 1 }), async bff => {
+        const send = () => fetch(`${bff.url}/api/langgraph/runs/stream`, { method: "POST", headers: { "content-type": "application/json" }, body: '{"assistant_id":"chatbot"}' });
+        const first = await send(); assert.equal(first.status, 500); assert.equal((await first.json()).error.code, "internal_error");
+        const second = await send(); assert.equal(second.status, 429); await second.text();
+        assert.equal(checked, 1); assert.equal(forwarded, 0);
+      }, { admissionPolicy: {
+        // @ts-expect-error Intentionally invalid policy implementation at the runtime boundary.
+        check: () => {
+        checked++;
+        return { kind: "deny", code: "future_private_code" };
+      } } });
+    });
+  });
+
+  it("preserves disconnect parameters and releases a lease only after verified run cancellation", async () => {
+    const threadId = "11111111-1111-4111-8111-111111111111";
+    const runId = "22222222-2222-4222-8222-222222222222";
+    const runPath = `/threads/${threadId}/runs/${runId}`;
+    let resolveReleased: () => void = () => {};
+    const released = new Promise<void>(resolve => { resolveReleased = resolve; });
+    let releases = 0;
+    const requests: string[] = [];
+    let forwardedBody = "";
+    await withServer((req, res) => {
+      requests.push(req.url ?? "");
+      if (req.url === `${runPath}/cancel?action=interrupt&wait=true`) { res.writeHead(204); res.end(); return; }
+      if (req.method === "GET" && req.url === runPath) { res.end('{"status":"interrupted"}'); return; }
+      req.on("data", chunk => { forwardedBody += String(chunk); });
+      req.on("end", () => {
+        res.writeHead(200, { "content-type": "text/event-stream", "content-location": runPath });
+        res.write(`event: metadata\ndata: ${JSON.stringify({ run_id: runId })}\n\n`);
+      });
+    }, async upstream => {
+      await withBff(createTestConfig(upstream.url), async bff => {
+        const browser = new AbortController();
+        const response = await fetch(`${bff.url}/api/langgraph/threads/${threadId}/runs/stream`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ assistant_id: "chatbot", input: { messages: [] }, on_disconnect: "continue" }),
+          signal: browser.signal,
+        });
+        await response.body?.getReader().read();
+        browser.abort();
+        await released;
+        assert.equal(JSON.parse(forwardedBody).on_disconnect, "continue");
+        assert.equal(releases, 1);
+        assert.deepEqual(requests, [`/threads/${threadId}/runs/stream`, `${runPath}/cancel?action=interrupt&wait=true`, runPath]);
+      }, { admissionPolicy: { check: () => ({ kind: "allow", lease: { expiresAt: Date.now() + 60000, release: () => { releases++; resolveReleased(); } } }) } });
+    });
+  });
+});
 
 describe("trusted runtime configuration boundary", () => {
   it("forwards frontend interaction metadata without replacing native execution identity", async () => {

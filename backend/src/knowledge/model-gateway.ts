@@ -1,6 +1,9 @@
 import { z } from "zod";
 
 import { recordMetric } from "../platform/observability.js";
+import type { UsageAttribution } from "../platform/usage/attribution.js";
+import { recordProviderUsage } from "../platform/usage/runtime.js";
+import { tokenUsageFromBody } from "../platform/usage/token-usage.js";
 import type { ExecutionContext } from "../runtime/execution-context/execution-context.js";
 import {
   createEgressPolicy,
@@ -36,6 +39,7 @@ export interface KnowledgeUsageEvent {
 }
 
 export interface KnowledgeCallOptions {
+  attribution?: UsageAttribution;
   /** Credential resolved by the SecretBroker at the execution edge; never read from the environment here. */
   credential: string;
   signal?: AbortSignal;
@@ -212,14 +216,16 @@ export class HttpKnowledgeModelGateway implements KnowledgeModelGateway {
         },
         this.policy
       );
-      if (!response.ok) {
-        throw new KnowledgeError(classifyHttpFailure(response.status), `Knowledge ${purpose} request failed with HTTP ${response.status}`);
-      }
       let parsedBody: unknown;
       try {
         parsedBody = await response.json();
       } catch {
+        recordProviderUsage({ provider: "qwen", model, callKind: purpose, inputTokens: null, outputTokens: null }, options.attribution);
         throw new KnowledgeError("KB_PROVIDER_ERROR", `Knowledge ${purpose} response is not JSON`);
+      }
+      recordProviderUsage({ provider: "qwen", model, callKind: purpose, ...tokenUsageFromBody(parsedBody, "total-tokens") }, options.attribution);
+      if (!response.ok) {
+        throw new KnowledgeError(classifyHttpFailure(response.status), `Knowledge ${purpose} request failed with HTTP ${response.status}`);
       }
       const tokens = (parsedBody as { usage?: { total_tokens?: unknown } } | null)?.usage?.total_tokens;
       report("succeeded", typeof tokens === "number" ? tokens : null);

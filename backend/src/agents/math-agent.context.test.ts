@@ -22,7 +22,8 @@ describe("math agent shared context", () => {
     });
 
     expect(invoke).toHaveBeenCalledWith(
-      expect.stringContaining("## System policy")
+      expect.stringContaining("## System policy"),
+      { signal: expect.any(AbortSignal), attribution: { graphId: "math_agent" } }
     );
     expect(String(invoke.mock.calls[0]?.[0])).toContain("請繼續推理");
     expect(String(invoke.mock.calls[0]?.[0])).toContain("先說明方法");

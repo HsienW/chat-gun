@@ -4,7 +4,8 @@ import { END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph
 
 import { getEnv } from "../platform/env.js";
 import { isContextHardLimitError } from "../context/context-errors.js";
-import { llmGateway } from "../platform/llm-gateway.js";
+import { chatModelDefaults, llmGateway } from "../platform/llm-gateway.js";
+import { REGISTERED_GRAPH_IDS, instrumentGraphWithUsageAttribution, readUsageAttribution } from "../platform/usage/attribution.js";
 import {
   applyInteractionGovernance,
   productionInteractionOrchestrator,
@@ -40,10 +41,11 @@ async function chatResponse(
       : legacyChatbotPrompt(chatbotInstructions, state.messages);
     const llm = llmGateway.createChatModel({
       purpose: "chat",
+      ...chatModelDefaults(),
       model: getEnv("CHAT_MODEL").trim() || undefined,
       temperature: Number(process.env.CHAT_TEMPERATURE ?? 0.7),
     });
-    const response = await llm.invoke(prompt);
+    const response = await llm.invoke(prompt, { signal: config.signal, attribution: readUsageAttribution(config) });
     return { messages: [response] };
   } catch (error) {
     if (!isContextHardLimitError(error)) throw error;
@@ -56,7 +58,7 @@ const builder = new StateGraph(MessagesAnnotation)
   .addEdge(START, "chat_response")
   .addEdge("chat_response", END);
 
-export const chatbotGraph = applyInteractionGovernance(
+export const chatbotGraph = instrumentGraphWithUsageAttribution(applyInteractionGovernance(
   builder.compile(),
   productionInteractionOrchestrator
-);
+), REGISTERED_GRAPH_IDS.chatbot);

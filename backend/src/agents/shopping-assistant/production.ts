@@ -3,6 +3,7 @@ import {
   createProductionInteractionOrchestrator,
 } from "../../platform/interaction-runtime.js";
 import { getConfiguredLlmCapabilities, llmGateway } from "../../platform/llm-gateway.js";
+import { instrumentGraphWithUsageAttribution } from "../../platform/usage/attribution.js";
 import { auditLogger } from "../../platform/observability.js";
 import { instrumentGraphWithOpik } from "../../platform/tracing/opik/opik-graph.js";
 import { getRuntimeIdentityStatusInstrumentation } from "../../runtime/authorization/identity-status-composition.js";
@@ -23,7 +24,7 @@ import { PgOriginalOperationResolver, unresolvableOriginalOperation } from "./or
 import { LlmPolicyAnswerSynthesizer } from "./policy-answer.js";
 import { createConfiguredSyntheticOrderProvider } from "./order-owner-binding.js";
 
-const { model, temperature, intentTimeoutMs } = readShoppingAssistantModelSettings();
+const { model, temperature, intentTimeoutMs, thinkingEnabled } = readShoppingAssistantModelSettings();
 // Structured output is chosen by declared capability, never by model name.
 const routingCapabilities = getConfiguredLlmCapabilities("chat");
 
@@ -58,15 +59,16 @@ const graph = createShoppingAssistantGraph({
         purpose: "chat",
         model,
         temperature,
+        thinkingEnabled,
         ...(routingCapabilities.supportsStructuredOutput
           ? { responseFormat: { type: "json_object" as const } }
           : {}),
       }),
   }),
   createProductRequestModel: () =>
-    llmGateway.createChatModel({ purpose: "tool", model, temperature }),
+    llmGateway.createChatModel({ purpose: "tool", model, temperature, thinkingEnabled }),
   createOrderRequestModel: () =>
-    llmGateway.createChatModel({ purpose: "tool", model, temperature }),
+    llmGateway.createChatModel({ purpose: "tool", model, temperature, thinkingEnabled }),
   checkDispatchReadiness: createDispatchReadinessCheck(pool),
   confirmationWithdrawal: runtime.confirmationWithdrawal,
   originalOperationResolver,
@@ -76,6 +78,7 @@ const graph = createShoppingAssistantGraph({
       purpose: "chat",
       model,
       temperature,
+      thinkingEnabled,
       ...(routingCapabilities.supportsStructuredOutput
         ? { responseFormat: { type: "json_object" as const } }
         : {}),
@@ -100,11 +103,11 @@ const interactionOrchestrator = createProductionInteractionOrchestrator(
     : {}
 );
 
-export const shoppingAssistantGraph = instrumentGraphWithExecutionContext(
+export const shoppingAssistantGraph = instrumentGraphWithUsageAttribution(instrumentGraphWithExecutionContext(
   applyInteractionGovernance(
     instrumentGraphWithOpik(graph, SHOPPING_ASSISTANT_GRAPH_ID),
     interactionOrchestrator
   ),
   createShoppingAssistantEntryResolver(graph),
   getRuntimeIdentityStatusInstrumentation(),
-);
+), SHOPPING_ASSISTANT_GRAPH_ID);

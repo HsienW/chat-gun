@@ -204,6 +204,6 @@ export function createInteractionMetadataFetch(
         );
       }
     }
-    return baseFetch(input, { ...init, headers });
+    return baseFetch(input, { ...init, credentials: init?.credentials ?? 'include', headers });
   };
 }

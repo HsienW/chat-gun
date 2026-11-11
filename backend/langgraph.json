@@ -9,7 +9,7 @@
     "shopping_assistant": "./src/agents/shopping-assistant/production.ts:shoppingAssistantGraph"
   },
   "http": {
-    "app": "./src/operations/http-app.ts:operationsHttpApp",
+    "app": "./src/application.ts:operationsHttpApp",
     "configurable_headers": {
       "includes": [
         "x-request-id",

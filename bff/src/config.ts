@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import "dotenv/config";
+import { parseTrustedProxies } from "./client-ip.js";
 
 import {
   SCOPE_TYPES,
@@ -182,6 +183,7 @@ function readApiKeyPrincipals(): Map<string, ApiKeyPrincipalProfile> {
 }
 
 export type BffConfig = {
+  trustedProxies?: string[];
   port: number;
   langGraphApiUrl: URL;
   metricsBackendUrl: URL;
@@ -237,6 +239,7 @@ export function loadConfig(): BffConfig {
 
   const apiKeyPrincipals = readApiKeyPrincipals();
   return {
+    trustedProxies: parseTrustedProxies(process.env.BFF_TRUSTED_PROXIES),
     port: readNumber("BFF_PORT", 8787),
     langGraphApiUrl,
     metricsBackendUrl: new URL(

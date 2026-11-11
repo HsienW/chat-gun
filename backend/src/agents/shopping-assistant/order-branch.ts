@@ -8,6 +8,7 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
+import { readUsageAttribution } from "../../platform/usage/attribution.js";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 
 import type { ChatModelInvoker } from "../../platform/llm-gateway.js";
@@ -186,7 +187,7 @@ export function createOrderBranchNodes(dependencies: OrderBranchDependencies) {
     }
     const response = await model
       .bindTools(orderTools)
-      .invoke([new SystemMessage(ORDER_REQUEST_SYSTEM_PROMPT), human], config.signal ? { signal: config.signal } : undefined);
+      .invoke([new SystemMessage(ORDER_REQUEST_SYSTEM_PROMPT), human], { signal: config.signal, attribution: readUsageAttribution(config) });
     const toolCalls = (isAIMessage(response) ? response.tool_calls ?? [] : []).filter(
       (call) => ORDER_TOOL_NAME_SET.has(call.name) && typeof call.id === "string"
     );

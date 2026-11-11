@@ -5,6 +5,9 @@ import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 import { loadConfig, type BffConfig } from "./config.js";
+import { ADMISSION_ERRORS, ALLOW_ALL, PRINCIPAL_SUBJECT_RESOLVER, requestsForRun, validateAdmissionDecision, type RunAdmissionPolicy, type RunLease, type RateLimitSubjectResolver } from "./run-admission.js";
+import { HeldRunLifecycle } from "./run-lifecycle.js";
+import { createClientIpResolver, type ClientIpResolution } from "./client-ip.js";
 import {
   selectPrincipalResolver,
   type ActiveScope,
@@ -101,9 +104,11 @@ const SUPPORTED_INPUT_KINDS = new Set([
 ]);
 
 type RequestContext = {
+  rateLimitSubject?: string;
   requestId: string;
   startedAt: number;
   clientIp: string;
+  forwardingStatus?: ClientIpResolution["forwardingStatus"];
   userId: string;
   tenantId: string;
 };
@@ -145,6 +150,10 @@ type ValidatedActiveRunHint =
     };
 
 export type ServerDependencies = {
+  readinessCheck?: () => Promise<boolean>;
+  onClose?: () => void;
+  admissionPolicy?: RunAdmissionPolicy;
+  subjectResolver?: RateLimitSubjectResolver;
   redisClient?: RedisEvalClient | null;
   closeRedis?: () => Promise<void>;
   principalResolver?: PrincipalResolver;
@@ -255,16 +264,6 @@ function createTrustedRequestDedupKey(
       ])
     )
     .digest("hex");
-}
-
-function getClientIp(req: IncomingMessage): string {
-  const forwardedFor = getHeader(req, "x-forwarded-for");
-  if (forwardedFor) return forwardedFor.split(",")[0]?.trim() || "unknown";
-  return req.socket.remoteAddress ?? "unknown";
-}
-
-function getRateLimitIp(req: IncomingMessage): string {
-  return req.socket.remoteAddress ?? "unknown";
 }
 
 function getRequestId(req: IncomingMessage): ValidatedRequestId {
@@ -676,6 +675,7 @@ function logAudit(
       userId: ctx.userId,
       tenantId: ctx.tenantId,
       clientIp: ctx.clientIp,
+      forwardingStatus: ctx.forwardingStatus,
       ...extra,
     })
   );
@@ -880,13 +880,13 @@ async function checkRedisRateLimit(
       name: "user",
       windowMs: config.rateLimitUserWindowMs,
       maxRequests: config.rateLimitUserMaxRequests,
-      extractKey: () => ctx.userId,
+      extractKey: () => ctx.rateLimitSubject ?? ctx.userId,
     },
     {
       name: "ip",
       windowMs: config.rateLimitIpWindowMs,
       maxRequests: config.rateLimitIpMaxRequests,
-      extractKey: () => getRateLimitIp(req),
+      extractKey: () => ctx.clientIp,
     },
   ].filter((dimension) => dimension.maxRequests > 0 && dimension.windowMs > 0);
 
@@ -913,7 +913,7 @@ function checkLegacyRateLimit(
   now: number
 ): RateLimitDecision {
   const result = limiter.check(
-    `${ctx.tenantId}:${ctx.userId}:${ctx.clientIp}`,
+    `${ctx.tenantId}:${ctx.rateLimitSubject ?? ctx.userId}:${ctx.clientIp}`,
     now
   );
   return {
@@ -1061,7 +1061,8 @@ async function proxyLangGraph(
   reqUrl: URL,
   ctx: RequestContext,
   config: BffConfig,
-  principalResolution: PrincipalResolution
+  principalResolution: PrincipalResolution,
+  admissionPolicy: RunAdmissionPolicy = ALLOW_ALL
 ): Promise<void> {
   if (!ALLOWED_PROXY_METHODS.has(req.method ?? "")) {
     sendJson(res, 405, { error: "Method not allowed" }, ctx.requestId);
@@ -1116,6 +1117,13 @@ async function proxyLangGraph(
   let attemptedUpstreamUrl = upstreamUrls[0];
   let lastUpstreamError: unknown;
   let observedUpstreamStatus: number | undefined;
+  const admissionAbort = new AbortController();
+  const leases: RunLease[] = [];
+  let leasedRun: HeldRunLifecycle | undefined;
+  let didForward = false;
+  let leaseOutcome: "completed" | "rejected" | "abnormal" = "abnormal";
+  const onAdmissionDisconnect = () => { if (!res.writableEnded) admissionAbort.abort(); };
+  res.once("close", onAdmissionDisconnect);
 
   try {
     const body = await readRequestBody(req, config.maxBodyBytes, ctx);
@@ -1179,6 +1187,34 @@ async function proxyLangGraph(
       return;
     }
 
+    const admissionRequests = requestsForRun(req.method, toLangGraphPath(reqUrl.pathname), body, {
+      subject: ctx.rateLimitSubject ?? ctx.userId, clientIp: ctx.clientIp,
+    });
+    for (const request of admissionRequests) {
+      const decision: unknown = await admissionPolicy.check({ ...request, signal: leasedRun
+        ? AbortSignal.any([admissionAbort.signal, leasedRun.controller.signal]) : admissionAbort.signal });
+      if (!validateAdmissionDecision(decision)) {
+        console.error(JSON.stringify({ event: "run_admission_policy_invalid", requestId: ctx.requestId }));
+        sendJson(res, 500, { error: { source: "bff", stage: "run_admission", code: "internal_error", message: "Run admission failed" } }, ctx.requestId);
+        return;
+      }
+      if (decision.kind === "allow" && decision.lease) {
+        leases.push(decision.lease);
+        leasedRun ??= new HeldRunLifecycle({ leases, acceptedAt: decision.lease.acquiredAt ?? Date.now(), timeoutMs: config.upstreamTimeoutMs, requestId: ctx.requestId });
+      }
+      if (admissionAbort.signal.aborted || res.destroyed) return;
+      if (decision.kind === "deny") {
+        const definition = ADMISSION_ERRORS[decision.code];
+        if (decision.retryAfterSeconds) res.setHeader("retry-after", String(decision.retryAfterSeconds));
+        logAudit(ctx, req, definition.status, { errorCode: decision.code, budgetScope: decision.budgetScope });
+        sendJson(res, definition.status, { error: { source: "bff", stage: "run_admission", code: decision.code, message: definition.message,
+          details: { requestId: ctx.requestId, budgetScope: decision.budgetScope, retryAfter: decision.retryAfterSeconds } },
+          ...(decision.retryAfterSeconds ? { retryAfter: decision.retryAfterSeconds } : {}),
+        }, ctx.requestId);
+        return;
+      }
+    }
+
     let upstreamResponse: Response | undefined;
     let activeAbortController: AbortController | undefined;
     let activeTimeout: NodeJS.Timeout | undefined;
@@ -1186,7 +1222,7 @@ async function proxyLangGraph(
 
     for (const upstreamUrl of upstreamUrls) {
       attemptedUpstreamUrl = upstreamUrl;
-      const abortController = new AbortController();
+      const abortController = leasedRun?.controller ?? new AbortController();
       const disconnectReason: BffAbortReason = {
         code: "client_disconnected",
         stage: "langgraph_upstream_proxy",
@@ -1202,29 +1238,27 @@ async function proxyLangGraph(
         stage: "langgraph_upstream_proxy",
         requestId: ctx.requestId,
       };
-      const timeout = setTimeout(
+      const timeout = leasedRun ? undefined : setTimeout(
         () => abortWithReason(abortController, timeoutReason),
         config.upstreamTimeoutMs
       );
       res.once("close", onClientDisconnect);
 
       try {
+        if (leasedRun && Date.now() >= leasedRun.deadline) abortWithReason(abortController, timeoutReason);
+        if (abortController.signal.aborted) throw createBffAbortError(getAbortReason(abortController.signal) ?? timeoutReason);
+        const proxyHeaders = copyRequestHeaders(
+          req, ctx, principalResolution.principal, principalResolution.activeScope, reqUrl.pathname,
+          idempotencyHeader, activeRunHint, config.idempotencyTtlMs, config.legacyHeaderMode
+        );
+        didForward = true;
         upstreamResponse = await fetch(upstreamUrl, {
           method: req.method,
-          headers: copyRequestHeaders(
-            req,
-            ctx,
-            principalResolution.principal,
-            principalResolution.activeScope,
-            reqUrl.pathname,
-            idempotencyHeader,
-            activeRunHint,
-            config.idempotencyTtlMs,
-            config.legacyHeaderMode
-          ),
+          headers: proxyHeaders,
           body,
           signal: abortController.signal,
         });
+        leasedRun?.observeResponse(upstreamResponse, upstreamUrl, proxyHeaders);
         activeAbortController = abortController;
         activeTimeout = timeout;
         break;
@@ -1232,7 +1266,7 @@ async function proxyLangGraph(
         lastAbortReason = getAbortReason(abortController.signal);
         lastUpstreamError = error;
         clearTimeout(timeout);
-        if (lastAbortReason?.code === "client_disconnected") {
+        if (lastAbortReason?.code === "client_disconnected" || leasedRun?.controller.signal.aborted) {
           break;
         }
       } finally {
@@ -1254,6 +1288,7 @@ async function proxyLangGraph(
     res.statusCode = upstreamResponse.status;
     res.statusMessage = upstreamResponse.statusText;
     observedUpstreamStatus = upstreamResponse.status;
+    if (observedUpstreamStatus >= 400 && observedUpstreamStatus < 500) leaseOutcome = "rejected";
     res.setHeader("x-request-id", ctx.requestId);
     copyResponseHeaders(upstreamResponse, res);
 
@@ -1261,6 +1296,7 @@ async function proxyLangGraph(
     if (req.method === "HEAD" || !responseBody) {
       if (activeTimeout) clearTimeout(activeTimeout);
       res.end();
+      if (upstreamResponse.ok) leaseOutcome = "completed";
       return;
     }
 
@@ -1294,6 +1330,7 @@ async function proxyLangGraph(
           requestId: ctx.requestId,
         },
       });
+      if (upstreamResponse.ok) leaseOutcome = "completed";
     } finally {
       if (activeTimeout) clearTimeout(activeTimeout);
     }
@@ -1380,6 +1417,9 @@ async function proxyLangGraph(
     }
 
     sendJson(res, statusForBffErrorCode(envelope.error.code), envelope, ctx.requestId);
+  } finally {
+    res.off("close", onAdmissionDisconnect);
+    await leasedRun?.finish(didForward ? leaseOutcome : "not_forwarded");
   }
 }
 
@@ -1387,6 +1427,9 @@ export function createServer(
   config = loadConfig(),
   dependencies: ServerDependencies = {}
 ): http.Server {
+  const admissionPolicy = dependencies.admissionPolicy ?? ALLOW_ALL;
+  const subjectResolver = dependencies.subjectResolver ?? PRINCIPAL_SUBJECT_RESOLVER;
+  const resolveClientIp = createClientIpResolver(config.trustedProxies ?? []);
   const legacyRateLimiter = new InMemoryRateLimiter(
     config.rateLimitWindowMs,
     config.rateLimitMaxRequests
@@ -1423,7 +1466,7 @@ export function createServer(
     const ctx: RequestContext = {
       requestId: validatedRequestId.requestId,
       startedAt: Date.now(),
-      clientIp: getClientIp(req),
+      ...resolveClientIp(req.socket.remoteAddress, req.headers["x-forwarded-for"]),
       userId: "anonymous",
       tenantId: "public",
     };
@@ -1458,6 +1501,11 @@ export function createServer(
       return;
     }
 
+    const subject = subjectResolver.resolve({ principalId: ctx.userId, cookie: getHeader(req, "cookie") });
+    ctx.rateLimitSubject = subject.subject;
+    if (subject.setCookie) res.setHeader("set-cookie", subject.setCookie);
+    if (subject.event) console.info(JSON.stringify({ event: subject.event, requestId: ctx.requestId }));
+
     if (reqUrl.pathname === "/api/health" || reqUrl.pathname === "/api/bff/health") {
       sendJson(
         res,
@@ -1473,11 +1521,13 @@ export function createServer(
 
     if (reqUrl.pathname === "/api/ready" || reqUrl.pathname === "/api/bff/ready") {
       const upstream = await checkLangGraphReady(config);
+      const profileReady = dependencies.readinessCheck ? await dependencies.readinessCheck().catch(() => false) : true;
       sendJson(
         res,
-        upstream.ok ? 200 : 503,
+        upstream.ok && profileReady ? 200 : 503,
         {
-          status: upstream.ok ? "ready" : "not_ready",
+          status: upstream.ok && profileReady ? "ready" : "not_ready",
+          ...(dependencies.readinessCheck ? { profileReady } : {}),
           langGraphApiUrl: config.langGraphApiUrl.origin,
           upstream,
         },
@@ -1577,7 +1627,8 @@ export function createServer(
         reqUrl,
         ctx,
         config,
-        principalResolution
+        principalResolution,
+        admissionPolicy
       );
       return;
     }
@@ -1650,7 +1701,10 @@ export function createServer(
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   const config = loadConfig();
-  const server = createServer(config);
+  const { composeApplicationProfile } = await import("./application-profile.js");
+  const dependencies = composeApplicationProfile(config);
+  const server = createServer(config, dependencies);
+  server.once("close", () => dependencies.onClose?.());
 
   server.listen(config.port, () => {
     console.info(

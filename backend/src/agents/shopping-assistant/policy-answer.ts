@@ -29,12 +29,15 @@ export class PolicyAnswerOutputError extends Error {
   readonly code = "POLICY_ANSWER_SCHEMA_INVALID";
 }
 
+import type { UsageAttribution } from "../../platform/usage/attribution.js";
+
 export interface PolicyAnswerSynthesizer {
   readonly promptVersion: string;
   synthesize(
     question: string,
     evidence: Extract<KbSearchResult, { outcome: "evidence_found" }>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    attribution?: UsageAttribution
   ): Promise<PolicyAnswer>;
 }
 
@@ -75,14 +78,15 @@ export class LlmPolicyAnswerSynthesizer implements PolicyAnswerSynthesizer {
   async synthesize(
     question: string,
     evidence: Extract<KbSearchResult, { outcome: "evidence_found" }>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    attribution?: UsageAttribution
   ): Promise<PolicyAnswer> {
     const response = await this.createModel().invoke(
       [
         new SystemMessage(POLICY_ANSWER_SYSTEM_PROMPT),
         new HumanMessage(`Question:\n${question}\n\nEvidence:\n${evidenceBlock(evidence)}`),
       ],
-      signal ? { signal } : undefined
+      { signal, attribution }
     );
     const parsed = parsePolicyAnswer(response.content);
     if (parsed === undefined) throw new PolicyAnswerOutputError("Policy answer does not match the expected schema");
