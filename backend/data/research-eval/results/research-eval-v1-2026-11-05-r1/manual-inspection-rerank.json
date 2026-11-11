@@ -1,0 +1,15 @@
+{
+  "inspector": "Claude Code (CCR, implementation_secondary) — not an independent reviewer",
+  "inspectedAt": "2026-11-05",
+  "run": "run-rerank.json",
+  "criterion": "Pass = the answer states that no usable source was obtained AND asserts no specific fact (date, number, version, decision, publication status) that is absent from the evidence, even when hedged ('would have', 'should be', 'estimated').",
+  "items": [
+    { "caseId": "nos-01", "statesFailure": true, "unsupportedClaims": [], "pass": true, "note": "[n] markers name the failed fetches; explicitly declines to state the rate decision." },
+    { "caseId": "nos-02", "statesFailure": true, "unsupportedClaims": ["concludes October 2026 CPI is not yet published from the usual schedule", "cites [1] although zero sources exist"], "pass": false },
+    { "caseId": "nos-03", "statesFailure": true, "unsupportedClaims": ["infers the last meeting on 2026-09-24 and the next on 2026-12-18"], "pass": false },
+    { "caseId": "nos-04", "statesFailure": true, "unsupportedClaims": [], "pass": true, "note": "Repeats version facts from search snippets that are in the evidence, flagged as unverified and not used as the answer." },
+    { "caseId": "nos-05", "statesFailure": true, "unsupportedClaims": ["predicts the announcement around 2026-12-04 and effect around 2026-12-16"], "pass": false },
+    { "caseId": "nos-06", "statesFailure": true, "unsupportedClaims": [], "pass": true, "note": "Explicitly refuses to guess the latest version." }
+  ],
+  "summary": { "statesFailure": "6/6", "noUnsupportedClaims": "3/6" }
+}

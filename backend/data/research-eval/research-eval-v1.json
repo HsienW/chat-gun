@@ -1,0 +1,38 @@
+{
+  "datasetVersion": "research-eval-v1",
+  "description": "Deep Researcher end-to-end evaluation set: answerable research questions run against live search, no-source questions whose search or fetch is stubbed to fail, and ambiguous requests that should be clarified. Questions are hand-written by the project owner's coding agent; there are no gold answers, only behavioural expectations.",
+  "createdAt": "2026-11-05",
+  "categories": {
+    "answerable": "Live web_search and web_fetch. Expected: the answer cites only sources that the graph marked usable.",
+    "no_source": "web_search is stubbed to return no results (stub=empty_search) or every web_fetch is stubbed to fail (stub=fetch_fail). Expected: the answer states the limitation and cites nothing.",
+    "clarify": "The request lacks the object or scope needed to research it. Expected: the planner routes to answerMode=clarify."
+  },
+  "cases": [
+    { "caseId": "ans-01", "category": "answerable", "language": "en", "question": "What new language features were introduced in TypeScript 5.7? Please cite sources." },
+    { "caseId": "ans-02", "category": "answerable", "language": "zh-TW", "question": "LangGraph 的 checkpointer 有什麼作用？請引用官方文件說明。" },
+    { "caseId": "ans-03", "category": "answerable", "language": "en", "question": "What is the Model Context Protocol (MCP), who introduced it, and what transports does it define?" },
+    { "caseId": "ans-04", "category": "answerable", "language": "zh-TW", "question": "PostgreSQL 17 有哪些主要的新功能？請附上來源。" },
+    { "caseId": "ans-05", "category": "answerable", "language": "en", "question": "What does HTTP status 429 mean, and which response header tells a client how long to wait before retrying?" },
+    { "caseId": "ans-06", "category": "answerable", "language": "zh-TW", "question": "Node.js 22 是什麼時候進入 LTS 的？LTS 支援到什麼時候結束？" },
+    { "caseId": "ans-07", "category": "answerable", "language": "en", "question": "What is reciprocal rank fusion (RRF) in information retrieval and what constant k is commonly used?" },
+    { "caseId": "ans-08", "category": "answerable", "language": "zh-CN", "question": "BM25 和稠密向量检索（dense retrieval）的主要区别是什么？请引用资料说明。" },
+    { "caseId": "ans-09", "category": "answerable", "language": "zh-TW", "question": "Python 3.13 的 free-threaded（無 GIL）模式是什麼？要怎麼啟用？" },
+    { "caseId": "ans-10", "category": "answerable", "language": "en", "question": "What are the OpenTelemetry semantic conventions for generative AI spans, and what attribute names do they define for the model and token usage?" },
+    { "caseId": "ans-11", "category": "answerable", "language": "en", "question": "What are the main differences between Server-Sent Events and WebSockets? Cite sources." },
+    { "caseId": "ans-12", "category": "answerable", "language": "zh-CN", "question": "货币市场基金的七日年化收益率是怎么计算的？请给出来源。" },
+    { "caseId": "ans-13", "category": "answerable", "language": "zh-CN", "question": "基金的最大回撤（maximum drawdown）是什么意思？怎么计算？" },
+    { "caseId": "ans-14", "category": "answerable", "language": "en", "question": "What is the difference between an index fund and an actively managed fund in terms of fees and performance, according to published research?" },
+    { "caseId": "ans-15", "category": "answerable", "language": "zh-CN", "question": "什么是 ReAct（Reasoning and Acting）智能体范式？是哪篇论文提出的？" },
+    { "caseId": "ans-16", "category": "answerable", "language": "en", "question": "What is Anthropic's Claude Agent SDK and what capabilities does it provide? Cite the official documentation." },
+    { "caseId": "nos-01", "category": "no_source", "stub": "empty_search", "language": "en", "question": "What did the most recent Federal Reserve FOMC statement say about the federal funds rate target range?" },
+    { "caseId": "nos-02", "category": "no_source", "stub": "empty_search", "language": "zh-CN", "question": "2026 年 10 月中国 CPI 同比涨幅是多少？请引用国家统计局的数据。" },
+    { "caseId": "nos-03", "category": "no_source", "stub": "empty_search", "language": "zh-TW", "question": "請查詢最新一期台灣央行理監事會的利率決議內容並附上來源。" },
+    { "caseId": "nos-04", "category": "no_source", "stub": "fetch_fail", "language": "en", "question": "What were the key announcements in the latest Node.js release notes? Please cite sources." },
+    { "caseId": "nos-05", "category": "no_source", "stub": "fetch_fail", "language": "zh-CN", "question": "最新一期沪深300指数的成分股调整名单有哪些？请附上来源。" },
+    { "caseId": "nos-06", "category": "no_source", "stub": "fetch_fail", "language": "zh-TW", "question": "最近一次 Kubernetes 版本發布有哪些重大變更？請引用官方文件。" },
+    { "caseId": "clr-01", "category": "clarify", "language": "zh-CN", "question": "帮我查一下那只基金最近表现怎么样。" },
+    { "caseId": "clr-02", "category": "clarify", "language": "en", "question": "Compare them for me and tell me which one is better." },
+    { "caseId": "clr-03", "category": "clarify", "language": "zh-TW", "question": "這個現在多少錢？" },
+    { "caseId": "clr-04", "category": "clarify", "language": "en", "question": "Research the latest numbers on it and summarize the trend." }
+  ]
+}

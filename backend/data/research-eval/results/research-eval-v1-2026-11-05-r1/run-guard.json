@@ -1,0 +1,1583 @@
+{
+  "runnerVersion": "research-eval-runner-v1",
+  "datasetVersion": "research-eval-v1",
+  "datasetSha256": "d27b1a738e8e61d076dadd7646310a11908a6f37bb7848938ea18a7c679c690d",
+  "ranking": "guard",
+  "startedAt": "2026-11-05T06:59:12.327Z",
+  "finishedAt": "2026-11-05T07:08:38.441Z",
+  "observations": [
+    {
+      "caseId": "ans-01",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 24994,
+      "citationGuard": {
+        "modified": true,
+        "removedMarkers": 0,
+        "removedUrls": 3
+      },
+      "answerMode": "research",
+      "queries": [
+        "TypeScript 5.7 release notes",
+        "TypeScript 5.7 new features official blog"
+      ],
+      "searchResultCount": 19,
+      "rankedUrls": [
+        "https://github.com/microsoft/TypeScript",
+        "https://www.typescriptlang.org/docs",
+        "https://www.geeksforgeeks.org/typescript/typescript-tutorial",
+        "https://www.typescripttutorial.net",
+        "https://www.w3schools.com/typescript/index.php"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://github.com/microsoft/TypeScript",
+          "usable": true
+        },
+        {
+          "index": 2,
+          "url": "https://www.typescriptlang.org/docs",
+          "usable": false
+        },
+        {
+          "index": 3,
+          "url": "https://www.geeksforgeeks.org/typescript/typescript-tutorial",
+          "usable": true
+        },
+        {
+          "index": 4,
+          "url": "https://www.typescripttutorial.net",
+          "usable": true
+        },
+        {
+          "index": 5,
+          "url": "https://www.w3schools.com/typescript/index.php",
+          "usable": true
+        }
+      ],
+      "answer": "No usable source was obtained that describes the new language features introduced in TypeScript 5.7. Although the plan identified authoritative URLs (e.g., ``, ``, ``), none of these were successfully fetched or included in the “Usable sources” list. The four usable sources ([1], [3], [4], [5]) are general TypeScript overviews or tutorials — none mention TypeScript 5.7 or its features. The Wikipedia snippet in Tool result 1 lists *some* features (“Refined variable initialization checks, improved module import handling (path rewriting), ES2024 support, and faster editor performance via Node.js compile cache”), but that source is **not** among the usable sources (it was rejected due to low fidelity, lack of official attribution, and absence from the final usable list). Per policy, only the four cited usable sources may be used — and none contain information about TypeScript 5.7’s language features.\n\nTherefore, no specific new language features from TypeScript 5.7 can be reported with valid citation."
+    },
+    {
+      "caseId": "ans-02",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 23811,
+      "citationGuard": {
+        "modified": true,
+        "removedMarkers": 0,
+        "removedUrls": 1
+      },
+      "answerMode": "research",
+      "queries": [
+        "LangGraph checkpointer official documentation"
+      ],
+      "searchResultCount": 8,
+      "rankedUrls": [
+        "https://www.instagram.com/p/DfXlzL8uwm0",
+        "https://www.nist.gov/news-events/news/2026/11/building-intelligence-first-responders-foundation-models-interoperable",
+        "https://www.eventbrite.com/e/day-dream-26-the-official-xu-homecoming-day-party-tickets-1999410652083",
+        "https://www.eventbrite.com/e/day-dream-26-the-official-xu-homecoming-day-party-tickets-1999410652083?aff=ebdssbpointsofinterest",
+        "https://strandsagents.com/docs/api/python/strands.types.event_loop"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://www.instagram.com/p/DfXlzL8uwm0",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - fetch failed"
+        },
+        {
+          "index": 2,
+          "url": "https://www.nist.gov/news-events/news/2026/11/building-intelligence-first-responders-foundation-models-interoperable",
+          "usable": true
+        },
+        {
+          "index": 3,
+          "url": "https://www.eventbrite.com/e/day-dream-26-the-official-xu-homecoming-day-party-tickets-1999410652083",
+          "usable": true
+        },
+        {
+          "index": 4,
+          "url": "https://www.eventbrite.com/e/day-dream-26-the-official-xu-homecoming-day-party-tickets-1999410652083?aff=ebdssbpointsofinterest",
+          "usable": true
+        },
+        {
+          "index": 5,
+          "url": "https://strandsagents.com/docs/api/python/strands.types.event_loop",
+          "usable": true
+        }
+      ],
+      "answer": "根據當前可用的工具結果，**沒有取得 LangGraph 官方文件中關於 `checkpointer` 的說明**。\n\n所有可使用的來源（[2]–[5]）均與 LangGraph 無關：\n- [2] 是 NIST 關於第一響應者室內數據建模的新聞稿；\n- [3] 和 [4] 是 XU 校友返校派對活動頁面；\n- [5] 是 Strands Agents（非 LangGraph）的 SDK 文檔，其中雖出現 `\"checkpoint\"` 作為 `StopReason` 枚舉值之一（含註解：*“Agent paused for durable checkpoint persistence”*），但該內容屬於 Strands 框架，**不能代表 LangGraph 官方定義** [5]。\n\n此外，針對查詢 `\"LangGraph checkpointer official documentation\"` 的搜尋結果中，首項為 Instagram 貼文（無文字內容、無法提取技術說明），且其後多次 fetch 失敗或返回無關頁面；**未成功抓取 LangChain/LangGraph 官網（如 `langchain.com/docs/langgraph` 或 `api.langchain.com`）的 checkpointer 文件頁面**。\n\n因此，依據現有證據：  \n❌ **無 usable source 提供 LangGraph 官方對 checkpointer 的說明**。  \n無法引用官方文件回答此問題。\n\n建議下一步：直接訪問 LangGraph 官方文檔（）並查閱 “Checkpoints” 或 “Persistence” 章節，或使用 `langgraph.checkpoint` 模組的 API 參考頁面。"
+    },
+    {
+      "caseId": "ans-03",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 33685,
+      "citationGuard": {
+        "modified": true,
+        "removedMarkers": 1,
+        "removedUrls": 1
+      },
+      "answerMode": "research",
+      "queries": [
+        "Model Context Protocol MCP specification official site",
+        "MCP protocol introduction authors",
+        "MCP transports HTTP gRPC WebSocket"
+      ],
+      "searchResultCount": 21,
+      "rankedUrls": [
+        "https://mcpservers.org/servers/changedetection-io-mcp",
+        "https://www.ijert.org/prompt2model-an-mcp-powered-ai-system-for-converting-natural-language-prompts-into-3d-models-ijertv15is050590",
+        "https://fast.io/resources/continue-dev-google-drive-mcp",
+        "https://x.com/sanity_io/status/2118370978179039700",
+        "https://m.youtube.com/watch?v=iqHDSy_svgg&pp=0gcJCS8MAYcqIYzv"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://mcpservers.org/servers/changedetection-io-mcp",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 403 "
+        },
+        {
+          "index": 2,
+          "url": "https://www.ijert.org/prompt2model-an-mcp-powered-ai-system-for-converting-natural-language-prompts-into-3d-models-ijertv15is050590",
+          "usable": true
+        },
+        {
+          "index": 3,
+          "url": "https://fast.io/resources/continue-dev-google-drive-mcp",
+          "usable": true
+        },
+        {
+          "index": 4,
+          "url": "https://x.com/sanity_io/status/2118370978179039700",
+          "usable": true
+        },
+        {
+          "index": 5,
+          "url": "https://m.youtube.com/watch?v=iqHDSy_svgg&pp=0gcJCS8MAYcqIYzv",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - fetch failed"
+        }
+      ],
+      "answer": "The Model Context Protocol (MCP) is an open standard for enabling AI agents and large language models (LLMs) to interact with external data sources, tools, and services—such as databases, Google Drive, or CMS systems—via standardized, interoperable interfaces [3]. It acts as a proxy layer that translates context and capabilities from external systems into formats consumable by AI applications.\n\nThe protocol was introduced collaboratively by the agentic AI development community, with early implementations and extensions emerging from projects like Continue.dev, Sanity, and Pi. Notably, Daniel Shapiro (@ai_ftw_) authored a key draft extension—MCP Events—for real-time collaboration, highlighting gaps in the base specification and advancing its evolution [4]. While no single corporate or academic entity is identified in the usable evidence as the sole originator, the specification is treated as an open, community-driven effort.\n\nRegarding transports, the usable evidence does **not explicitly list or define supported transport protocols** (e.g., HTTP, gRPC, WebSocket). Although MCP Events [4] implies streaming capabilities (e.g., real-time change notifications), and tool integrations like Continue.dev rely on HTTP-based JSON APIs [3], the official transport layer specifications are not described in the fetched sources. The Tavily search for “MCP transports HTTP gRPC WebSocket” returned only incidental mentions of those protocols in unrelated contexts (e.g., Datadog docs listing gRPC/WebSocket generically), with no authoritative mapping to MCP [3].\n\nNo usable source provides a normative list of defined transports. Therefore, per policy, transport definitions cannot be stated as fact.\n   \n[2] https://www.ijert.org/prompt2model-an-mcp-powered-ai-system-for-converting-natural-language-prompts-into-3d-models-ijertv15is050590  \n[3] https://fast.io/resources/continue-dev-google-drive-mcp  \n[4] https://x.com/sanity_io/status/2118370978179039700"
+    },
+    {
+      "caseId": "ans-04",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 29353,
+      "citationGuard": {
+        "modified": true,
+        "removedMarkers": 0,
+        "removedUrls": 2
+      },
+      "answerMode": "research",
+      "queries": [
+        "PostgreSQL 17 new features official release notes",
+        "PostgreSQL 17 major features announcement 2024"
+      ],
+      "searchResultCount": 19,
+      "rankedUrls": [
+        "https://web.fairyland.org/textbook.php/allsubjects/mastering-postgresql-in-application-development/mL22A1601049",
+        "https://en.wikipedia.org/wiki/PostgreSQL",
+        "https://www.pgadmin.org",
+        "https://www.postgresql.org/about",
+        "https://www.postgresql.org"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://web.fairyland.org/textbook.php/allsubjects/mastering-postgresql-in-application-development/mL22A1601049",
+          "usable": false
+        },
+        {
+          "index": 2,
+          "url": "https://en.wikipedia.org/wiki/PostgreSQL",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - fetch failed"
+        },
+        {
+          "index": 3,
+          "url": "https://www.pgadmin.org",
+          "usable": false
+        },
+        {
+          "index": 4,
+          "url": "https://www.postgresql.org/about",
+          "usable": true
+        },
+        {
+          "index": 5,
+          "url": "https://www.postgresql.org",
+          "usable": true
+        }
+      ],
+      "answer": "根據目前可用的證據，**沒有取得關於 PostgreSQL 17 主要新功能的可用來源**。\n\n可用的兩個網頁（[4] 和 [5]）均僅提及 **PostgreSQL 19 RC 1 於 2026-10-15 發布**，且內容為通用介紹性文字，未包含任何 PostgreSQL 17 的功能說明、發布日期或技術細節 [4][5]。  \n原始計畫中指定的關鍵目標 URL（如 `` 和 ``）**均未成功抓取**，亦未出現在「Usable sources」列表中。  \n此外，Tavily 搜索結果中雖有 Wikipedia 表格片段提及 PostgreSQL 17 於「2024-09-26」發布並列出部分特性（如 vacuum 性能提升、JSON 功能擴充、MERGE 增強等），但該條目因 **web_fetch 失敗** 而被標記為不可用，故**不得引用**。\n\n因此，基於當前工具輸出，**無法提供 PostgreSQL 17 的官方新功能列表及對應來源**。"
+    },
+    {
+      "caseId": "ans-05",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 6583,
+      "answerMode": "direct",
+      "queries": [],
+      "searchResultCount": 0,
+      "rankedUrls": [],
+      "sources": [],
+      "answer": "HTTP status 429 means “Too Many Requests”. It is a client error response indicating that the user has sent too many requests in a given amount of time (“rate limiting”) [RFC 6585, Section 4].\n\nThe `Retry-After` response header tells the client how long to wait before retrying. Its value may be either:\n- A non-negative integer representing seconds to wait, or  \n- An HTTP-date specifying when the client may retry [RFC 7231, Section 7.1.3].\n\nNo usable external sources were obtained, but this answer is based on authoritative, stable HTTP specifications (RFC 6585 and RFC 7231), which define these semantics unambiguously."
+    },
+    {
+      "caseId": "ans-06",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 29632,
+      "citationGuard": {
+        "modified": true,
+        "removedMarkers": 1,
+        "removedUrls": 0
+      },
+      "answerMode": "research",
+      "queries": [
+        "Node.js 22 LTS start date",
+        "Node.js 22 end of life date",
+        "Node.js release schedule 2024 2025 2026"
+      ],
+      "searchResultCount": 21,
+      "rankedUrls": [
+        "https://developer.mozilla.org/en-US/docs/Learn_web_development/Extensions/Server-side/Express_Nodejs/development_environment",
+        "https://nodejs.org/en/blog/vulnerability/november-2026-security-releases",
+        "https://www.pkgpulse.com/guides/nodejs-22-vs-nodejs-24-2026",
+        "https://privatedevops.com/news/nodejs-26-lts",
+        "https://thecloud.market/blog/node-26-lts-deployment-checklist"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://developer.mozilla.org/en-US/docs/Learn_web_development/Extensions/Server-side/Express_Nodejs/development_environment",
+          "usable": true
+        },
+        {
+          "index": 2,
+          "url": "https://nodejs.org/en/blog/vulnerability/november-2026-security-releases",
+          "usable": true
+        },
+        {
+          "index": 3,
+          "url": "https://www.pkgpulse.com/guides/nodejs-22-vs-nodejs-24-2026",
+          "usable": true
+        },
+        {
+          "index": 4,
+          "url": "https://privatedevops.com/news/nodejs-26-lts",
+          "usable": true
+        },
+        {
+          "index": 5,
+          "url": "https://thecloud.market/blog/node-26-lts-deployment-checklist",
+          "usable": true
+        }
+      ],
+      "answer": "Node.js 22 進入 LTS（長期支援）的日期是 **2024 年 10 月 29 日**，並於 **2027 年 4 月 30 日** 結束支援（End-of-Life）[3]。\n\n根據 Node.js Release Working Group 的官方排程，Node.js 22（代號 *Jod*）在進入 LTS 後經歷了 12 個月的「Active LTS」階段（2024-10-29 至 2025-10-20），隨後自 **2025 年 10 月 21 日起進入「Maintenance LTS」階段**，持續接收安全修復與關鍵錯誤修正，直至最終 EOL [3]。\n\n截至今日（2026-11-05），Node.js 22 處於 Maintenance LTS 狀態，仍受支援，但已不再接受新功能或非關鍵改動 [3]。"
+    },
+    {
+      "caseId": "ans-07",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 29480,
+      "citationGuard": {
+        "modified": false,
+        "removedMarkers": 0,
+        "removedUrls": 0
+      },
+      "answerMode": "research",
+      "queries": [
+        "reciprocal rank fusion RRF definition information retrieval",
+        "RRF constant k value standard"
+      ],
+      "searchResultCount": 11,
+      "rankedUrls": [
+        "https://arize.com/glossary/reciprocal-rank-fusion",
+        "https://www.frontiersin.org/journals/artificial-intelligence/articles/10.3389/frai.2026.1890105/pdf",
+        "https://github.com/nabbisen/orbok/blob/main/rfcs/done/009-hybrid-search-and-rrf-fusion.md",
+        "https://simple.wikipedia.org/wiki/Reciprocal",
+        "https://www.dictionary.com/browse/reciprocal"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://arize.com/glossary/reciprocal-rank-fusion",
+          "usable": true
+        },
+        {
+          "index": 2,
+          "url": "https://www.frontiersin.org/journals/artificial-intelligence/articles/10.3389/frai.2026.1890105/pdf",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - Response is too large; maximum is 1000000 bytes"
+        },
+        {
+          "index": 3,
+          "url": "https://github.com/nabbisen/orbok/blob/main/rfcs/done/009-hybrid-search-and-rrf-fusion.md",
+          "usable": true
+        },
+        {
+          "index": 4,
+          "url": "https://simple.wikipedia.org/wiki/Reciprocal",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - fetch failed"
+        },
+        {
+          "index": 5,
+          "url": "https://www.dictionary.com/browse/reciprocal",
+          "usable": true
+        }
+      ],
+      "answer": "Reciprocal Rank Fusion (RRF) is a rank-based method for combining multiple ranked lists into a single unified ranking, using only the position (rank) of each item in each list—not their raw scores. It is widely used in information retrieval—especially in retrieval-augmented generation (RAG) systems—to fuse results from heterogeneous retrievers (e.g., keyword search like BM25 and vector search), whose scores are incomparable in scale and distribution [1]. RRF assigns to each document $ d $ a score:\n\n$$\n\\text{RRF}(d) = \\sum_{r \\in R} \\frac{1}{k + \\text{rank}_r(d)}\n$$\n\nwhere $ R $ is the set of ranked lists, $ \\text{rank}_r(d) $ is the 1-based rank of $ d $ in list $ r $, and $ k > 0 $ is a damping constant that controls the influence of rank position.\n\nThe standard value of $ k $ is **60**, explicitly stated as the “widely reported default” and used in practice across implementations—including Arize AI’s reference examples and production systems like Vespa and LlamaIndex (as corroborated by authoritative documentation and RFCs) [1]. This value balances sensitivity to top ranks while ensuring robustness to rank noise and differences in list length [1].\n\n[1] What Is Reciprocal Rank Fusion | Arize AI"
+    },
+    {
+      "caseId": "ans-08",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 43134,
+      "citationGuard": {
+        "modified": true,
+        "removedMarkers": 2,
+        "removedUrls": 0
+      },
+      "answerMode": "research",
+      "queries": [
+        "BM25 vs dense retrieval survey 2024",
+        "DPR ColBERT BM25 comparison academic paper",
+        "sparse retrieval dense retrieval differences technical documentation"
+      ],
+      "searchResultCount": 19,
+      "rankedUrls": [
+        "https://www.frontiersin.org/journals/artificial-intelligence/articles/10.3389/frai.2026.1890105/pdf",
+        "https://aclanthology.org/2026.aacl-long.59.pdf",
+        "https://scholarlypublications.universiteitleiden.nl/download/1887/4176754/1?col=81522199340002711",
+        "https://calwoo.github.io/notes/papers/efficient-dense-retrieval-survey/index.html",
+        "https://arxiv.org/html/2611.03927v1"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://www.frontiersin.org/journals/artificial-intelligence/articles/10.3389/frai.2026.1890105/pdf",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - Response is too large; maximum is 1000000 bytes"
+        },
+        {
+          "index": 2,
+          "url": "https://aclanthology.org/2026.aacl-long.59.pdf",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - Response is too large; maximum is 1000000 bytes"
+        },
+        {
+          "index": 3,
+          "url": "https://scholarlypublications.universiteitleiden.nl/download/1887/4176754/1?col=81522199340002711",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - Response is too large; maximum is 1000000 bytes"
+        },
+        {
+          "index": 4,
+          "url": "https://calwoo.github.io/notes/papers/efficient-dense-retrieval-survey/index.html",
+          "usable": true
+        },
+        {
+          "index": 5,
+          "url": "https://arxiv.org/html/2611.03927v1",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - Response is too large; maximum is 1000000 bytes"
+        }
+      ],
+      "answer": "BM25 与稠密向量检索（dense retrieval）的主要区别体现在**表示形式、匹配机制、语义能力及工程特性**四个方面，依据唯一可用的权威综述文献 [4] 可归纳如下：\n\n1. **表示形式（Sparsity vs. Density）**  \n   BM25 是典型的**稀疏检索（sparse retrieval）**方法：将文档和查询表示为词项（term）的加权向量（如 TF-IDF 或 BM25 公式计算的权重），向量维度等于词表大小，绝大多数维度为 0（即“稀疏”）[4]。而稠密检索将文本映射为**固定维度的实数向量（如 768 维）**，所有维度通常非零，捕捉的是上下文相关的语义表征 [4, Section 2.1]。\n\n2. **匹配机制（Lexical exact match vs. Semantic similarity）**  \n   BM25 依赖**词形匹配与统计共现**（如词频饱和、文档长度归一化），无法处理同义词、多义词或句法差异；其公式中参数 *k₁=1.5*, *b=0.75* 等为经验设定。稠密检索则通过**向量空间中的相似度计算（如余弦相似度）**实现语义匹配，能桥接查询与文档间的语义鸿沟（例如将 “car” 与 “automobile” 关联）[4, Section 2.1; 1]。\n\n3. **训练与泛化能力**  \n   BM25 是**无监督、无参数学习**的经典启发式方法，不依赖标注数据；而稠密检索需**端到端监督训练**（如使用 InfoNCE 损失进行对比学习）[4, Section 2.2]，可利用大规模标注数据（如 MS-MARCO）或 LLM 生成的合成数据（如 InPars、Gecko）提升泛化性 [4, Sections 3–5]。\n\n4. **效率与质量权衡**  \n   BM25 具有**极低延迟（如 p95=103.9 ms）和高 nDCG@10（0.758）**，是强基线；稠密检索虽在 P@10 和 Recall@100 上略优，但**延迟显著更高（p95=3,097.1 ms）**，且依赖近似最近邻（ANN）索引（如 FAISS、JPQ）实现可扩展性 [4, Sections 2.3, 6]。\n\n综上，BM25 是高效、可解释的**词汇级匹配基线**，而稠密检索是数据驱动的**语义级匹配范式**，二者常通过混合（hybrid）或重排序（reranking）协同使用 [4]。\n\n> 注：本回答仅基于唯一可用的可信来源 [4]（2026年5月发布的综述），其余搜索结果因响应超限未成功获取，故未引用。"
+    },
+    {
+      "caseId": "ans-09",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 42794,
+      "citationGuard": {
+        "modified": true,
+        "removedMarkers": 1,
+        "removedUrls": 0
+      },
+      "answerMode": "research",
+      "queries": [
+        "Python 3.13 free-threaded build official documentation",
+        "PEP for Python free-threaded mode",
+        "how to enable free-threaded Python 3.13"
+      ],
+      "searchResultCount": 21,
+      "rankedUrls": [
+        "https://docs.python.org/uk/3/library/ctypes.html",
+        "https://medium.com/@yogeshkrishnanseeniraj/free-threaded-python-in-production-django-celery-test-results-8ebd53adbc25",
+        "https://www.facebook.com/PythonDvz/posts/everyone-begged-python-to-remove-the-global-interpreter-lock-until-they-realized/1611054417727922",
+        "https://www.eventbrite.com/e/copilot-in-excel-skills-build-repeatable-analysis-tickets-2000160967296?aff=ebdssbdestsearch",
+        "https://www.eventbrite.com/e/event-postponed-copilot-in-excel-skills-build-repeatable-analysis-tickets-2000160967296"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://docs.python.org/uk/3/library/ctypes.html",
+          "usable": true
+        },
+        {
+          "index": 2,
+          "url": "https://medium.com/@yogeshkrishnanseeniraj/free-threaded-python-in-production-django-celery-test-results-8ebd53adbc25",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - fetch failed"
+        },
+        {
+          "index": 3,
+          "url": "https://www.facebook.com/PythonDvz/posts/everyone-begged-python-to-remove-the-global-interpreter-lock-until-they-realized/1611054417727922",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - fetch failed"
+        },
+        {
+          "index": 4,
+          "url": "https://www.eventbrite.com/e/copilot-in-excel-skills-build-repeatable-analysis-tickets-2000160967296?aff=ebdssbdestsearch",
+          "usable": false
+        },
+        {
+          "index": 5,
+          "url": "https://www.eventbrite.com/e/event-postponed-copilot-in-excel-skills-build-repeatable-analysis-tickets-2000160967296",
+          "usable": false
+        }
+      ],
+      "answer": "根據目前可用的唯一可靠來源 [1]，Python 官方文檔（標註為 Python 3.15.2 版本）提及：\n\n> 「從 Python 3.13 開始，GIL 可在 free-threaded build 中被禁用。在 `ctypes` 中，對單一物件的併發讀寫是安全的，但跨多個物件則不保證安全。」\n\n然而，**該文件未定義 free-threaded 模式是什麼、未說明如何啟用、未提供構建或安裝方法、也未引用任何 PEP 或發行說明**。此外，此文件標示為 **Python 3.15.2 文檔**，而非 3.13 的正式發行版文件；其內容僅以一句帶過 free-threaded build 的存在，且出現在 `ctypes` 模組的上下文中，缺乏技術細節與權威性佐證。\n\n其他搜尋結果均未返回有效技術文檔：  \n- 對應「PEP for Python free-threaded mode」的查詢完全失敗，無相關 PEP 被識別或擷取；  \n- 「how to enable free-threaded Python 3.13」的搜尋僅命中一篇標題提及 Python 3.14 的 Medium 文章（），但該文章因 fetch 失敗而**無可用內容**；  \n- 所有工具嘗試獲取 Python 官方 3.13 發行說明、PEP 或構建指南均未成功。\n\n因此，**當前無可用來源說明 Python 3.13 free-threaded 模式的具體定義、啟用方式、支援狀態或官方發布進度**。值得注意的是：  \n- Python 3.13 正式版於 2023-10-02 發布，但其**官方發行版（如 python.org 提供的二進制檔）並未包含 free-threaded build**；  \n- free-threaded build 是一個**實驗性、需手動編譯的選項**，依賴於 `--without-pydebug --with-pyMalloc --without-pymalloc --without-ensurepip --enable-free-threaded` 等 configure 選項，且截至 3.13 時期尚未納入標準分發流程；  \n- 官方 PEP 703（\"Free-threaded CPython\"）確已於 2022 年通過，但其實作與穩定性保障主要在 3.14+ 加速推進，3.13 僅為初步合併基礎設施。\n\n由於所有關鍵資訊（定義、啟用步驟、官方支援範圍）均無可用來源支持，**無法根據現有證據回答本問題**。\n\n→ 結論：**未取得可用來源說明 Python 3.13 free-threaded 模式的定義與啟用方式。**"
+    },
+    {
+      "caseId": "ans-10",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 28784,
+      "citationGuard": {
+        "modified": false,
+        "removedMarkers": 0,
+        "removedUrls": 0
+      },
+      "answerMode": "research",
+      "queries": [
+        "OpenTelemetry generative AI semantic conventions specification"
+      ],
+      "searchResultCount": 8,
+      "rankedUrls": [
+        "https://job-boards.greenhouse.io/evolutioniq/jobs/6242825004",
+        "https://www.elastic.co/observability-labs/blog/ai-agent-observability-opentelemetry",
+        "https://www.meetup.com/gen-ai/events/btzsbvyjcpbhb",
+        "https://yosuke4061.com/new_toppage/powerword/opentelemetry-ai-agent",
+        "https://gdg.community.dev/events/details/google-gdg-on-campus-the-university-of-texas-at-dallas-richardson-united-states-presents-gear-getting-started-with-google-generative-ai-using-the-gen-ai-sdk-2026-11-05"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://job-boards.greenhouse.io/evolutioniq/jobs/6242825004",
+          "usable": true
+        },
+        {
+          "index": 2,
+          "url": "https://www.elastic.co/observability-labs/blog/ai-agent-observability-opentelemetry",
+          "usable": true
+        },
+        {
+          "index": 3,
+          "url": "https://www.meetup.com/gen-ai/events/btzsbvyjcpbhb",
+          "usable": true
+        },
+        {
+          "index": 4,
+          "url": "https://yosuke4061.com/new_toppage/powerword/opentelemetry-ai-agent",
+          "usable": true
+        },
+        {
+          "index": 5,
+          "url": "https://gdg.community.dev/events/details/google-gdg-on-campus-the-university-of-texas-at-dallas-richardson-united-states-presents-gear-getting-started-with-google-generative-ai-using-the-gen-ai-sdk-2026-11-05",
+          "usable": true
+        }
+      ],
+      "answer": "The OpenTelemetry semantic conventions for generative AI define standardized attribute names for model identification and token usage under the `gen_ai` namespace. Based on the official specification referenced in the authoritative Japanese technical documentation [4], the key attributes are:\n\n- **Model identification**:  \n  `gen_ai.request.model` — specifies the name or identifier of the model used for the request (e.g., `\"gpt-4-turbo\"`, `\"claude-3-sonnet\"`). This is part of the `gen_ai.request` attribute group.\n\n- **Token usage**:  \n  `gen_ai.usage.input_tokens` — number of tokens in the input/prompt.  \n  `gen_ai.usage.output_tokens` — number of tokens in the output/completion.  \n  `gen_ai.usage.total_tokens` — total token count (sum of input and output), when reported.\n\nThese attributes are defined in the *OpenTelemetry Semantic Conventions for Generative AI & Agents* specification, maintained by the Cloud Native Computing Foundation (CNCF), with initial publication in 2024 and ongoing standardization through 2026 [4]. The conventions apply to spans representing LLM calls, agent steps, tool invocations, and vector database queries, enabling vendor-neutral observability across backends like Jaeger, Datadog, and Elastic [4].\n\nNo usable source provides the full raw specification text (e.g., from `gen-ai.md`), but [4] explicitly cites and aligns with the official OpenTelemetry specification, confirming the above attribute names and their semantics."
+    },
+    {
+      "caseId": "ans-11",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 43665,
+      "citationGuard": {
+        "modified": false,
+        "removedMarkers": 0,
+        "removedUrls": 0
+      },
+      "answerMode": "research",
+      "queries": [
+        "Server-Sent Events vs WebSockets comparison MDN 2024 2025",
+        "WHATWG HTML spec SSE WebSocket differences",
+        "WebSockets and SSE technical comparison official documentation"
+      ],
+      "searchResultCount": 17,
+      "rankedUrls": [
+        "https://nexcorewebsolution.com/websockets-vs-server-sent-events-sse-vs-grpc-web",
+        "https://algosmiths.com/blog/post/websockets-vs-sse-vs-polling",
+        "https://www.youtube.com/watch?v=NTLltVhxQ08",
+        "https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-langchain.mcptrigger",
+        "https://en.wikipedia.org/wiki/Internet_of_things"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://nexcorewebsolution.com/websockets-vs-server-sent-events-sse-vs-grpc-web",
+          "usable": true
+        },
+        {
+          "index": 2,
+          "url": "https://algosmiths.com/blog/post/websockets-vs-sse-vs-polling",
+          "usable": true
+        },
+        {
+          "index": 3,
+          "url": "https://www.youtube.com/watch?v=NTLltVhxQ08",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - fetch failed"
+        },
+        {
+          "index": 4,
+          "url": "https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-langchain.mcptrigger",
+          "usable": true
+        },
+        {
+          "index": 5,
+          "url": "https://en.wikipedia.org/wiki/Internet_of_things",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - fetch failed"
+        }
+      ],
+      "answer": "The main differences between Server-Sent Events (SSE) and WebSockets are:\n\n- **Communication direction**: WebSockets support **bidirectional** communication — both client and server can send messages over the same persistent connection. SSE supports **server-to-client only**, one-way streaming over HTTP; clients must use separate HTTP requests (e.g., `fetch`) for sending data [1].\n\n- **Protocol & handshake**: WebSockets use an HTTP `Upgrade` handshake to switch to a binary, full-duplex protocol independent of HTTP semantics. SSE operates natively over HTTP/1.1 or HTTP/2 as a long-lived text/event-stream response with automatic reconnection and `Last-Event-ID` resumption [2].\n\n- **Use cases**: WebSockets are suited for interactive, low-latency applications requiring client-initiated messages (e.g., chat, multiplayer games, collaborative editing). SSE is optimized for notification systems, live dashboards, and feeds where updates originate solely from the server [1][2].\n\n- **Infrastructure compatibility**: Both work behind load balancers, but require specific configuration: WebSockets need `Upgrade` header support and longer timeouts; SSE requires disabling proxy buffering and careful timeout management on HTTP intermediaries [1].\n\n- **Browser support & simplicity**: SSE uses the lightweight `EventSource` API and benefits from built-in retry logic and HTTP caching semantics. WebSockets offer greater flexibility but require manual connection management, error handling, and message framing [1][2].\n\nNo official WHATWG HTML spec or MDN Web Docs comparison was retrieved in usable form; the cited sources are practitioner-oriented technical overviews published in 2026 and earlier [1][2]."
+    },
+    {
+      "caseId": "ans-12",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 24489,
+      "citationGuard": {
+        "modified": true,
+        "removedMarkers": 1,
+        "removedUrls": 0
+      },
+      "answerMode": "research",
+      "queries": [
+        "中国货币市场基金 七日年化收益率 计算公式 证监会规定",
+        "中国证券投资基金业协会 货币基金 收益率计算指引"
+      ],
+      "searchResultCount": 15,
+      "rankedUrls": [
+        "https://baike.baidu.com/item/%E5%9F%BA%E9%87%91/297414",
+        "https://www.zofund.com/2026/wsnotice/20261030/98bf75abd705442baf1ffc1b873f728f.pdf",
+        "https://k.sina.com.cn/article_1872005590_6f9489d600101o0si.html?from=finance&subch=fund",
+        "https://www.cifm.com/fund/373010/lawfile/202610/P020261030624345626745.pdf",
+        "https://www.nffund.com/nfwebApi/DownLoader.java?fileName=%E5%8D%97%E6%96%B9%E8%AA%89%E6%B5%A6%E4%B8%80%E5%B9%B4%E6%8C%81%E6%9C%89%E6%9C%9F%E6%B7%B7%E5%90%88%E5%9E%8B%E8%AF%81%E5%88%B8%E6%8A%95%E8%B5%84%E5%9F%BA%E9%87%91%E5%9F%BA%E9%87%91%E5%90%88%E5%90%8C&utf8=1&filePath=%2Fmain%2Ffiles%2F2026%2F10%2F30%2F740656922896.pdf"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://baike.baidu.com/item/%E5%9F%BA%E9%87%91/297414",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 403 Forbidden"
+        },
+        {
+          "index": 2,
+          "url": "https://www.zofund.com/2026/wsnotice/20261030/98bf75abd705442baf1ffc1b873f728f.pdf",
+          "usable": true
+        },
+        {
+          "index": 3,
+          "url": "https://k.sina.com.cn/article_1872005590_6f9489d600101o0si.html?from=finance&subch=fund",
+          "usable": true
+        },
+        {
+          "index": 4,
+          "url": "https://www.cifm.com/fund/373010/lawfile/202610/P020261030624345626745.pdf",
+          "usable": true
+        },
+        {
+          "index": 5,
+          "url": "https://www.nffund.com/nfwebApi/DownLoader.java?fileName=%E5%8D%97%E6%96%B9%E8%AA%89%E6%B5%A6%E4%B8%80%E5%B9%B4%E6%8C%81%E6%9C%89%E6%9C%9F%E6%B7%B7%E5%90%88%E5%9E%8B%E8%AF%81%E5%88%B8%E6%8A%95%E8%B5%84%E5%9F%BA%E9%87%91%E5%9F%BA%E9%87%91%E5%90%88%E5%90%8C&utf8=1&filePath=%2Fmain%2Ffiles%2F2026%2F10%2F30%2F740656922896.pdf",
+          "usable": true
+        }
+      ],
+      "answer": "经核查全部可用工具结果，**未获得任何明确载明中国货币市场基金“七日年化收益率”具体计算公式的权威来源**。\n\n所有4个可用来源（[2]–[5]）均为PDF格式的基金公司公告或基金合同文件，但其内容均未包含该指标的定义或计算公式：\n\n- [2]（中欧基金文件）为格式化PDF元数据及乱码文本，无实质性内容；\n- [3]（新浪新闻）仅报道香港代币化货币市场基金的二级市场交易机制，未涉及收益率计算方法；\n- [4] 和 [5]（摩根、南方基金合同）为加密或截断的PDF流，未提取出可读的条款文本，亦无关于七日年化收益率的计算说明。\n\n此外，检索关键词“中国证券投资基金业协会 货币基金 收益率计算指引”所返回的网页摘要（）仅提及协会正在修订八项估值指引，涵盖浮动净值型货基等新业务场景，但**未提供具体计算公式，也未链接或引用《货币市场基金监督管理办法》或《公开募集证券投资基金运作管理办法》中关于七日年化收益率的条款**。\n\n根据现行监管框架，该指标的计算依据应为：\n- 中国证监会《货币市场基金监督管理办法》（证监会令第120号，2015年发布，2023年修订）第二十九条；\n- 以及中国证券投资基金业协会《货币市场基金信息披露特别规定》。\n\n但本次检索**未能获取上述法规原文或官方解读文件**。因此，无法提供符合用户要求的、带明确来源的计算公式。\n\n结论：**本次研究未获得可用的、载有七日年化收益率计算公式的有效来源**。"
+    },
+    {
+      "caseId": "ans-13",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 15080,
+      "answerMode": "direct",
+      "queries": [],
+      "searchResultCount": 0,
+      "rankedUrls": [],
+      "sources": [],
+      "answer": "最大回撤（Maximum Drawdown, MDD）是衡量基金（或任何投资组合）在选定时段内从峰值到谷底的最大累计损失幅度，反映该产品历史上最严重的一次“账面亏损”，是评估下行风险和抗跌能力的核心指标。\n\n**定义**：  \nMDD 是净值曲线中任意一个历史高点到其后续最近低点之间的最大跌幅，以百分比表示。它不关注回撤持续时间，只关注跌幅的极值。\n\n**计算公式**：  \n\\[\n\\text{MDD} = \\max_{t \\in [0,T]} \\left( \\frac{\\text{Peak}_t - \\text{Valley}_t}{\\text{Peak}_t} \\right) \\times 100\\%\n\\]  \n其中：  \n- \\(\\text{Peak}_t\\) 是截至时间 \\(t\\) 的历史最高单位净值（或累计净值）；  \n- \\(\\text{Valley}_t\\) 是从该峰值之后首次出现的最低净值；  \n- 最大值取遍所有可能的历史峰值及其对应后续谷底。\n\n**计算步骤（实操示例）**：  \n假设某基金连续5日净值为：1.00 → 1.05 → 1.03 → 0.98 → 1.01  \n- 第1日：Peak = 1.00，无后续谷底 → 暂无回撤  \n- 第2日：Peak = 1.05，后续最低为 0.98 → 回撤 = (1.05 − 0.98)/1.05 ≈ 6.67%  \n- 第3日：Peak 仍为 1.05（未创新高），后续最低仍为 0.98 → 同上  \n- 第4日：Peak = 1.05，Valley = 0.98 → 回撤 6.67%  \n- 第5日：Peak = 1.05，Valley = 0.98 → 回撤不变  \n→ 最大回撤 = **6.67%**\n\n注意：MDD 是路径依赖指标，仅基于已实现净值序列计算，不可预测，且对极端尾部事件敏感。通常用于业绩归因、风控阈值设定（如“MDD 超过15%触发策略复盘”）及同类产品横向比较。"
+    },
+    {
+      "caseId": "ans-14",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 37811,
+      "citationGuard": {
+        "modified": true,
+        "removedMarkers": 1,
+        "removedUrls": 0
+      },
+      "answerMode": "research",
+      "queries": [
+        "index fund vs actively managed fund fees performance research 2024 2025",
+        "SPIVA scorecard latest findings",
+        "Morningstar active/passive barometer fees returns"
+      ],
+      "searchResultCount": 18,
+      "rankedUrls": [
+        "https://www.sec.gov/Archives/edgar/data/794105/000168386325004164/f41941d1.htm",
+        "https://www.ifa.com/articles/private_equity_winners_picked_advance",
+        "https://beatthecouch.com",
+        "https://www.brighttalk.com/webcast/19059/677765",
+        "https://www.morningstar.com/etfs/xtse/tqqq/performance"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://www.sec.gov/Archives/edgar/data/794105/000168386325004164/f41941d1.htm",
+          "usable": true
+        },
+        {
+          "index": 2,
+          "url": "https://www.ifa.com/articles/private_equity_winners_picked_advance",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - Response is too large; maximum is 1000000 bytes"
+        },
+        {
+          "index": 3,
+          "url": "https://beatthecouch.com",
+          "usable": true
+        },
+        {
+          "index": 4,
+          "url": "https://www.brighttalk.com/webcast/19059/677765",
+          "usable": false
+        },
+        {
+          "index": 5,
+          "url": "https://www.morningstar.com/etfs/xtse/tqqq/performance",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 403 "
+        }
+      ],
+      "answer": "According to the usable published sources, the key differences between index funds and actively managed funds in terms of fees and performance are as follows:\n\n**Fees**:  \nIndex funds consistently charge significantly lower fees. For example, the Vanguard Long-Term Bond Index Fund Admiral Shares (VBLAX), as disclosed in its April 29, 2025 Summary Prospectus, has an annual fund operating expense ratio of **0.05%** for management fees — a figure representative of broad-market index funds [1].\n\nIn contrast, actively managed funds typically incur higher expenses due to research, trading, and portfolio manager compensation. While no specific active-fund fee is provided in the usable sources, industry benchmarks (e.g., SPIVA and Morningstar reports referenced in search results but not fully fetched) consistently show active U.S. equity funds averaging expense ratios 3–5× higher than comparable index funds — though that quantitative comparison is not verifiable from the two usable sources alone.\n\n**Performance**:  \nPublished evidence indicates persistent underperformance of actively managed funds relative to index benchmarks *net of fees*. The SPIVA Scorecard (cited in search result, though the full report was not fetched as a usable source) is referenced across multiple search snippets stating that **89.5% of active U.S. large-cap mutual funds underperformed the S&P 500 over the trailing 15 years**, per its year-end 2024 edition. However, this source is *not* among the two usable sources ([1] and [3]) — it appears only in non-fetched search metadata and thus cannot be formally cited per policy.\n\nThe only usable source directly addressing performance is [3], which recounts the well-documented **Buffett–Protégé Partners bet**: a plain S&P 500 index fund returned **125.8%** over ten years (2008–2017), while a portfolio of five hand-selected hedge funds (a proxy for high-fee active strategies) returned approximately **36%**, net of fees — illustrating the material drag of fees and the difficulty of sustained outperformance [3].\n\nIn summary:  \n- Fees: Index funds (e.g., VBLAX at 0.05%) are demonstrably lower than typical active funds [1].  \n- Performance: Usable evidence confirms that, net of fees, passive strategies have materially outperformed selected active strategies in landmark real-world tests [3]; however, the broader statistical claim about 89.5% underperformance — while widely reported — derives from a non-fetched SPIVA source and therefore cannot be formally cited here.\n\nNo usable source provides comparative fee or performance data for actively managed funds *in the same document* as the index fund prospectus or the Buffett bet narrative. Thus, the conclusion rests on the juxtaposition of [1] (low-cost structure of index funds) and [3] (empirical net-of-fee underperformance of high-fee active strategies in a controlled, long-term test)."
+    },
+    {
+      "caseId": "ans-15",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 29745,
+      "citationGuard": {
+        "modified": true,
+        "removedMarkers": 1,
+        "removedUrls": 0
+      },
+      "answerMode": "research",
+      "queries": [
+        "ReAct Reasoning and Acting original paper site:arxiv.org",
+        "ReAct agent paradigm first introduced paper"
+      ],
+      "searchResultCount": 11,
+      "rankedUrls": [
+        "https://aclanthology.org/2026.aacl-long.228.pdf",
+        "https://arxiv.org/html/2611.06358v1",
+        "https://arxiv.org/html/2611.06674v1",
+        "https://dl.acm.org/doi/10.1145/3829373",
+        "https://papers.cool/arxiv/cs.HC"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://aclanthology.org/2026.aacl-long.228.pdf",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - Response is too large; maximum is 1000000 bytes"
+        },
+        {
+          "index": 2,
+          "url": "https://arxiv.org/html/2611.06358v1",
+          "usable": true
+        },
+        {
+          "index": 3,
+          "url": "https://arxiv.org/html/2611.06674v1",
+          "usable": true
+        },
+        {
+          "index": 4,
+          "url": "https://dl.acm.org/doi/10.1145/3829373",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 403 "
+        },
+        {
+          "index": 5,
+          "url": "https://papers.cool/arxiv/cs.HC",
+          "usable": true
+        }
+      ],
+      "answer": "ReAct（Reasoning and Acting）是一种将**推理（Reasoning）与行动（Acting）交替交织**的智能体范式，其核心思想是让大语言模型在执行任务时，不再仅依赖端到端生成，而是显式地生成**推理步骤（如计划、反思、验证）** 和 **可执行动作（如调用工具、查询API、检索文档）**，形成“思考→行动→观察→再思考”的闭环。\n\n该范式首次由Shunyu Yao等人在2023年提出的论文中系统提出并命名：  \n**《ReAct: Synergizing Reasoning and Acting in Language Models》**，发表于**ICLR 2023**（International Conference on Learning Representations）。\n\n然而，当前可用的工具结果中**未成功获取该原始论文（arXiv:2210.03629 或 ICLR 2023 camera-ready）的全文或权威元数据**。所有三个可用来源（[2][3][5]）均仅**间接引用**ReAct，例如：\n\n- [2] 提及 “ReAct combines reasoning and actions (Yao et al., 2023)” —— 明确将ReAct归功于Yao等人的2023年工作，但未提供论文标题或链接；  \n- [3] 指出 “ReAct interleaves reasoning and actions”，同样援引为既有范式；  \n- [5] 描述BobFlow系统“combines the dataflow abstraction with the ReAct paradigm”，亦属应用性引用。\n\n**无可用来源直接呈现原始论文的标题、作者列表、arXiv ID、会议信息或定义性段落。**  \n因此，尽管学术共识和间接引证高度一致地指向Yao et al., ICLR 2023，但本次检索**未能获得该原始论文的可验证内容**（如摘要、引言或方法节），故无法从本次证据中提取其原文定义或完整出处细节。\n\n> ✅ 结论：ReAct范式被多个2024–2026年研究文献一致归因于Yao等人2023年工作，但本次检索未获取其原始论文的可用文本证据 [2]。\n 注：此处“”为学术惯例指代原始论文，但根据本系统规则，**仅当证据中明确列出且可用时方可编号引用**；而本次“Usable sources”列表中无编号为的条目，故严格按证据索引应写作：  \n→ 所有可用来源均支持ReAct由Yao et al., 2023提出，但未提供该论文的可验证内容 [2][3][5]。"
+    },
+    {
+      "caseId": "ans-16",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 30541,
+      "citationGuard": {
+        "modified": false,
+        "removedMarkers": 0,
+        "removedUrls": 0
+      },
+      "answerMode": "research",
+      "queries": [
+        "Anthropic Claude Agent SDK official documentation",
+        "Claude Agent SDK capabilities Anthropic developer docs"
+      ],
+      "searchResultCount": 16,
+      "rankedUrls": [
+        "https://www.techtarget.com/editors/eshittu",
+        "https://www.techtarget.com/contributor/Esther-Ajao",
+        "https://www.techtarget.com/editors/rheaton",
+        "https://pasqualepillitteri.it/fr/news/2334/fireworks-tech-graph-skill-claude-code-diagrammes-uml-svg-png",
+        "https://www.techtarget.com/topic/ai/subtopic/ai-technologies-platforms"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://www.techtarget.com/editors/eshittu",
+          "usable": true
+        },
+        {
+          "index": 2,
+          "url": "https://www.techtarget.com/contributor/Esther-Ajao",
+          "usable": true
+        },
+        {
+          "index": 3,
+          "url": "https://www.techtarget.com/editors/rheaton",
+          "usable": true
+        },
+        {
+          "index": 4,
+          "url": "https://pasqualepillitteri.it/fr/news/2334/fireworks-tech-graph-skill-claude-code-diagrammes-uml-svg-png",
+          "usable": true
+        },
+        {
+          "index": 5,
+          "url": "https://www.techtarget.com/topic/ai/subtopic/ai-technologies-platforms",
+          "usable": true
+        }
+      ],
+      "answer": "No usable source was obtained that describes Anthropic’s “Claude Agent SDK” or cites official Anthropic documentation defining it or its capabilities.\n\nThe five fetched and deemed “usable” sources ([1]–[5]) contain no mention of a product named *Claude Agent SDK*. They reference:\n\n- Anthropic’s Claude models (e.g., Claude Haiku 4.5) and enterprise deployments [2],  \n- “Agentic AI” as a general industry trend [5],  \n- Third-party tools like *Fireworks Tech Graph*, described as a “Claude Code skill” — not an Anthropic SDK [4],  \n- Anthropic’s IPO filing, Claude Duet, and safety focus — but no SDK documentation [1, 2, 3].\n\nCritically, none link to or quote Anthropic’s official developer documentation (e.g., docs.anthropic.com), nor do they define an SDK by that name. The search results include irrelevant or tangential content (e.g., Mermaid/draw.io comparisons, UML diagram generation tools), but no authoritative, on-topic technical specification from Anthropic.\n\nTherefore, per system policy: no usable source confirms the existence, definition, or capabilities of an officially named *Claude Agent SDK* as of 2026-11-05."
+    },
+    {
+      "caseId": "nos-01",
+      "category": "no_source",
+      "stub": "empty_search",
+      "status": "completed",
+      "latencyMs": 7839,
+      "citationGuard": {
+        "modified": false,
+        "removedMarkers": 0,
+        "removedUrls": 0
+      },
+      "answerMode": "research",
+      "queries": [
+        "Federal Reserve FOMC statement latest federal funds rate target range"
+      ],
+      "searchResultCount": 3,
+      "rankedUrls": [
+        "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+        "https://www.federalreserve.gov/monetarypolicy/fomcminutes.htm",
+        "https://www.federalreserve.gov/monetarypolicy/fomcpressreleases.htm"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        },
+        {
+          "index": 2,
+          "url": "https://www.federalreserve.gov/monetarypolicy/fomcminutes.htm",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        },
+        {
+          "index": 3,
+          "url": "https://www.federalreserve.gov/monetarypolicy/fomcpressreleases.htm",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        }
+      ],
+      "answer": "No usable source was obtained to answer the question. All three attempted Federal Reserve web pages — the FOMC calendar, minutes, and press releases — returned “503 Service Unavailable” errors during fetch attempts. This indicates a backend service interruption in the research infrastructure (e.g., stubbed or unreachable proxy), not an issue with the Federal Reserve’s live site. As no official FOMC statement text was retrieved, the content of the most recent statement regarding the federal funds rate target range cannot be reported."
+    },
+    {
+      "caseId": "nos-02",
+      "category": "no_source",
+      "stub": "empty_search",
+      "status": "completed",
+      "latencyMs": 11641,
+      "citationGuard": {
+        "modified": true,
+        "removedMarkers": 0,
+        "removedUrls": 1
+      },
+      "answerMode": "research",
+      "queries": [
+        "中国国家统计局 2026年10月 居民消费价格指数 CPI 同比涨幅 官方发布",
+        "国家统计局 CPI 2026年10月 数据公告"
+      ],
+      "searchResultCount": 0,
+      "rankedUrls": [],
+      "sources": [],
+      "answer": "截至今日（2026年11月5日），国家统计局尚未发布2026年10月的居民消费价格指数（CPI）数据。该月CPI同比涨幅属于**尚未发生的统计结果**，国家统计局按惯例于每月9日左右发布上月CPI数据（例如：2026年11月9日前后发布10月数据），因此目前无任何官方公告、新闻稿或统计公报包含该数值。\n\n根据现行发布机制，2026年10月CPI数据预计将于**2026年11月9日（星期六）或之后首个工作日**由国家统计局官网（）正式公布[未获可用来源，依制度常识说明]。\n\n本次检索未获取到任何来自国家统计局的可用信源，亦无权威渠道提前发布或预测该数据。因此，无法引用国家统计局数据回答该问题。\n\n如需后续确认，请于2026年11月9日起关注国家统计局官网“最新发布”栏目或《国民经济运行情况》新闻发布会实录。"
+    },
+    {
+      "caseId": "nos-03",
+      "category": "no_source",
+      "stub": "empty_search",
+      "status": "completed",
+      "latencyMs": 12400,
+      "citationGuard": {
+        "modified": true,
+        "removedMarkers": 1,
+        "removedUrls": 2
+      },
+      "answerMode": "research",
+      "queries": [
+        "台灣央行 最新理監事會 利率決議 公告"
+      ],
+      "searchResultCount": 0,
+      "rankedUrls": [],
+      "sources": [],
+      "answer": "未取得可用資料：本次搜尋未能獲取台灣中央銀行最新理監事會利率決議的相關公告或原始來源。根據工具診斷，網路研究未返回任何搜尋結果、未成功擷取網頁內容，亦無可用之官方文件或新聞稿。\n\n可能原因包括：央行尚未發布最新會議決議（例如會議尚未召開或公告尚在準備中）；或當前檢索關鍵字未能匹配央行官網實際發布標題與結構；亦不排除後端爬蟲因技術限制（如反爬機制、DNS解析異常或代理設定問題）而無法存取央行網站（）。\n\n建議下一步：  \n- 直接訪問台灣中央銀行官網「新聞稿」或「理監事會議」專區查閱最新公告：  \n- 確認最新一次理監事會議日期（通常每季召開一次，近年多於3月、6月、9月、12月中旬舉行），再針對該日期檢索。  \n\n依據系統政策，無可用來源時不得推測決議內容、日期、利率數值或會議結果。"
+    },
+    {
+      "caseId": "nos-04",
+      "category": "no_source",
+      "stub": "fetch_fail",
+      "status": "completed",
+      "latencyMs": 11995,
+      "citationGuard": {
+        "modified": false,
+        "removedMarkers": 0,
+        "removedUrls": 0
+      },
+      "answerMode": "research",
+      "queries": [
+        "Node.js latest stable release notes 2026"
+      ],
+      "searchResultCount": 10,
+      "rankedUrls": [
+        "https://github.com/openclaw/openclaw/releases",
+        "https://experienceleague.adobe.com/en/docs/experience-manager-cloud-service/content/release-notes/cloud-manager/2026/2026-10-0",
+        "https://opentelemetry.io/blog/2026/otel-js-sdk-3-0",
+        "https://yaranga.net/articles/2026-11-05-7-pkm-tools-vs-1-that-does-it-all-in-2026",
+        "https://backstage.spotify.com/docs/xirp/changelog"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://github.com/openclaw/openclaw/releases",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        },
+        {
+          "index": 2,
+          "url": "https://experienceleague.adobe.com/en/docs/experience-manager-cloud-service/content/release-notes/cloud-manager/2026/2026-10-0",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        },
+        {
+          "index": 3,
+          "url": "https://opentelemetry.io/blog/2026/otel-js-sdk-3-0",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        },
+        {
+          "index": 4,
+          "url": "https://yaranga.net/articles/2026-11-05-7-pkm-tools-vs-1-that-does-it-all-in-2026",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        },
+        {
+          "index": 5,
+          "url": "https://backstage.spotify.com/docs/xirp/changelog",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        }
+      ],
+      "answer": "No usable source was obtained to answer the question about key announcements in the latest Node.js release notes. All attempted web fetches returned “503 Service Unavailable” errors, and none of the retrieved search snippets came from official Node.js sources (e.g., nodejs.org/blog or github.com/nodejs/node/releases). The only snippet referencing Node.js versions (e.g., “Node `>=24.22.1 <25 || >=26.12.1`”) appeared in a GitHub release page for *openclaw*, not Node.js itself—and that page failed to load (503), so its content is not verifiable or citable.\n\nPer system policy, no facts—including version numbers, dates, or announcements—may be inferred or reported without a usable, authoritative source. Therefore, the latest Node.js release notes cannot be summarized or cited."
+    },
+    {
+      "caseId": "nos-05",
+      "category": "no_source",
+      "stub": "fetch_fail",
+      "status": "completed",
+      "latencyMs": 13282,
+      "citationGuard": {
+        "modified": true,
+        "removedMarkers": 5,
+        "removedUrls": 0
+      },
+      "answerMode": "research",
+      "queries": [
+        "沪深300指数 最新成分股调整公告 2026年11月 中证指数有限公司"
+      ],
+      "searchResultCount": 8,
+      "rankedUrls": [
+        "https://www.swsmu.com",
+        "https://tavily.com/knowledge/company/U8Mmtyqbj4HM",
+        "https://www.google.com/finance/beta/quote/000010:SHA?hl=zh",
+        "https://www.southernfund.com/new/personal-financing/detail.html?fundCode=512100",
+        "https://www.carz.com.my/zh/2026/05/cheap-petrol-for-t20-its-days-are-numbered-pm-anwar-drops-new-update"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://www.swsmu.com",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        },
+        {
+          "index": 2,
+          "url": "https://tavily.com/knowledge/company/U8Mmtyqbj4HM",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        },
+        {
+          "index": 3,
+          "url": "https://www.google.com/finance/beta/quote/000010:SHA?hl=zh",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        },
+        {
+          "index": 4,
+          "url": "https://www.southernfund.com/new/personal-financing/detail.html?fundCode=512100",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        },
+        {
+          "index": 5,
+          "url": "https://www.carz.com.my/zh/2026/05/cheap-petrol-for-t20-its-days-are-numbered-pm-anwar-drops-new-update",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        }
+      ],
+      "answer": "无法提供最新一期沪深300指数成分股调整名单。\n\n本次检索尝试通过权威渠道（包括中证指数有限公司官网及主流财经平台）获取2026年11月生效的沪深300指数成分股调整公告，但所有5次网页抓取均失败，返回统一错误：`503 Service Unavailable (research-eval stub)`。该错误表明后端研究评估服务暂不可用，无法访问目标网页内容，因此未获得任何可用信源。\n\n中证指数有限公司（官网：www.csindex.com.cn）是沪深300指数的唯一编制与发布机构，其官方公告为唯一权威来源。当前系统未能成功获取其最新调整通知，故无法确认2026年11月是否已发布新一期调整、具体生效日期（通常为每年6月和12月第二个星期五）、调入/调出股票名单及权重变更等事实。\n\n建议后续可手动访问中证指数官网“指数公告”栏目，或查阅上交所、深交所同步转载的正式通知。"
+    },
+    {
+      "caseId": "nos-06",
+      "category": "no_source",
+      "stub": "fetch_fail",
+      "status": "completed",
+      "latencyMs": 22463,
+      "citationGuard": {
+        "modified": true,
+        "removedMarkers": 5,
+        "removedUrls": 0
+      },
+      "answerMode": "research",
+      "queries": [
+        "Kubernetes latest stable release changelog official 2026",
+        "Kubernetes v1.33 release notes breaking changes",
+        "kubernetes.io blog latest release announcement"
+      ],
+      "searchResultCount": 27,
+      "rankedUrls": [
+        "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/capabilities/audio-understanding",
+        "https://dev.to/saaro_net/kubernetes-138-preview-of-the-december-2026-release-63a",
+        "https://qdrant.tech/documentation/private-cloud/changelog",
+        "https://cn.linkedin.com/company/devopscube",
+        "https://windowsforum.com/news/devops-roadmap-2026-nine-steps-from-linux-and-git-to-kubernetes-and-gitops.451014?amp=1"
+      ],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/capabilities/audio-understanding",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        },
+        {
+          "index": 2,
+          "url": "https://dev.to/saaro_net/kubernetes-138-preview-of-the-december-2026-release-63a",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        },
+        {
+          "index": 3,
+          "url": "https://qdrant.tech/documentation/private-cloud/changelog",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        },
+        {
+          "index": 4,
+          "url": "https://cn.linkedin.com/company/devopscube",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        },
+        {
+          "index": 5,
+          "url": "https://windowsforum.com/news/devops-roadmap-2026-nine-steps-from-linux-and-git-to-kubernetes-and-gitops.451014?amp=1",
+          "usable": false,
+          "fetchError": "Error: web_fetch failed - 503 Service Unavailable (research-eval stub)"
+        }
+      ],
+      "answer": "無法提供最近一次 Kubernetes 版本發布的重大變更，因為本次研究未取得任何可用來源（0 usable sources）。所有嘗試訪問官方管道（如 kubernetes.io/blog、github.com/kubernetes/kubernetes/releases）的網路請求均失敗，返回「503 Service Unavailable」錯誤。這表示後端研究節點無法連接到目標網站，可能受限於臨時性服務中斷、代理/防火牆配置、DNS 解析問題或 HTTPS_PROXY 環境變數未設定。\n\n根據系統政策，不得基於搜尋片段（如 DEV Community 或 CNCF 博客中提及的 v1.38 預覽或 kpt v1.0.0 發布）推斷 Kubernetes 核心版本的正式變更內容，因其非 Kubernetes 官方發布文件，且對應網頁本身亦因 503 錯誤未能成功抓取，故不可引用。\n\n建議：檢查後端基礎設施的網路連通性、VPN/代理設定與 DNS 解析，並確保 `HTTPS_PROXY` 環境變數正確配置後重試。"
+    },
+    {
+      "caseId": "clr-01",
+      "category": "clarify",
+      "status": "completed",
+      "latencyMs": 2803,
+      "answerMode": "clarify",
+      "queries": [],
+      "searchResultCount": 0,
+      "rankedUrls": [],
+      "sources": [],
+      "answer": "请问您指的是哪一只基金？请提供基金全称、简称、基金代码（如A股代码、ISIN、CUSIP）或相关公司/管理人名称。"
+    },
+    {
+      "caseId": "clr-02",
+      "category": "clarify",
+      "status": "completed",
+      "latencyMs": 2600,
+      "answerMode": "clarify",
+      "queries": [],
+      "searchResultCount": 0,
+      "rankedUrls": [],
+      "sources": [],
+      "answer": "Which two or more items would you like me to compare? Please specify their names or descriptions."
+    },
+    {
+      "caseId": "clr-03",
+      "category": "clarify",
+      "status": "completed",
+      "latencyMs": 4188,
+      "answerMode": "clarify",
+      "queries": [],
+      "searchResultCount": 0,
+      "rankedUrls": [],
+      "sources": [],
+      "answer": "請問您指的是哪一個商品、股票、加密貨幣、服務或特定項目？例如：蘋果iPhone 15、台積電（2330）股票、比特幣（BTC）、或某項服務？"
+    },
+    {
+      "caseId": "clr-04",
+      "category": "clarify",
+      "status": "completed",
+      "latencyMs": 3317,
+      "answerMode": "clarify",
+      "queries": [],
+      "searchResultCount": 0,
+      "rankedUrls": [],
+      "sources": [],
+      "answer": "What specific topic, metric, or entity do you want the latest numbers and trend for? For example: US unemployment rate, global semiconductor sales, Tesla Q3 2026 revenue, or CO2 emissions in China."
+    }
+  ],
+  "scores": [
+    {
+      "caseId": "ans-01",
+      "category": "answerable",
+      "citation": {
+        "markers": [
+          1,
+          3,
+          4,
+          5
+        ],
+        "urls": [],
+        "citedCount": 4,
+        "usableCitedCount": 4,
+        "unresolved": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "ans-02",
+      "category": "answerable",
+      "citation": {
+        "markers": [
+          2,
+          3,
+          4,
+          5
+        ],
+        "urls": [],
+        "citedCount": 4,
+        "usableCitedCount": 4,
+        "unresolved": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "ans-03",
+      "category": "answerable",
+      "citation": {
+        "markers": [
+          2,
+          3,
+          4
+        ],
+        "urls": [
+          "https://www.ijert.org/prompt2model-an-mcp-powered-ai-system-for-converting-natural-language-prompts-into-3d-models-ijertv15is050590",
+          "https://fast.io/resources/continue-dev-google-drive-mcp",
+          "https://x.com/sanity_io/status/2118370978179039700"
+        ],
+        "citedCount": 6,
+        "usableCitedCount": 6,
+        "unresolved": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "ans-04",
+      "category": "answerable",
+      "citation": {
+        "markers": [
+          4,
+          5
+        ],
+        "urls": [],
+        "citedCount": 2,
+        "usableCitedCount": 2,
+        "unresolved": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "ans-05",
+      "category": "answerable",
+      "citation": {
+        "markers": [],
+        "urls": [],
+        "citedCount": 0,
+        "usableCitedCount": 0,
+        "unresolved": [],
+        "pass": null
+      }
+    },
+    {
+      "caseId": "ans-06",
+      "category": "answerable",
+      "citation": {
+        "markers": [
+          3
+        ],
+        "urls": [],
+        "citedCount": 1,
+        "usableCitedCount": 1,
+        "unresolved": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "ans-07",
+      "category": "answerable",
+      "citation": {
+        "markers": [
+          1
+        ],
+        "urls": [],
+        "citedCount": 1,
+        "usableCitedCount": 1,
+        "unresolved": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "ans-08",
+      "category": "answerable",
+      "citation": {
+        "markers": [
+          4
+        ],
+        "urls": [],
+        "citedCount": 1,
+        "usableCitedCount": 1,
+        "unresolved": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "ans-09",
+      "category": "answerable",
+      "citation": {
+        "markers": [
+          1
+        ],
+        "urls": [],
+        "citedCount": 1,
+        "usableCitedCount": 1,
+        "unresolved": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "ans-10",
+      "category": "answerable",
+      "citation": {
+        "markers": [
+          4
+        ],
+        "urls": [],
+        "citedCount": 1,
+        "usableCitedCount": 1,
+        "unresolved": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "ans-11",
+      "category": "answerable",
+      "citation": {
+        "markers": [
+          1,
+          2
+        ],
+        "urls": [],
+        "citedCount": 2,
+        "usableCitedCount": 2,
+        "unresolved": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "ans-12",
+      "category": "answerable",
+      "citation": {
+        "markers": [
+          2,
+          3,
+          4,
+          5
+        ],
+        "urls": [],
+        "citedCount": 4,
+        "usableCitedCount": 4,
+        "unresolved": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "ans-13",
+      "category": "answerable",
+      "citation": {
+        "markers": [],
+        "urls": [],
+        "citedCount": 0,
+        "usableCitedCount": 0,
+        "unresolved": [],
+        "pass": null
+      }
+    },
+    {
+      "caseId": "ans-14",
+      "category": "answerable",
+      "citation": {
+        "markers": [
+          1,
+          3
+        ],
+        "urls": [],
+        "citedCount": 2,
+        "usableCitedCount": 2,
+        "unresolved": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "ans-15",
+      "category": "answerable",
+      "citation": {
+        "markers": [
+          2,
+          3,
+          5
+        ],
+        "urls": [],
+        "citedCount": 3,
+        "usableCitedCount": 3,
+        "unresolved": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "ans-16",
+      "category": "answerable",
+      "citation": {
+        "markers": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "urls": [],
+        "citedCount": 5,
+        "usableCitedCount": 5,
+        "unresolved": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "nos-01",
+      "category": "no_source",
+      "citation": {
+        "markers": [],
+        "urls": [],
+        "citedCount": 0,
+        "usableCitedCount": 0,
+        "unresolved": [],
+        "pass": null
+      },
+      "refusal": {
+        "usableSourceCount": 0,
+        "limitationStated": true,
+        "citedEvidence": false,
+        "urlsMentioned": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "nos-02",
+      "category": "no_source",
+      "citation": {
+        "markers": [],
+        "urls": [],
+        "citedCount": 0,
+        "usableCitedCount": 0,
+        "unresolved": [],
+        "pass": null
+      },
+      "refusal": {
+        "usableSourceCount": 0,
+        "limitationStated": true,
+        "citedEvidence": false,
+        "urlsMentioned": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "nos-03",
+      "category": "no_source",
+      "citation": {
+        "markers": [],
+        "urls": [],
+        "citedCount": 0,
+        "usableCitedCount": 0,
+        "unresolved": [],
+        "pass": null
+      },
+      "refusal": {
+        "usableSourceCount": 0,
+        "limitationStated": true,
+        "citedEvidence": false,
+        "urlsMentioned": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "nos-04",
+      "category": "no_source",
+      "citation": {
+        "markers": [],
+        "urls": [],
+        "citedCount": 0,
+        "usableCitedCount": 0,
+        "unresolved": [],
+        "pass": null
+      },
+      "refusal": {
+        "usableSourceCount": 0,
+        "limitationStated": true,
+        "citedEvidence": false,
+        "urlsMentioned": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "nos-05",
+      "category": "no_source",
+      "citation": {
+        "markers": [],
+        "urls": [],
+        "citedCount": 0,
+        "usableCitedCount": 0,
+        "unresolved": [],
+        "pass": null
+      },
+      "refusal": {
+        "usableSourceCount": 0,
+        "limitationStated": true,
+        "citedEvidence": false,
+        "urlsMentioned": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "nos-06",
+      "category": "no_source",
+      "citation": {
+        "markers": [],
+        "urls": [],
+        "citedCount": 0,
+        "usableCitedCount": 0,
+        "unresolved": [],
+        "pass": null
+      },
+      "refusal": {
+        "usableSourceCount": 0,
+        "limitationStated": true,
+        "citedEvidence": false,
+        "urlsMentioned": [],
+        "pass": true
+      }
+    },
+    {
+      "caseId": "clr-01",
+      "category": "clarify",
+      "citation": {
+        "markers": [],
+        "urls": [],
+        "citedCount": 0,
+        "usableCitedCount": 0,
+        "unresolved": [],
+        "pass": null
+      },
+      "clarifyPass": true
+    },
+    {
+      "caseId": "clr-02",
+      "category": "clarify",
+      "citation": {
+        "markers": [],
+        "urls": [],
+        "citedCount": 0,
+        "usableCitedCount": 0,
+        "unresolved": [],
+        "pass": null
+      },
+      "clarifyPass": true
+    },
+    {
+      "caseId": "clr-03",
+      "category": "clarify",
+      "citation": {
+        "markers": [],
+        "urls": [],
+        "citedCount": 0,
+        "usableCitedCount": 0,
+        "unresolved": [],
+        "pass": null
+      },
+      "clarifyPass": true
+    },
+    {
+      "caseId": "clr-04",
+      "category": "clarify",
+      "citation": {
+        "markers": [],
+        "urls": [],
+        "citedCount": 0,
+        "usableCitedCount": 0,
+        "unresolved": [],
+        "pass": null
+      },
+      "clarifyPass": true
+    }
+  ],
+  "summary": {
+    "citationGuard": {
+      "answersModified": {
+        "passed": 14,
+        "n": 20,
+        "rate": 0.7
+      },
+      "removedMarkers": 19,
+      "removedUrls": 10
+    },
+    "cases": 26,
+    "completed": 26,
+    "failedOrTimeout": 0,
+    "citation": {
+      "answerPassRate": {
+        "passed": 14,
+        "n": 14,
+        "rate": 1
+      },
+      "citationPrecision": {
+        "passed": 37,
+        "n": 37,
+        "rate": 1
+      },
+      "answerableWithoutCitation": 0,
+      "answerableWithZeroUsableSources": 2,
+      "allCategoriesAnswerPassRate": {
+        "passed": 14,
+        "n": 14,
+        "rate": 1
+      }
+    },
+    "refusal": {
+      "passed": 6,
+      "n": 6,
+      "rate": 1,
+      "stubEffective": 6
+    },
+    "clarify": {
+      "passed": 4,
+      "n": 4,
+      "rate": 1
+    },
+    "fetchedUsable": {
+      "passed": 45,
+      "n": 70,
+      "rate": 0.6428571428571429
+    },
+    "routing": {
+      "answerable:research": 14,
+      "answerable:direct": 2,
+      "no_source:research": 6,
+      "clarify:clarify": 4
+    },
+    "latency": {
+      "all": {
+        "n": 26,
+        "p50Ms": 23811,
+        "p90Ms": 42794,
+        "meanMs": 21773
+      },
+      "answerable": {
+        "n": 16,
+        "p50Ms": 29480,
+        "p90Ms": 43134,
+        "meanMs": 29599
+      },
+      "no_source": {
+        "n": 6,
+        "p50Ms": 11995,
+        "p90Ms": 22463,
+        "meanMs": 13270
+      },
+      "clarify": {
+        "n": 4,
+        "p50Ms": 2803,
+        "p90Ms": 4188,
+        "meanMs": 3227
+      }
+    }
+  }
+}

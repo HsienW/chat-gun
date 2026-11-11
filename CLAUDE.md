@@ -241,7 +241,7 @@ CCR 讀取或交接 Runtime Artifact 時必須：
 - 仲裁後更新 CurrentState；不得只在聊天中描述狀態。
 - Qwen 輸出的 `review_result` 必須先由人工或 CLIHost 驗證並保存，CCR 才能更新其 Reference 與狀態。
 
-## 12.1 交接前自我檢查
+## 12.1 交接前自我檢查（避免來回補件）
 
 下列檢查只要求 CCR 在交出 owner 前一次做完，不放寬任何授權或驗收規則。
 
