@@ -3,9 +3,7 @@
 ## Purpose
 
 本規格定義統一 Tool dispatch pipeline 的正式需求：把既有 governance、authorization、retry budget、side-effect ledger、reconciliation、compensation、Task/Step、audit、tracing 原語，組合成一條由 registry 擁有、所有 production Agent 共用的強制 dispatch 路徑，以統一 `RuntimeToolDescriptor` 驅動，並以 architecture test 阻斷直接受保護 Tool invocation。
-
 ## Requirements
-
 ### Requirement: 每個 production Tool MUST 由統一 RuntimeToolDescriptor 註冊並以單一 registry 供給
 
 每個 production Tool MUST 以統一 `RuntimeToolDescriptor`（`toolName`、`toolVersion`、`inputSchema`、`outputSchema`、`riskTier`、`isReadOnly`、`isConcurrencySafe`、`timeoutPolicy`、`retryPolicy`、`interruptBehavior`、`sideEffect?`）於單一 registry 組裝點註冊；policy 不得散落於各 Tool，亦不得以 Tool 名稱 switch 作為主要 policy 機制。
@@ -192,6 +190,23 @@ AND 任一 mandatory dependency（ledger／authorization／retry／Task-Step）u
 WHEN 執行 dispatch pipeline
 THEN MUST fail-closed 且不 dispatch 下游 Tool
 
+#### Scenario: mandatory dependency 未提供時以 dependency unavailable 拒絕
+
+GIVEN 一個 protected dispatch 即將執行
+AND 呼叫端未提供某 mandatory dependency，且 production default 亦無法組裝該 dependency
+WHEN 執行 dispatch pipeline
+THEN outcome MUST 為 `rejected_before_dispatch`，errorCode 為 `TOOL_DISPATCH_DEPENDENCY_UNAVAILABLE`
+AND MUST NOT dispatch 下游 Tool
+
+#### Scenario: Task-Step dependency 已組裝但啟動失敗時以 task step unavailable 拒絕
+
+GIVEN 一個 protected dispatch 即將執行
+AND Task-Step dependency 已提供（由呼叫端或 production default 組裝）
+AND 該 dependency 於啟動 step 時失敗（例如持久層無法連線或逾時）
+WHEN 執行 dispatch pipeline
+THEN outcome MUST 為 `rejected_before_dispatch`，errorCode 為 `TASK_STEP_UNAVAILABLE`
+AND MUST NOT dispatch 下游 Tool
+
 #### Scenario: audit exporter 失敗不抹除 outcome
 
 GIVEN 一個 Tool 已成功 dispatch 且產生 outcome
@@ -199,8 +214,6 @@ AND audit／telemetry exporter 於寫入時失敗
 WHEN 執行 pipeline 收尾
 THEN MUST 不抹除 execution outcome
 AND protected dispatch 是否可續行由本地 durable audit policy 決定
-
----
 
 ### Requirement: Tool result MUST 全程維持 structured 並以 versioned envelope 表達
 
@@ -252,3 +265,4 @@ GIVEN 統一 pipeline 已接線
 WHEN 執行既有 Weather／Web／Calculator／MCP 回歸
 THEN MUST 通過
 AND MUST NOT 變更既有 Graph ID／公開 route／error-code 語意
+

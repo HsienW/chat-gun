@@ -7,6 +7,8 @@ import { HumanMessage } from "@langchain/core/messages";
 import { deepResearcherGraph } from "../../agents/deep-researcher.js";
 import { parseExecutedToolCallArtifact } from "../../agents/executed-tool-call.js";
 import { getConfiguredLlmProvider } from "../../platform/llm-gateway.js";
+import { TRUSTED_PRINCIPAL_HEADERS } from "../../runtime/authorization/principal.js";
+import { TRUSTED_SCOPE_FIELDS } from "../../runtime/execution-context/read-execution-context.js";
 import { getAgentRuntimeConfig } from "../../platform/runtime-config.js";
 import {
   getOpikTracer,
@@ -263,11 +265,49 @@ function renderStructuredRequest(item: EvaluationItem): string {
   ].join("\n");
 }
 
+const EVALUATION_ID_PREFIX = "opik-eval";
+
+/** The part of the deep-researcher graph the default runner calls; tests pass an entry-wrapped stub. */
+interface EvaluationGraph {
+  invoke(
+    input: { messages: HumanMessage[]; reasoning_model: string },
+    config: { runId: string; signal: AbortSignal; configurable: Record<string, string> }
+  ): Promise<unknown>;
+}
+
+/**
+ * The graph entry ignores any caller-supplied execution context and rebuilds it
+ * from the trusted gateway fields, so this in-process, opt-in evaluation supplies
+ * them the way the BFF does. Each experiment acts as its own synthetic principal
+ * and tenant, keeping its runtime rows apart from other experiments and real users.
+ */
+function createEvaluationGraphConfigurable(
+  context: Pick<ExperimentAgentContext, "threadId" | "runId">,
+  authenticatedAt: Date
+): Record<string, string> {
+  const tenantId = `${EVALUATION_ID_PREFIX}-${context.threadId}`;
+  return {
+    thread_id: context.threadId,
+    run_id: context.runId,
+    request_id: `${EVALUATION_ID_PREFIX}-request-${context.runId}`,
+    [TRUSTED_PRINCIPAL_HEADERS.principalId]: `${EVALUATION_ID_PREFIX}-principal-${context.threadId}`,
+    [TRUSTED_PRINCIPAL_HEADERS.principalType]: "user",
+    [TRUSTED_PRINCIPAL_HEADERS.tenantId]: tenantId,
+    [TRUSTED_PRINCIPAL_HEADERS.roles]: "",
+    [TRUSTED_PRINCIPAL_HEADERS.scopes]: "",
+    [TRUSTED_PRINCIPAL_HEADERS.authSource]: "trusted_gateway",
+    [TRUSTED_PRINCIPAL_HEADERS.authenticatedAt]: authenticatedAt.toISOString(),
+    [TRUSTED_SCOPE_FIELDS.scopeId]: tenantId,
+    [TRUSTED_SCOPE_FIELDS.scopeType]: "tenant",
+  };
+}
+
 async function runDefaultAgent(
   item: EvaluationItem,
-  context: ExperimentAgentContext
+  context: ExperimentAgentContext,
+  graph: EvaluationGraph = deepResearcherGraph
 ): Promise<AgentRunResult> {
-  const output: unknown = await deepResearcherGraph.invoke(
+  const output: unknown = await graph.invoke(
     {
       messages: [new HumanMessage(renderStructuredRequest(item))],
       reasoning_model: context.agentConfig.model,
@@ -275,11 +315,7 @@ async function runDefaultAgent(
     {
       runId: context.runId,
       signal: context.signal,
-      configurable: {
-        thread_id: context.threadId,
-        run_id: context.runId,
-        task_id: context.taskId,
-      },
+      configurable: createEvaluationGraphConfigurable(context, new Date()),
     }
   );
   const messages = isRecord(output) && Array.isArray(output.messages)
@@ -653,6 +689,8 @@ export async function runExperiment(
 }
 
 export const experimentTestInternals = {
+  createEvaluationGraphConfigurable,
   readToolCalls,
+  runDefaultAgent,
   validateDefaultProvider,
 };
