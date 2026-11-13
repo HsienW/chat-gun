@@ -27,7 +27,7 @@ async function ledger() {
 describe("LLM provider response accounting", () => {
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.resetModules(); });
 
-  it("sends the declared Qwen thinking option to the provider and omits it when absent", async () => {
+  it("sends the declared Qwen thinking option and an explicit false when the caller omits it", async () => {
     configureUsage();
     const transport = vi.fn(async () => response("answer")); vi.stubGlobal("fetch", transport);
     const { llmGateway, enabledChatModels } = await import("./llm-gateway.js");
@@ -35,7 +35,8 @@ describe("LLM provider response accounting", () => {
     await llmGateway.createChatModel({ model: "usage-fixture" }).invoke("fixture");
     const calls = vi.mocked(fetch).mock.calls;
     expect(JSON.parse(String(calls[0][1]?.body))).toHaveProperty("enable_thinking", false);
-    expect(JSON.parse(String(calls[1][1]?.body))).not.toHaveProperty("enable_thinking");
+    // switch-generation-to-qwen35-flash D-2: every Qwen generation request carries an explicit value.
+    expect(JSON.parse(String(calls[1][1]?.body))).toHaveProperty("enable_thinking", false);
     expect(enabledChatModels([{ purpose: "vision", model: "usage-fixture" }])).toEqual([{ provider: "qwen", model: "usage-fixture", callKind: "vision" }]);
     expect(await ledger()).toMatchObject({ amountMicros: 14 });
   });
