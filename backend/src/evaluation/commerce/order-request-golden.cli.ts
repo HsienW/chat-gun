@@ -19,10 +19,11 @@ import { fileURLToPath } from "node:url";
 
 import { readShoppingAssistantModelSettings } from "../../agents/shopping-assistant/model-settings.js";
 import { ORDER_REQUEST_SYSTEM_PROMPT, SHOPPING_ORDER_REQUEST_PROMPT_VERSION } from "../../agents/shopping-assistant/order-branch.js";
-import { describeLlmGatewayConfig, llmGateway } from "../../platform/llm-gateway.js";
+import { describeLlmGatewayConfig } from "../../platform/llm-gateway.js";
 import { MockOrderProvider } from "../../tools/orders/mock-order-provider.js";
 import { createOrderToolSet } from "../../tools/orders/order-tools.js";
 import { loadSyntheticOrderFixture } from "../../tools/orders/synthetic-orders.js";
+import { createCommerceGenerationModels } from "./generation-models.js";
 import {
   goldenDatasetSha256,
   goldenResultDirectoryName,
@@ -70,6 +71,7 @@ async function main(): Promise<void> {
     return;
   }
   const model = settings.model;
+  const generation = createCommerceGenerationModels(model);
 
   const raw = await readFile(DATASET_FILE, "utf8");
   const dataset = orderRequestGoldenSchema.parse(JSON.parse(raw));
@@ -97,8 +99,10 @@ async function main(): Promise<void> {
     tools,
     systemPrompt: ORDER_REQUEST_SYSTEM_PROMPT,
     repeats: provenance.repeats,
-    createModel: () => llmGateway.createChatModel({ purpose: "tool", model, temperature: settings.temperature }),
+    createModel: generation.toolModel,
   });
+  const observed = generation.observer.snapshot();
+  Object.assign(provenance, { ...observed, generationModels: { tool: observed.generationModels.tool } });
   const summary = summarizeGolden(dataset.cases, results);
 
   await writeFile(join(outDirectory, "run.json"), `${JSON.stringify({ provenance, summary, results }, null, 2)}\n`);
