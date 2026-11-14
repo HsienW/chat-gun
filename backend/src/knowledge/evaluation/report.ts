@@ -2,13 +2,14 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
+import { renderGenerationSummary, type GenerationProvenance } from "../../evaluation/generation-provenance.js";
 import { summarize, summarizeStrata, type CaseResult, type EvaluationRun, type EvidenceBlock, type SplitSummary } from "./runner.js";
 import { EVALUATION_STAGES, retrievalLatency } from "./stage-latency.js";
 
 export const MANUAL_INSPECTION_MINIMUM = 10;
 export const MIN_CLAIMABLE_STRATUM_CASES = 5;
 
-export interface EvaluationProvenance {
+export interface EvaluationProvenance extends GenerationProvenance {
   datasetSha256?: string;
   queryMode?: "raw_question";
   datasetVersion: string;
@@ -284,6 +285,7 @@ export function renderComparisonMarkdown(
   const provenanceBlock = [
     "",
     "**Provenance.**",
+    renderGenerationSummary(provenance),
     `dataset SHA-256 ${provenance.datasetSha256 ?? "unrecorded"}; queryMode ${provenance.queryMode ?? "unrecorded"};`,
     `dataset ${provenance.datasetVersion}, corpus ${provenance.corpusVersion} (**synthetic**), split ${split};`,
     `embedding ${provenance.embeddingModel} (${provenance.embeddingSpaceId}), rerank ${provenance.rerankModel}, generation ${provenance.generationModel}, judge ${provenance.judgeModel ?? "none"};`,

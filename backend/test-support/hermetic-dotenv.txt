@@ -1,0 +1,1 @@
+CHAT_GUN_TEST_ENV_SOURCE=hermetic-fixture

@@ -59,6 +59,12 @@ async function main(): Promise<void> {
     embeddingSpaceId: null,
     rerankModel: null,
     generationModel: null,
+    generationModels: {},
+    observedProviderModels: [],
+    observedProviderModelsStatus: "unreported",
+    thinkingEnabled: null,
+    llmProvider: "not_used",
+    llmEndpointHost: "",
     generationTemperature: null,
     judgeModel: null,
     thresholdVersion: null,
@@ -85,6 +91,12 @@ async function main(): Promise<void> {
       await live.close();
     }
     Object.assign(provenance, {
+      generationModels: live.provenance.generationModels,
+      observedProviderModels: live.provenance.observedProviderModels,
+      observedProviderModelsStatus: live.provenance.observedProviderModelsStatus,
+      thinkingEnabled: live.provenance.thinkingEnabled,
+      llmProvider: live.provenance.llmProvider,
+      llmEndpointHost: live.provenance.llmEndpointHost,
       intentPromptVersion: live.provenance.intentPromptVersion,
       policyPromptVersion: live.provenance.policyPromptVersion,
       orderRequestPromptVersion: live.provenance.orderRequestPromptVersion,

@@ -1,4 +1,10 @@
-## ADDED Requirements
+# generation-model-profile Specification
+
+## Purpose
+
+統一 Backend 生成模型的預設值與 thinking 控制，維持既有 Domain Contract，並定義模型來源、endpoint 與相容性驗證契約。
+
+## Requirements
 
 ### Requirement: 預設生成模型為單一來源的 qwen3.5-flash
 
@@ -97,6 +103,63 @@ Provider MUST 以 capability `supportsThinkingControl` 宣告是否支援 thinki
 - **GIVEN** Gun Shop thinking 設定為 `true`、`false` 以外的值
 - **WHEN** backend 啟動
 - **THEN** 啟動 MUST 失敗，錯誤碼為 `invalid_configuration:SHOPPING_ASSISTANT_THINKING_ENABLED`
+
+### Requirement: Gateway 回應 metadata 區分 provider 回報的模型
+
+每個 provider adapter 的生成回應 metadata MUST 新增 provider 原始回報模型欄位 `provider_model`：provider 回應帶有非空模型名稱時為該值，沒有模型欄位、模型欄位不是字串或為空字串時 MUST 為 `null`。既有 `model` 欄位 MUST 完全保留現行行為：provider 回應的模型欄位是字串時（含空字串）原樣保留，不是字串或沒有該欄位時以設定模型代填，以維持 Graph、帳本與 tracing 的相容性。此欄位只新增、不改變 Graph 輸出或 State，且 MUST NOT 依模型名稱判斷是否寫入。
+
+#### Scenario: provider 回報模型
+- **GIVEN** provider 回應帶有模型名稱 `qwen3.5-flash-2026-xx`
+- **WHEN** Gateway 回傳生成回應
+- **THEN** metadata 的 `provider_model` MUST 為 `qwen3.5-flash-2026-xx`
+- **AND** `model` MUST 與變更前的行為相同
+
+#### Scenario: provider 未回報模型
+- **GIVEN** provider 回應沒有模型欄位
+- **WHEN** Gateway 回傳生成回應
+- **THEN** metadata 的 `provider_model` MUST 為 `null`
+- **AND** `model` MUST 為設定模型（既有代填語意不變）
+
+#### Scenario: provider 回報空字串模型
+- **GIVEN** provider 回應的模型欄位為空字串
+- **WHEN** Gateway 回傳生成回應
+- **THEN** metadata 的 `provider_model` MUST 為 `null`
+- **AND** `model` MUST 與變更前相同，即保留空字串，不改為設定模型
+
+#### Scenario: 重試與 Tool 參數修復重送
+- **GIVEN** 第一次 provider 回應觸發重試或 Tool 參數修復重送
+- **WHEN** Gateway 回傳最終生成回應
+- **THEN** `provider_model` MUST 來自最終被採用的那一次 provider 回應
+
+#### Scenario: 既有 metadata 消費者不受影響
+- **GIVEN** 帳本、tracing 或 Graph 讀取 metadata 的 `model`
+- **WHEN** 本變更上線
+- **THEN** 這些消費者讀到的 `model` 值 MUST 與變更前相同
+
+### Requirement: Gateway 提供有效 endpoint 主機的唯讀查詢
+
+Backend MUST 提供唯讀查詢，回傳目前設定的 provider 名稱，以及 Gateway 實際使用的 endpoint 主機名稱；未設定 base URL 而使用內建預設時，MUST 回傳內建預設的主機名稱。查詢結果 MUST 只含主機名稱，MUST NOT 含完整 URL、路徑、query、使用者資訊、API Key 或 Authorization 資訊。此查詢 MUST NOT 加入對外 health 或 readiness 回應。
+
+#### Scenario: 未設定 base URL 使用內建預設
+- **GIVEN** provider 為 `qwen` 且未設定 base URL
+- **WHEN** 呼叫唯讀查詢
+- **THEN** 結果 MUST 為內建預設 endpoint 的主機名稱，MUST NOT 為空字串
+
+#### Scenario: 設定的 base URL 含 query 或使用者資訊
+- **GIVEN** base URL 含使用者資訊、路徑與 query
+- **WHEN** 呼叫唯讀查詢
+- **THEN** 結果 MUST 只含主機名稱
+
+#### Scenario: base URL 格式錯誤
+- **GIVEN** 設定的 base URL 無法解析
+- **WHEN** 呼叫唯讀查詢
+- **THEN** MUST 回報穩定的設定錯誤
+- **AND** 錯誤 MUST NOT 包含設定值或任何憑證
+
+#### Scenario: provider 需要 base URL 但未設定
+- **GIVEN** provider 為沒有內建預設的 provider，且未設定 base URL
+- **WHEN** 呼叫唯讀查詢
+- **THEN** MUST 依該 provider 既有的缺少設定語意回報錯誤，MUST NOT 回傳空字串
 
 ### Requirement: 不新增模型層 fallback，provider 層 fallback 語意不變
 

@@ -18,6 +18,7 @@ import {
   orderRefundRequestInputSchema,
 } from "../../tools/orders/order-contracts.js";
 import { boundedModelText } from "./chain-scoring.js";
+import { generationProvenanceSchema, renderGenerationSummary, type GenerationProvenance } from "../generation-provenance.js";
 
 /** Calls per message and the single-mutation pass rate the acceptance requires (design D5). */
 export const MIN_REPEATS = 5;
@@ -281,7 +282,7 @@ export async function runOrderRequestGolden(input: OrderRequestGoldenInput): Pro
   return results;
 }
 
-export interface GoldenProvenance {
+export interface GoldenProvenance extends GenerationProvenance {
   datasetVersion: string;
   datasetSha256: string;
   mode: "live" | "mock";
@@ -329,6 +330,7 @@ export function renderGoldenReportMarkdown(summary: GoldenSummary, provenance: G
           `- 原判定：${rescore.originalVerdict}；原未達門檻：${rescore.originalUnmetThresholds.join(", ") || "無"}。`,
         ]),
     `- 溫度 ${provenance.temperature}；每則訊息 ${provenance.repeats} 次；日期 ${provenance.date}。`,
+    renderGenerationSummary(provenance),
     "- 回歸訊息與形成 Prompt 的探針重疊；小樣本只提供方向性信心，不得宣稱統計顯著或 100% 可靠。",
     "- 回歸訊息已用於形成或修訂 Prompt，不是未看過樣本；未看過的訊息與 Prompt 同一作者，不得宣稱完全獨立。",
     `- 無效參數 ${summary.invalidArguments}；未完成呼叫 ${summary.incompleteRuns}。`,
@@ -390,6 +392,7 @@ export class GoldenRescoreError extends Error {
 
 const storedRunSchema = z.object({
   provenance: z.object({
+    ...generationProvenanceSchema.shape,
     datasetVersion: z.string(),
     datasetSha256: z.string(),
     mode: z.enum(["live", "mock"]),

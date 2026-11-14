@@ -13,7 +13,7 @@
     "postinstall": "patch-package",
     "start": "langgraphjs dev",
     "test": "vitest run",
-    "eval:opik": "vitest run src/evaluation/opik/experiment.live-smoke.test.ts",
+    "eval:opik": "vitest run --config vitest.live.config.ts src/evaluation/opik/experiment.live-smoke.test.ts",
     "knowledge:corpus": "tsx scripts/knowledge/generate-synthetic-corpus.ts",
     "knowledge:ingest": "tsx src/knowledge/ingest.cli.ts",
     "knowledge:eval-dataset": "tsx scripts/knowledge/build-eval-dataset.ts",

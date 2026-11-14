@@ -178,6 +178,8 @@ export type AgentRuntimeConfig = {
   toolRetryAfterMaxMs: number;
   toolDispatchStepLockTtlMs: number;
   llmFallbackEnabled: boolean;
+  /** Gateway-wide thinking default for providers that declare `supportsThinkingControl`. */
+  llmThinkingDefaultEnabled: boolean;
   llmFallbackProviders: string[];
   llmFallbackMaxAttempts: number;
   llmFallbackTimeoutMs: number;
@@ -265,6 +267,18 @@ function readStrictBoolean(name: string, fallback: boolean): boolean {
   if (rawValue === "true") return true;
   if (rawValue === "false") return false;
   throw new Error(`${name} must be true or false`);
+}
+
+/**
+ * Gateway-wide thinking default (OD-2). Only `true`/`false` are accepted; unset is `false`.
+ * The error never echoes the configured value.
+ */
+export function readLlmThinkingDefaultEnabled(): boolean {
+  const rawValue = getEnv("LLM_THINKING_DEFAULT_ENABLED").trim();
+  if (!rawValue) return false;
+  if (rawValue === "true") return true;
+  if (rawValue === "false") return false;
+  throw new Error("invalid_configuration:LLM_THINKING_DEFAULT_ENABLED");
 }
 
 function readRuntimeBoundaryFlags(): RuntimeBoundaryFlags {
@@ -408,6 +422,7 @@ export function getAgentRuntimeConfig(): AgentRuntimeConfig {
       DEFAULT_TOOL_DISPATCH_STEP_LOCK_TTL_MS
     ),
     llmFallbackEnabled: readBoolean("LLM_FALLBACK_ENABLED", false),
+    llmThinkingDefaultEnabled: readLlmThinkingDefaultEnabled(),
     llmFallbackProviders: readCsv("LLM_FALLBACK_PROVIDERS"),
     llmFallbackMaxAttempts: readPositiveInt("LLM_FALLBACK_MAX_ATTEMPTS", 3),
     llmFallbackTimeoutMs: readPositiveInt("LLM_FALLBACK_TIMEOUT_MS", 30_000),
