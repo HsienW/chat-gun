@@ -49,7 +49,7 @@ import {
   toLangGraphPath,
   type ClientStateWriteViolation,
 } from "./client-state-write-guard.js";
-import { pipeWebResponseBody } from "./stream-passthrough.js";
+import { applySseAntiBufferingHeaders, pipeWebResponseBody } from "./stream-passthrough.js";
 import {
   parseAnonymousMigrationRequest,
   type AnonymousMigrationService,
@@ -1291,6 +1291,7 @@ async function proxyLangGraph(
     if (observedUpstreamStatus >= 400 && observedUpstreamStatus < 500) leaseOutcome = "rejected";
     res.setHeader("x-request-id", ctx.requestId);
     copyResponseHeaders(upstreamResponse, res);
+    applySseAntiBufferingHeaders(upstreamResponse.headers.get("content-type"), res);
 
     const responseBody = upstreamResponse.body;
     if (req.method === "HEAD" || !responseBody) {
