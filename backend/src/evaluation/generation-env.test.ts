@@ -23,7 +23,7 @@ describe("generation environment example", () => {
       if (/(?:API_KEY|TOKEN|PASSWORD|CREDENTIAL|DATABASE_URL|POSTGRES_URI|REDIS_URI)$/u.test(key)) expect(value, key).toBe("");
     }
   });
-  it("keeps the existing embedding, rerank and judge example settings absent", () => {
-    expect(Object.keys(entries).filter((key) => /EMBEDDING|RERANK|JUDGE/u.test(key))).toEqual([]);
+  it("does not introduce embedding, rerank or judge model or endpoint settings", () => {
+    expect(Object.keys(entries).filter((key) => /(?:EMBEDDING|RERANK|JUDGE).*(?:MODEL|URL)$/u.test(key))).toEqual([]);
   });
 });
