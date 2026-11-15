@@ -40,6 +40,7 @@ Gun Chat 關閉深度研究時走 `chatbot` graph。節點等待模型呼叫整�
 
 - `runtime-event-contract`：前端 bounded reordering 不再作為正文事件的放行閘門；`model.stream` payload 新增選用的正文身分欄位。
 - `bff-stream-proxy`：SSE passthrough 新增防緩衝 header 要求。
+- `model-usage-ledger`：缺值用量可帶封閉集合的缺值原因 `usageMissingReason`，`usage_missing` 事件保留該原因；計價、金額與儲存格式不變（Task 1.5 結論，Master 2026-11-11 採方案 A）。
 
 ## 範圍
 
