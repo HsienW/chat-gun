@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { getEnv } from "./env.js";
 import { createErrorEnvelope, formatErrorEnvelope } from "./errors.js";
+import { DEFAULT_GENERATION_MODEL } from "./generation-model-profile.js";
 import {
   decodeJsonText,
   type JsonDecodeOptions,
@@ -16,7 +17,7 @@ import {
   FallbackChatModelInvoker,
   type ModelFallbackPolicy,
 } from "./llm-fallback.js";
-import { getAgentRuntimeConfig } from "./runtime-config.js";
+import { getAgentRuntimeConfig, readLlmThinkingDefaultEnabled } from "./runtime-config.js";
 import { getSpanManager } from "./tracing/span-manager.js";
 import { getOpikTracer } from "./tracing/opik/opik-tracer.js";
 import { auditLogger, recordMetric } from "./observability.js";
@@ -44,10 +45,30 @@ export type ModelPurpose = "chat" | "math" | "research" | "vision" | "tool";
 
 let configuredChatDefaults: Pick<ChatModelOptions, "thinkingEnabled"> = {};
 export function configureChatModelDefaults(defaults: Pick<ChatModelOptions, "thinkingEnabled">): void {
+  if (defaults.thinkingEnabled === true && !supportsConfiguredThinkingControl()) {
+    throw new Error("invalid_configuration:ENTRY_THINKING_DEFAULT:unsupported_provider_capability");
+  }
   configuredChatDefaults = Object.freeze({ ...defaults });
 }
 export function chatModelDefaults(): Readonly<Pick<ChatModelOptions, "thinkingEnabled">> { return configuredChatDefaults; }
-export function supportsConfiguredThinkingControl(): boolean { return getConfiguredLlmProvider() === "qwen"; }
+export function supportsConfiguredThinkingControl(): boolean { return getConfiguredLlmCapabilities().supportsThinkingControl; }
+
+/**
+ * Startup check (D-2): the gateway-wide default must be well formed, and a provider that cannot
+ * control thinking must not be asked to enable it.
+ */
+export function assertThinkingConfiguration(provider: LlmProviderName = getConfiguredLlmProvider()): void {
+  const enabled = readLlmThinkingDefaultEnabled();
+  if (enabled && !capabilitiesForProvider(provider, "chat").supportsThinkingControl) {
+    throw new Error("invalid_configuration:LLM_THINKING_DEFAULT_ENABLED:unsupported_provider_capability");
+  }
+}
+
+/** Caller value first, then the gateway-wide default; `undefined` when the provider cannot control thinking. */
+function effectiveThinking(capabilities: LlmCapabilities, requested: boolean | undefined): boolean | undefined {
+  if (!capabilities.supportsThinkingControl) return undefined;
+  return requested ?? readLlmThinkingDefaultEnabled();
+}
 let usageModelValidator: (model: EnabledUsageModel) => void = () => {};
 export function configureUsageModelValidator(validator: (model: EnabledUsageModel) => void): void { usageModelValidator = validator; }
 
@@ -272,6 +293,8 @@ export type LlmCapabilities = {
   supportsVision: boolean;
   supportsStreaming: boolean;
   supportsUsageMetadata: boolean;
+  /** Whether the provider accepts an explicit `enable_thinking` request field. */
+  supportsThinkingControl: boolean;
   contextWindowTokens: number;
   maxOutputTokens: number;
 };
@@ -445,6 +468,21 @@ function parseJsonResponse<T>(
   );
 }
 
+/** Reads the provider envelope's model field without a type assertion. */
+function readEnvelopeModel(envelope: unknown): unknown {
+  return envelope !== null && typeof envelope === "object" && "model" in envelope ? envelope.model : undefined;
+}
+
+/** `model` keeps its existing semantics: any string (empty included) as-is, otherwise the configured model. */
+function metadataModel(reported: unknown, configured: string): string {
+  return typeof reported === "string" ? reported : configured;
+}
+
+/** D-8: only a non-empty provider-reported model name; never filled from configuration. */
+function providerReportedModel(reported: unknown): string | null {
+  return typeof reported === "string" && reported.trim().length > 0 ? reported : null;
+}
+
 function endpointKindForProvider(provider: LlmProviderName): LlmEndpointKind {
   if (provider === "ccr") {
     return "anthropic-messages";
@@ -460,6 +498,7 @@ function capabilitiesForProvider(provider: LlmProviderName, purpose: ModelPurpos
       supportsVision: false,
       supportsStreaming: false,
       supportsUsageMetadata: false,
+      supportsThinkingControl: false,
       contextWindowTokens: 200_000,
       maxOutputTokens: 8_192,
     };
@@ -471,6 +510,8 @@ function capabilitiesForProvider(provider: LlmProviderName, purpose: ModelPurpos
     supportsVision: purpose === "vision",
     supportsStreaming: false,
     supportsUsageMetadata: true,
+    // Capability declared per provider adapter, never derived from the model name.
+    supportsThinkingControl: provider === "qwen",
     contextWindowTokens: 128_000,
     maxOutputTokens: 8_192,
   };
@@ -554,12 +595,8 @@ function resolveQwenModel(purpose: ModelPurpose, requestedModel: string | undefi
           ? getFirstEnv(["QWEN_TOOL_MODEL", "QWEN_CHAT_MODEL"])
           : getEnv("QWEN_CHAT_MODEL").trim();
 
-  const fallback =
-    purpose === "vision"
-      ? "qwen-vl-plus"
-      : "qwen-plus";
-
-  return qwenPurposeModel || getLegacyPurposeModel(purpose) || fallback;
+  // Every purpose, vision included, falls back to the single generation-model constant (D-10).
+  return qwenPurposeModel || getLegacyPurposeModel(purpose) || DEFAULT_GENERATION_MODEL;
 }
 
 function getOpenAiCompatibleModel(requestedModel: string | undefined, purpose: ModelPurpose): string {
@@ -1377,6 +1414,8 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
       );
     }
 
+    // Resolved once so provider retries and tool-argument repair resends carry the same value.
+    const thinkingEnabled = effectiveThinking(capabilities, this.options.thinkingEnabled);
     let lastError: Error | undefined;
     let providerFailureCount = 0;
     let requestInput = input;
@@ -1385,7 +1424,7 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
       try {
         const body = {
           model: this.options.model,
-          ...(this.options.thinkingEnabled === undefined ? {} : { enable_thinking: this.options.thinkingEnabled }),
+          ...(thinkingEnabled === undefined ? {} : { enable_thinking: thinkingEnabled }),
           temperature: this.options.temperature,
           messages: toOpenAiMessages(requestInput),
           ...(this.options.responseFormat ? { response_format: this.options.responseFormat } : {}),
@@ -1484,10 +1523,13 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
           response_metadata: {
             provider: this.options.provider,
             endpointKind,
-            model: typeof parsed.model === "string" ? parsed.model : this.options.model,
+            model: metadataModel(parsed.model, this.options.model),
+            provider_model: providerReportedModel(parsed.model),
             id: typeof parsed.id === "string" ? parsed.id : undefined,
             finish_reason: choice?.finish_reason,
             tool_call_diagnostic_count: diagnostics.length,
+            // The value actually sent; null means the field was not sent.
+            thinking_enabled: thinkingEnabled ?? null,
             capabilities,
           },
         });
@@ -1537,6 +1579,7 @@ class OpenAiCompatibleGateway implements ProviderGateway {
       purpose,
       responseFormat: options.responseFormat,
       toolChoice: options.toolChoice,
+      thinkingEnabled: options.thinkingEnabled,
     });
   }
 }
@@ -1638,7 +1681,17 @@ class CcrAnthropicChatModel implements ChatModelInvoker {
           ?.map((block) => block.type === "text" ? contentToString(block.text) : "")
           .filter(Boolean)
           .join("\n") ?? "";
-        return new AIMessage(content);
+        return new AIMessage({
+          content,
+          // CCR cannot control thinking, so nothing was sent.
+          response_metadata: {
+            provider,
+            endpointKind,
+            model: metadataModel(readEnvelopeModel(parsed), this.options.model),
+            provider_model: providerReportedModel(readEnvelopeModel(parsed)),
+            thinking_enabled: null,
+          },
+        });
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
         if (invokeOptions?.signal?.aborted) {
@@ -1847,6 +1900,42 @@ export function describeLlmGatewayConfig(): Record<string, string | boolean> {
   };
 }
 
+export type EffectiveLlmEndpoint = {
+  provider: LlmProviderName;
+  /** Hostname only: no scheme, port, path, query, user info or credentials. */
+  endpointHost: string;
+};
+
+/**
+ * Read-only lookup of the endpoint host the gateway actually calls, built-in default included (D-9).
+ * Deliberately not part of `describeLlmGatewayConfig()` or any health/readiness response.
+ */
+export function getEffectiveLlmEndpoint(): EffectiveLlmEndpoint {
+  const provider = getConfiguredLlmProvider();
+  let baseUrl: string;
+  if (provider === "qwen") {
+    baseUrl = getQwenBaseUrl();
+  } else if (provider === "ccr") {
+    baseUrl = getCcrBaseUrl();
+    if (!baseUrl) throw new Error("CCR LLM provider selected but CCR_BASE_URL is not configured.");
+  } else {
+    baseUrl = getOpenAiCompatibleBaseUrl();
+    if (!baseUrl) {
+      throw new Error(
+        "OpenAI-compatible LLM provider selected but CCR_BASE_URL, OPENAI_COMPATIBLE_BASE_URL, or OPENAI_BASE_URL is not configured."
+      );
+    }
+  }
+  let endpointHost = "";
+  try {
+    endpointHost = new URL(baseUrl).hostname;
+  } catch {
+    // Fall through: the message must not echo the configured value.
+  }
+  if (!endpointHost) throw new Error("invalid_configuration:LLM_BASE_URL");
+  return { provider, endpointHost };
+}
+
 export function getConfiguredLlmCapabilities(
   purpose: ModelPurpose = "chat"
 ): Readonly<LlmCapabilities> {
@@ -1854,6 +1943,7 @@ export function getConfiguredLlmCapabilities(
 }
 
 const configuredLlmProvider = getConfiguredLlmProvider();
+assertThinkingConfiguration(configuredLlmProvider);
 export const llmGateway: LlmGateway = new ConfiguredLlmGateway(
   configuredLlmProvider,
   createGatewayForProvider(configuredLlmProvider)

@@ -1,10 +1,11 @@
 import type { ChainCaseResult, ChainEvaluationMode, ChainEvaluationRun, ChainSplitSummary, TurnScore } from "./chain-scoring.js";
+import { renderGenerationSummary, type GenerationProvenance } from "../generation-provenance.js";
 
 /**
  * X42 provenance fields plus the chain-specific ones (design §20.7). Fields a
  * mode does not use are null rather than omitted, so the two modes compare.
  */
-export interface ChainEvaluationProvenance {
+export interface ChainEvaluationProvenance extends GenerationProvenance {
   datasetVersion: string;
   corpusVersion: string;
   orderFixtureVersion: string;
@@ -141,6 +142,7 @@ export function renderChainReportMarkdown(run: ChainEvaluationRun, provenance: C
         ? `- 狀態：completed，但清除失敗，**不可發布**。`
         : `- 狀態：incomplete，**不可發布**。未完成的題目：${run.failedCases.join(", ")}。以下數字只供除錯，不得當作分數。`,
     `- evaluationRunId：\`${run.evaluationRunId}\``,
+    renderGenerationSummary(provenance),
   ];
   if (run.knowledgeImport?.status === "failed") {
     lines.push(`- kb-v1 匯入失敗（${run.knowledgeImport.errorCode}），沒有執行任何題目。`);

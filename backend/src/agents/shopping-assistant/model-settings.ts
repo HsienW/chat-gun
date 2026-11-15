@@ -7,7 +7,8 @@ export interface ShoppingAssistantModelSettings {
   model: string | undefined;
   temperature: number;
   intentTimeoutMs: number;
-  thinkingEnabled?: boolean;
+  /** Always disabled; unset never falls through to the gateway-wide thinking default. */
+  thinkingEnabled: false;
 }
 
 /** The production graph and the live chain evaluation read the same settings. */
@@ -22,9 +23,8 @@ export function readShoppingAssistantModelSettings(read: (name: string) => strin
   if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
     throw new Error("Invalid SHOPPING_ASSISTANT_TEMPERATURE");
   }
+  // Gun Shop thinking is always off in every mode; only "unset" or "false" is accepted.
   const rawThinking = read("SHOPPING_ASSISTANT_THINKING_ENABLED").trim();
-  if (rawThinking && rawThinking !== "true" && rawThinking !== "false") throw new Error("invalid_configuration:SHOPPING_ASSISTANT_THINKING_ENABLED");
-  return { model: read("SHOPPING_ASSISTANT_MODEL").trim() || undefined, temperature, intentTimeoutMs,
-    ...(rawThinking ? { thinkingEnabled: rawThinking === "true" } : {}),
-  };
+  if (rawThinking && rawThinking !== "false") throw new Error("invalid_configuration:SHOPPING_ASSISTANT_THINKING_ENABLED");
+  return { model: read("SHOPPING_ASSISTANT_MODEL").trim() || undefined, temperature, intentTimeoutMs, thinkingEnabled: false };
 }

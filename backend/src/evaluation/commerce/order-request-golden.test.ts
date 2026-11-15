@@ -358,6 +358,20 @@ describe("rescoring a stored run", () => {
     await expect(rescoreGoldenRun({ ...input(fresh), sourceName: "../outside" })).rejects.toMatchObject({ code: "ORDER_GOLDEN_RESCORE_SOURCE_INVALID" });
     await expect(rescoreGoldenRun({ ...input(fresh), sourceName: "missing" })).rejects.toMatchObject({ code: "ORDER_GOLDEN_RESCORE_SOURCE_INVALID" });
   });
+
+  it("retains generation provenance while rescoring and renders its model summary", async () => {
+    const root = await storedRoot();
+    const source = join(root, sourceName, "run.json");
+    const stored = JSON.parse(await readFile(source, "utf8"));
+    const generation = { generationModels: { tool: "configured" }, observedProviderModels: ["reported"], observedProviderModelsStatus: "reported", thinkingEnabled: false, llmProvider: "qwen", llmEndpointHost: "example.test" };
+    Object.assign(stored.provenance, generation);
+    const before = JSON.stringify(stored);
+    await writeFile(source, before);
+    const { outDirectory } = await rescoreGoldenRun(input(root));
+    expect(JSON.parse(await readFile(join(outDirectory, "run.json"), "utf8")).provenance).toMatchObject(generation);
+    expect(await readFile(join(outDirectory, "report.md"), "utf8")).toContain('生成模型：{"tool":"configured"}；thinking=false；endpoint=example.test');
+    expect(await readFile(source, "utf8")).toBe(before);
+  });
 });
 
 describe("order request golden report", () => {

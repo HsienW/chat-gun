@@ -15,7 +15,7 @@
 - **thinking 預設關閉，並由 Gateway 統一送出**：Qwen provider 每次生成請求都明確送出 `enable_thinking`。值依序取自：入口層的明確設定 → 全站 thinking 預設設定（預設 `false`）。只對宣告支援 thinking 控制的 provider 送出，依據是 capability，不看模型名稱。
 - **Gun Shop thinking 一律關閉**：依 B12，凡是會服務 `shopping_assistant` 的啟動流程，有效 thinking 值都必須是 `false`；明確設為 `true` 時拒絕啟動。這是對既有可接受值的收緊，見「相容性」。
 - **fallback 鏈**：不新增模型層 fallback。既有 provider 層 fallback 維持預設關閉，語意不變。flash 未達 C1 品質門檻時要改用哪個模型，屬於 1B-2 的待決項。
-- **評測 provenance 記錄實際模型**：kb-eval、chain-eval、order-request golden 的 provenance 都要記錄每個生成用途的設定模型、有效 thinking 設定、endpoint 主機（不含 secret），以及 provider 回應中實際回報的模型集合。live chain-eval 必須套用與 production graph 相同的 Gun Shop thinking 設定。
+- **評測 provenance 記錄實際模型**：kb-eval、chain-eval、order-request golden 的 provenance 都要記錄每個生成用途的設定模型、有效 thinking 設定、endpoint 主機（不含 secret），以及 provider 回應中實際回報的模型集合。live chain-eval 必須套用與 production graph 相同的 Gun Shop thinking 設定。為了讓這些欄位可信，Gateway 的回應 metadata 新增 provider 原始回報模型欄位（既有 `model` 不變），並提供有效 endpoint 主機的唯讀查詢（含內建預設）。這兩項是 apply-change-001 回報後補上的契約。
 - **新加坡國際 endpoint 相容性的 live probe**：新增手動觸發、預設跳過的 live probe，驗證 `qwen3.5-flash` 在新加坡 endpoint 上的 text、JSON object 結構化輸出、Tool Calling、vision 與 `enable_thinking=false` 是否可用。結果寫入 evidence；未執行的項目如實標示。
 - **回滾**：把模型相關設定改回 `qwen3.7-plus`／`qwen-plus` 即可，不需改程式。
 
@@ -51,10 +51,10 @@
 
 ## Impact
 
-- **backend**：LLM Gateway 的 Qwen 模型預設與 thinking 送出邏輯、provider capability 宣告、Gun Shop 模型設定的啟動驗證、評測 CLI 與 provenance 型別、`.env.example`、新增 live probe 與測試。
+- **backend**：LLM Gateway 的 Qwen 模型預設與 thinking 送出邏輯、provider capability 宣告、回應 metadata 新增 `provider_model`、有效 endpoint 主機唯讀查詢、Gun Shop 模型設定的啟動驗證、評測 CLI 與 provenance 型別、`.env.example`、新增 live probe 與測試。
 - **bff**：無變更。
 - **frontend**：無變更。
-- **與其他 Change 的檔案重疊**：LLM Gateway 與 Gun Shop 模型設定目前也是 `demo-cost-and-access-guard`（READY_FOR_REVIEW，未提交）與 `stream-chat-answer-text` 的修改對象；kb-eval CLI 是 `harden-kb-evaluation-baseline` 的修改對象。本 Change 依 design「檔案邊界與施工順序」分兩組施工，重疊檔案的施工必須等前一個 Change 釋放檔案（Master 決策 OD-1 (a)，2026-11-04）。
+- **與其他 Change 的檔案重疊**：LLM Gateway 與 Gun Shop 模型設定目前也是 `demo-cost-and-access-guard`（READY_FOR_REVIEW，未提交）與 `stream-chat-answer-text` 的修改對象；kb-eval CLI 原為 `harden-kb-evaluation-baseline` 的修改對象（該 Change 已歸檔，檔案已釋放）。本 Change 依 design「檔案邊界與施工順序」分組施工，重疊檔案以檔案為單位檢查，必須等前一個 Change 釋放該檔案（Master 決策 OD-1 (a)，2026-11-04）。
 - **成本**：依 r2 §4.1，新加坡 qwen3.5-flash 為 USD 0.1 in／0.4 out（每 1M token），低於 qwen3.7-plus。關閉 thinking 可避免 reasoning token 以 output 單價計費。正式單價仍待 6.4(a) 核實。
 
 ## 相容性
@@ -64,6 +64,7 @@
 - 先前沒有送出 `enable_thinking` 的呼叫（`deep_researcher`、`math_agent`、`mcp_agent`、非 demo 的 `chatbot`）改為明確送出 `false`。對 `qwen-plus` 而言，這與 provider 原本的預設一致（未驗證，見 design）。
 - `SHOPPING_ASSISTANT_THINKING_ENABLED=true` 原本可以接受，改為拒絕啟動，錯誤碼沿用既有的 `invalid_configuration:SHOPPING_ASSISTANT_THINKING_ENABLED`。
 - provenance JSON 只新增欄位，舊報表不改寫；讀取舊報表時，缺少的新欄位視為「未記錄」。
+- Gateway 回應 metadata 只新增 `provider_model`；既有 `model` 的值與代填語意不變，帳本與 tracing 不受影響。有效 endpoint 查詢是新的唯讀介面，不改變既有 health／readiness 回應。
 
 ## Risks
 

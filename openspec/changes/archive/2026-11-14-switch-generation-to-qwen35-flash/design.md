@@ -67,6 +67,7 @@ Goals 與 Non-goals 以 proposal 為準。設計限制：
 3. 有效 thinking 的決定順序：呼叫端明確傳入的 `thinkingEnabled` → `configureChatModelDefaults` 設定的入口預設（demo 模式下 `chatbot` 的 `CHAT_THINKING_ENABLED`）→ 全站預設 → `false`。
 4. provider 宣告 `supportsThinkingControl: true` 時，**每個**生成請求都送出明確的 `enable_thinking`，包含 vision、JSON object、Tool Calling 與修復重送。宣告 `false` 時永不送出；此時若設定明確要求開啟 thinking（全站預設或入口設定為 `true`），視為設定錯誤並拒絕啟動。
 5. 實際送出的 thinking 值放進 `response_metadata`（例如 `thinking_enabled`），供 provenance 與 tracing 讀取。不新增 State 欄位。
+6. `demo-cost-and-access-guard` 已提交的 `backend/src/platform/llm-gateway.usage.test.ts` 斷言「呼叫端未傳 thinking 時不送出 `enable_thinking`」，鎖定的是本 Change 要取代的舊行為。Master 2026-11-11 授權把該斷言更新為期望 `enable_thinking: false`；這是更新至新契約，不是放寬，該檔其他斷言（含帳本金額）不得修改。
 
 **理由**：官方文件說 flash 預設開啟 thinking。若不由 Gateway 統一送出，`deep_researcher`、`math_agent`、`mcp_agent` 與非 demo 的 `chatbot` 會在切換後產生 reasoning token。放在 Gateway 可涵蓋所有呼叫點，各 graph 不必逐一修改，也不依模型名稱判斷。
 
@@ -99,12 +100,12 @@ Goals 與 Non-goals 以 proposal 為準。設計限制：
 | 欄位 | 內容 |
 |---|---|
 | `generationModels` | 依生成用途列出設定解析後的模型，例如 `{ "chat": "qwen3.5-flash", "tool": "qwen3.5-flash" }`。 |
-| `observedProviderModels` | 本次 run 中 provider 回應 `model` 欄位的去重集合。provider 沒有回報時記 `[]` 並附 `observedProviderModelsStatus: "unreported"`。 |
+| `observedProviderModels` | 本次 run 中 provider 原始回報模型（`response_metadata.provider_model`，見 D-8）的去重集合，並附 `observedProviderModelsStatus`：`reported`（全部有回報）、`unreported`（全部沒有，集合為 `[]`）、`partial`（部分有）。 |
 | `thinkingEnabled` | 本次 run 實際送出的有效 thinking 值；provider 不支援 thinking 控制時為 `null`。 |
 | `llmProvider` | `qwen`／`ccr`／`openai-compatible`。 |
-| `llmEndpointHost` | base URL 的主機名稱，不含路徑、query 與憑證。 |
+| `llmEndpointHost` | Gateway 實際使用之 endpoint 的主機名稱（D-9，含內建預設），不含路徑、query 與憑證，不得為空字串。 |
 
-收集 `observedProviderModels` 的方式：評測自己的 invoker 包裝層讀取每次回應的 `response_metadata.model`。這個包裝層放在評測模組內，不修改 Gateway。
+收集 `observedProviderModels` 的方式：評測自己的 invoker 包裝層讀取每次回應的 `response_metadata.provider_model`，**不讀** `response_metadata.model`（後者在 provider 未回報時由 Gateway 代填設定模型，無法分辨）。回應沒有 `provider_model` 欄位時視為該次未回報。包裝層放在評測模組內；Gateway 只依 D-8 新增欄位，不為評測改變既有回傳內容。
 
 live chain-eval 與 order-request golden 建立模型時，必須傳入與 production graph 相同的 Gun Shop thinking 設定。
 
@@ -120,16 +121,44 @@ live chain-eval 與 order-request golden 建立模型時，必須傳入與 produ
 
 `.env.example` 的 `QWEN_BASE_URL` 保留北京 endpoint（OD-3 已定案為 a），並加註新加坡 endpoint `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` 與「API Key 依區域分開」的說明。部署設定由 Chapter 2 D5 決定。
 
+### D-8：Gateway 回應 metadata 新增 `provider_model`（apply-change-001 回報後新增）
+
+**問題**：Gateway 組裝生成回應時，`response_metadata.model` 在 provider 未回報模型時以設定模型代填。評測包裝層因此無法分辨「provider 回報了與設定相同的模型」和「provider 沒有回報」，spec 的 `unreported` 無法端到端成立（implementation-result-apply-change-001 Blocker `PROVIDER_MODEL_ORIGIN_UNAVAILABLE`）。
+
+**做法**：每個 provider adapter 的生成回應 metadata 新增 `provider_model: string | null`，只保存 provider 原始回報的非空模型名稱，否則為 `null`。既有 `model` 欄位與代填語意完全不變：模型欄位為字串時（含空字串）原樣保留，非字串或缺少時以設定模型代填（apply-change-003 發現空字串與 spec 舊文字矛盾，Master 2026-11-11 定案維持現行行為）。CCR（Anthropic Messages）adapter 目前回傳的生成回應完全沒有 `response_metadata`，本項必須補上 `provider`、`model`（依相同代填語意）與 `provider_model`，與 OpenAI-compatible 路徑對齊；provider envelope 的 Schema 可維持 passthrough，`model` 以 Runtime Validation 安全讀取，不使用 Type Assertion（review-result-review-plan-004 Minor 1）。重試、Tool 參數修復重送與 provider 層 fallback 都以最終被採用的那次 provider 回應為準。
+
+**理由**：只新增欄位，Graph 輸出、帳本（`demo-cost-and-access-guard` 以 provider 與 `model` 入帳）與 tracing 讀到的值都不變。判斷依據是 provider 回應本身，不依模型名稱。
+
+**替代方案**：
+
+| 方案 | 不採用的理由 |
+|---|---|
+| 移除 `model` 的代填，未回報時改為 `undefined` | 改變既有 metadata 語意；帳本與 tracing 可能依賴 `model` 必有值，屬破壞性修改。 |
+| 評測比對 `model` 是否等於設定值來推測 | 「回報值剛好等於設定值」與「代填」無法分辨，等同以設定值代填，違反 spec。 |
+| 評測直接呼叫 provider HTTP 取得原始回應 | 繞過 Gateway，評測與 production 的請求路徑不一致。 |
+
+### D-9：Gateway 提供有效 endpoint 主機的唯讀查詢（apply-change-001 回報後新增）
+
+**問題**：未設定 `QWEN_BASE_URL` 時，Gateway 使用內建預設 endpoint，但沒有公開介面可取得它；評測只能記錄空的 `llmEndpointHost`（Blocker `DEFAULT_ENDPOINT_HOST_UNAVAILABLE`）。在評測端複製一份內建預設 URL 會形成第二個來源，違反單一來源原則。
+
+**做法**：Gateway 新增唯讀查詢，回傳 `{ provider, endpointHost }`。`endpointHost` 由 Gateway 實際使用的 base URL（含內建預設）解析出主機名稱；無法解析時回報穩定的設定錯誤（不含設定值）；需要 base URL 但未設定的 provider 依既有缺少設定語意報錯。評測三條路徑（kb-eval、chain-eval、order-request golden）都改用此查詢，在建立模型前呼叫，失敗即中止。
+
+**範圍限制**：不擴充既有 `describeLlmGatewayConfig()` 的回傳內容，也不加入對外 health／readiness 回應，避免擴大外部可見資訊。
+
+### D-10：預設生成模型常數放在不重疊的新模組
+
+D-1 的 Domain Constant 放在不與其他 Change 重疊的新模組（不放在 Gateway 檔案內），Gateway（2.1）與 kb-eval CLI（2.4）都引用它。這樣 2.4 不必等待 Gateway 檔案釋放。
+
 ## 檔案邊界與施工順序
 
 ### 與其他 Change 的檔案重疊
 
 | 檔案或區域 | 其他持有者 | 本 Change 需要的修改 |
 |---|---|---|
-| LLM Gateway（`backend/src/platform/llm-gateway.ts`） | `demo-cost-and-access-guard`（未提交，READY_FOR_REVIEW）、`stream-chat-answer-text` | D-1 程式預設、D-2 capability 與 thinking 送出 |
+| LLM Gateway（`backend/src/platform/llm-gateway.ts`） | `demo-cost-and-access-guard`（未提交，READY_FOR_REVIEW）、`stream-chat-answer-text` | D-1 程式預設、D-2 capability 與 thinking 送出、D-8 `provider_model`、D-9 endpoint 唯讀查詢 |
 | Gun Shop 模型設定（`backend/src/agents/shopping-assistant/model-settings.ts`） | `demo-cost-and-access-guard` | D-3 |
 | backend 啟動組裝（`backend/src/application.ts`） | `demo-cost-and-access-guard` | 原則上不需修改；若 D-2 的全站預設需要在啟動時驗證，優先放在 runtime 設定讀取 |
-| kb-eval CLI（`backend/src/knowledge/evaluation/evaluate.cli.ts`） | `harden-kb-evaluation-baseline` | D-1 預設、D-5 provenance |
+| kb-eval CLI（`backend/src/knowledge/evaluation/evaluate.cli.ts`） | `harden-kb-evaluation-baseline`（2026-11-06 已歸檔並提交，檔案已釋放） | D-1 預設、D-5 provenance |
 | 各 graph 檔案（`chatbot`、`deep-researcher`、`math-agent`、`mcp-agent`、`shopping-assistant/*`） | `demo-cost-and-access-guard` | **不修改**（D-2 在 Gateway 統一處理） |
 | demo 啟動檢查（`backend/src/demo/**`）、usage／單價表（`backend/src/platform/usage/**`） | `demo-cost-and-access-guard` | **不修改** |
 
@@ -143,9 +172,17 @@ live chain-eval 與 order-request golden 建立模型時，必須傳入與 produ
 ### 施工分組
 
 - **Group A（不與其他 Change 重疊，review-plan 通過後即可施工）**：`.env.example`、chain-eval 與 order-request golden 的 provenance 與 thinking 一致性（`backend/src/evaluation/commerce/**` 中與 provenance、live dependencies、golden CLI 相關的檔案）、評測 invoker 包裝層（新檔）、live probe（新檔）、新測試檔。
-- **Group B（修改重疊檔案）**：Gateway（D-1、D-2）、Gun Shop 模型設定（D-3）、kb-eval CLI（D-1、D-5）。依 OD-1 (a)，Group B 要等下列條件成立才施工：該檔案上其他 Change 的修改已提交；`stream-chat-answer-text` 尚未開始修改 Gateway，或其修改已提交。兩個 Change 不得同時修改同一檔案。
+- **Group B（修改重疊檔案）**：Gateway（D-1、D-2、D-8、D-9）、Gun Shop 模型設定（D-3）、kb-eval CLI（D-1、D-5）。依 OD-1 (a)，Group B 要等下列條件成立才施工：該檔案上其他 Change 的修改已提交；`stream-chat-answer-text` 尚未開始修改 Gateway，或其修改已提交。兩個 Change 不得同時修改同一檔案。
+- **Group C（依賴 Group B 的評測接線）**：評測包裝層改讀 `provider_model` 並支援 `partial`；三條評測路徑的 `llmEndpointHost` 改用 D-9 查詢。檔案不與其他 Change 重疊，但必須在 D-8、D-9 完成後施工。
 
-施工前，Codex 必須以 `git status` 與 `git diff --stat` 確認 Group B 的檔案沒有其他 Change 未提交的修改，或前一個 Change 已提交、讀取 `.agent-runtime` 確認已釋放。條件不成立時停止，回報 CCR，不得與其他 Change 的未提交修改交錯。
+**Gate 以檔案為單位（apply-change-001 回報後修訂）**：施工前，Codex 對每個 Group B task 只檢查該 task 要修改的檔案，以 `git status --porcelain` 與 `git diff --stat` 確認沒有其他 Change 未提交的修改。某個 task 的檔案不乾淨時，只跳過該 task 及依賴它的 task，其他 task 照常施工；不得與其他 Change 的未提交修改交錯，也不得 stash、reset 或 checkout 這些檔案。施工順序與相依：
+
+| Task | 修改檔案 | 前置條件 |
+|---|---|---|
+| 2.1、2.2、2.5、2.6 | Gateway | Gateway 檔案乾淨 |
+| 2.3 | Gun Shop 模型設定 | 該檔案乾淨 |
+| 2.4 | kb-eval CLI、D-10 新模組 | kb-eval CLI 乾淨 |
+| 2.7 | 評測模組（含 kb-eval CLI） | 2.4、2.5、2.6 完成 |
 
 ## 各層變更
 
@@ -159,7 +196,7 @@ live chain-eval 與 order-request golden 建立模型時，必須傳入與 produ
 
 ### backend
 
-- LLM Gateway：程式預設改為單一常數；新增 `supportsThinkingControl` capability；新增全站 thinking 預設設定；每個 Qwen 生成請求明確送出 `enable_thinking`；`response_metadata` 記錄實際送出的 thinking 值。
+- LLM Gateway：程式預設改為引用單一常數（D-10）；新增 `supportsThinkingControl` capability；新增全站 thinking 預設設定；每個 Qwen 生成請求明確送出 `enable_thinking`；`response_metadata` 記錄實際送出的 thinking 值與 `provider_model`（D-8）；新增有效 endpoint 主機唯讀查詢（D-9）。
 - Gun Shop 模型設定：thinking 只接受未設定或 `false`，未設定時有效值為 `false`。
 - 評測：provenance 新增欄位；live 評測套用 Gun Shop thinking 設定；invoker 包裝層收集 provider 回報的模型。
 - `.env.example`：範例值與說明。
@@ -200,16 +237,35 @@ review-result-review-plan-003（APPROVE，0 Blocker／0 Major）的兩個 Minor 
 - Minor 1：Gun Shop 設定讀取的 thinking 改為必填 boolean，見 D-3、tasks 2.3。
 - Minor 2：tasks 2.2 的「Schema 相同」以 spec「模型切換不改變 Domain Contract」Scenario 為基準。
 
+## apply-change-001 仲裁紀錄（2026-11-07）
+
+Codex 回報 partial（implementation-result-apply-change-001）。CCR 仲裁如下，經 Master 同意後寫入：
+
+- **`GROUP_B_DIRTY_WORKTREE`**：維持 OD-1 (a)。Gateway 與 Gun Shop 模型設定仍有其他 Change 未提交的修改，相關 task 繼續等待。Gate 改為以檔案為單位，kb-eval CLI 已釋放，2.4 下一輪可施工。
+- **`PROVIDER_MODEL_ORIGIN_UNAVAILABLE`**：屬 plan 遺漏的契約，不是施工錯誤。新增 D-8 與 tasks 2.5，評測接線移至 2.7。
+- **`DEFAULT_ENDPOINT_HOST_UNAVAILABLE`**：同上。新增 D-9 與 tasks 2.6，評測接線移至 2.7。
+- **3.1 的兩項既存失敗**：`runtime/tool-dispatch/pipeline.test.ts` 的錯誤碼不符，以及 `runtime/__tests__/integration.test.ts` 需要 PostgreSQL（`127.0.0.1:5433`）。兩者在不含本 Change 的隔離基準上都能重現，不屬本 Change，不修改其程式或 Assertion；3.1 以基準比對 evidence 判定。
+- 1.2、1.3 已交付的部分保留；其中 `unreported`／`partial` 端到端與 endpoint 主機的驗收移至 2.7。
+
+## review-plan-004 仲裁紀錄（2026-11-07）
+
+review-result-review-plan-004（APPROVE，evidence gate 通過，0 Blocker／0 Major／2 Minor）。經 Master 同意後寫入：
+
+- **Minor 1（接受）**：CCR adapter 的生成回應沒有 `response_metadata`。寫入 D-8 與 tasks 2.5，CCR 路徑必須補上 `provider`、`model` 與 `provider_model`。
+- **Minor 2（接受，但修改建議做法）**：tasks 3.1 補上基準建立方式。Reviewer 建議的 `git stash` 違反「不得 stash、reset 或 checkout 他人修改」的範圍限制，不採用。改用不動到目前工作目錄的做法：以 `git worktree add` 在暫存目錄建立指定 commit 的獨立工作樹，或把基準檔案複製到暫存快照目錄（apply-change-001 的做法）。
+- **剩餘風險（接受）**：tasks 3.4 在本輪修訂前勾選，修訂後尚未重跑 strict validate，因此取消勾選，由下一輪 Codex 重新驗證。
+
 ## 待決項（不屬本 Change）
 
 - **C1（屬 1B-2）**：flash 的品質門檻（引用、拒答）與未通過時的 fallback 模型。
 
 ## Migration Plan
 
-1. Group A：`.env.example`、評測 provenance、live probe、測試。
-2. Group B（依 OD-1）：Gateway、Gun Shop 設定、kb-eval CLI。
-3. 執行 backend lint、test、build。
-4. （Master 決定時機）以新加坡帳號執行 live probe，保存 evidence。
-5. 交給 1B-2：以 flash 重跑評測並套用 C1。
+1. Group A：`.env.example`、評測 provenance、live probe、測試（apply-change-001 已交付）。
+2. Group B（依 OD-1，以檔案為單位的 Gate）：kb-eval CLI 與 D-10 常數模組可先施工；Gateway（含 D-8、D-9）與 Gun Shop 設定等檔案釋放。
+3. Group C：評測接線改用 D-8、D-9。
+4. 執行 backend lint、test、build。
+5. （Master 決定時機）以新加坡帳號執行 live probe，保存 evidence。
+6. 交給 1B-2：以 flash 重跑評測並套用 C1。
 
 回滾：見 proposal「回滾策略」。

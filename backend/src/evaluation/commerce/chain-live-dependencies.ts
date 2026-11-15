@@ -6,7 +6,6 @@
 import { randomUUID } from "node:crypto";
 
 import { LlmShoppingIntentRouter } from "../../agents/shopping-assistant/intent-router.js";
-import { readShoppingAssistantModelSettings } from "../../agents/shopping-assistant/model-settings.js";
 import { SHOPPING_ORDER_REQUEST_PROMPT_VERSION } from "../../agents/shopping-assistant/order-branch.js";
 import { LlmPolicyAnswerSynthesizer } from "../../agents/shopping-assistant/policy-answer.js";
 import { readKnowledgeConfig, type KnowledgeConfig } from "../../knowledge/config.js";
@@ -22,12 +21,13 @@ import { ingestCorpus } from "../../knowledge/ingestion.js";
 import { runKnowledgeMigrations } from "../../knowledge/migration-runner.js";
 import { HttpKnowledgeModelGateway, type KnowledgeModelGateway } from "../../knowledge/model-gateway.js";
 import { PgKnowledgeStore, type KnowledgeStore } from "../../knowledge/store.js";
-import { getConfiguredLlmCapabilities, llmGateway } from "../../platform/llm-gateway.js";
 import type { Queryable } from "../../runtime/persistence/rows.js";
 import { EnvironmentSecretBroker } from "../../runtime/tool-dispatch/secret-broker.js";
 import { KB_SEARCH_SECRET_REFERENCE, createKbSearchTool } from "../../tools/kb-search.js";
+import type { GenerationProvenance } from "../generation-provenance.js";
 import { isLiveTenantId } from "./chain-isolation.js";
 import type { LiveChainKnowledge, LiveChainModels } from "./chain-runner.js";
+import { createCommerceGenerationModels } from "./generation-models.js";
 
 export class ChainLiveTenantError extends Error {
   readonly name = "ChainLiveTenantError";
@@ -76,7 +76,7 @@ export function createLiveChainKnowledge(dependencies: LiveChainKnowledgeDepende
 }
 
 /** Provenance fields only the live layer has; values come from configuration, never secrets. */
-export interface LiveChainProvenance {
+export interface LiveChainProvenance extends GenerationProvenance {
   generationModel: string;
   temperature: number;
   intentPromptVersion: string;
@@ -101,7 +101,7 @@ export interface PreparedLiveChainEvaluation {
  * missing secret fails closed without writing anything.
  */
 export async function prepareLiveChainEvaluation(model: string, corpus: PreparedCorpus): Promise<PreparedLiveChainEvaluation> {
-  const settings = readShoppingAssistantModelSettings();
+  const { settings, observer, chatModel, toolModel } = createCommerceGenerationModels(model);
   const config = readKnowledgeConfig();
   const broker = createKnowledgeSecretBroker();
   const context = createSystemExecutionContext("chain-eval-live");
@@ -124,27 +124,26 @@ export async function prepareLiveChainEvaluation(model: string, corpus: Prepared
       return { rows: result.rows, rowCount: result.rowCount };
     },
   };
-  // Structured output is chosen by declared capability, never by model name.
-  const jsonFormat = getConfiguredLlmCapabilities("chat").supportsStructuredOutput ? { responseFormat: { type: "json_object" as const } } : {};
-  const chatModel = () => llmGateway.createChatModel({ purpose: "chat", model, temperature: settings.temperature, ...jsonFormat });
-  const toolModel = () => llmGateway.createChatModel({ purpose: "tool", model, temperature: settings.temperature });
   const intentRouter = new LlmShoppingIntentRouter({ timeoutMs: settings.intentTimeoutMs, createModel: chatModel });
   const policyAnswerSynthesizer = new LlmPolicyAnswerSynthesizer(chatModel);
   const gateway = new HttpKnowledgeModelGateway(config);
   return {
     models: { intentRouter, policyAnswerSynthesizer, createProductRequestModel: toolModel, createOrderRequestModel: toolModel },
     knowledge: createLiveChainKnowledge({ db, store: new PgKnowledgeStore(pool), gateway, credential, config, corpus }),
-    provenance: {
-      generationModel: model,
-      temperature: settings.temperature,
-      intentPromptVersion: intentRouter.promptVersion,
-      policyPromptVersion: policyAnswerSynthesizer.promptVersion,
-      orderRequestPromptVersion: SHOPPING_ORDER_REQUEST_PROMPT_VERSION,
-      embeddingModel: config.embeddingModel,
-      embeddingSpaceId: config.embeddingSpaceId,
-      rerankModel: config.rerankUrl ? config.rerankModel : null,
-      thresholdVersion: config.thresholdVersion,
-      configVersion: config.configVersion,
+    get provenance() {
+      return {
+        ...observer.snapshot(),
+        generationModel: model,
+        temperature: settings.temperature,
+        intentPromptVersion: intentRouter.promptVersion,
+        policyPromptVersion: policyAnswerSynthesizer.promptVersion,
+        orderRequestPromptVersion: SHOPPING_ORDER_REQUEST_PROMPT_VERSION,
+        embeddingModel: config.embeddingModel,
+        embeddingSpaceId: config.embeddingSpaceId,
+        rerankModel: config.rerankUrl ? config.rerankModel : null,
+        thresholdVersion: config.thresholdVersion,
+        configVersion: config.configVersion,
+      };
     },
     close: () => pool.end(),
   };
