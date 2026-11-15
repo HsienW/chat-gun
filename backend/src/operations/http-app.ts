@@ -2,6 +2,10 @@ import { Hono } from "hono";
 
 import { metricsApp } from "../platform/metrics/metrics-endpoint.js";
 import { getMetricsCollector } from "../platform/metrics/metrics-collector.js";
+import {
+  evaluateAnswerStreamReadiness,
+  type AnswerStreamReadiness,
+} from "../runtime/answer-stream/answer-stream-wiring.js";
 import { executionIdSchema } from "../runtime/execution-context/execution-context.js";
 import { createSubjectRightsHttpApp } from "../runtime/data-governance/subject-rights-http.js";
 import { getIncidentProjectionIndex } from "./incident-query.js";
@@ -18,6 +22,8 @@ export interface OperationsHttpAppDependencies {
   subjectRightsProvider?(): SubjectRightsHttpDependencies | undefined;
   usageMetadata?(): Promise<{ version: "usage-ledger@1"; currency: string | null; timeZone: string; keyPrefix: string; shared: boolean; pricesComplete: boolean; ready: boolean }>;
   acceptNewWorkCheck?(): Promise<boolean>;
+  /** Defaults to the runtime wiring check: answer streaming enabled but unwired is not ready. */
+  answerStreamReadiness?(): AnswerStreamReadiness;
 }
 
 let subjectRightsHttpDependencies: SubjectRightsHttpDependencies | undefined;
@@ -69,6 +75,15 @@ function createSubjectRightsProxy(
   });
 }
 
+function readAnswerStreamReadiness(dependencies: OperationsHttpAppDependencies): AnswerStreamReadiness {
+  try {
+    return (dependencies.answerStreamReadiness ?? evaluateAnswerStreamReadiness)();
+  } catch {
+    // An unreadable setting is a configuration failure, never "ready".
+    return { ready: false, reasonCodes: ["answer_stream_configuration_invalid"] };
+  }
+}
+
 export function createOperationsHttpApp(
   dependencies: OperationsHttpAppDependencies = { healthProbe: defaultHealthProbe },
 ) {
@@ -97,6 +112,8 @@ export function createOperationsHttpApp(
     const health = await dependencies.healthProbe();
     const ready = dependencies.acceptNewWorkCheck ? await dependencies.acceptNewWorkCheck().catch(() => false) : true;
     if (!ready) return context.json({ ...health.acceptNewWork, status: "not_ready", reasonCodes: [...health.acceptNewWork.reasonCodes, "usage_ledger_unavailable"], degraded: health.degraded }, 503);
+    const answerStream = readAnswerStreamReadiness(dependencies);
+    if (!answerStream.ready) return context.json({ ...health.acceptNewWork, status: "not_ready", reasonCodes: [...health.acceptNewWork.reasonCodes, ...answerStream.reasonCodes], degraded: health.degraded }, 503);
     return context.json(
       { ...health.acceptNewWork, degraded: health.degraded },
       health.acceptNewWork.status === "ready" ? 200 : 503,
