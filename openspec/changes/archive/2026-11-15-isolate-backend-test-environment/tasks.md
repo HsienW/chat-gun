@@ -35,3 +35,8 @@
 - 3.2 保留未勾選：乾淨 shell 第 2 次與敵意 shell 的計數相同（2379 passed、0 failed、118 skipped），但乾淨 shell 第 1 次因 `llm-gateway-fallback.test.ts` 第一個案例在全套件負載下冷啟動 import 超過 5000ms 逾時而失敗 2 個案例。此不穩定與環境洩漏無關，修正需變更該測試檔（不在本 Change 範圍與授權內），交 CCR 仲裁。
 - 4.4 保留未勾選：Opik live smoke 真實執行未進行，需 Master 環境。
 - 未刪除或放寬任何既有斷言；未修改其他 Change 的工作樹修改。
+## readiness-check 紀錄（handoff-readiness-check-001）
+
+- CCR 以 Master self_acceptance 授權 auth-isolate-backend-test-environment-readiness-001 執行驗收，結論見 readiness-result-readiness-check-001：通過，含已知風險。
+- 3.2 與 4.4 維持未勾選，因工作未完成。Master 於 2026-11-11 決定兩項皆以已知風險接受：3.2 的冷啟動逾時由另開 Change 修正；4.4 的 Opik live smoke 日後於 Master 環境以 `cd backend && npm run eval:opik` 執行。
+- 補充驗證：Master 環境接上專用整合測試資料庫後，backend 全套件 2456 passed、0 failed、41 skipped。
