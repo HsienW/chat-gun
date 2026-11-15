@@ -161,6 +161,8 @@ export type AgentRuntimeConfig = {
   locale: AgentLocale;
   timeZone: string;
   runtimeEventEnvelopeEnabled: boolean;
+  /** Opt-in chat answer streaming (stream-chat-answer-text design D4); off until consumers ship. */
+  answerTextStreamingEnabled: boolean;
   identityStatusEnforcementEnabled: boolean;
   runtimeBoundaryFlags: RuntimeBoundaryFlags;
   contextBudgetTotal: number;
@@ -187,6 +189,14 @@ export type AgentRuntimeConfig = {
   llmProviderResponseMaxBytes: number;
   llmToolArgumentMaxBytes: number;
   llmJsonMaxDepth: number;
+  /** Request sent → first visible answer fragment (design D8). */
+  llmStreamFirstChunkTimeoutMs: number;
+  /** Maximum stall between visible fragments; heartbeat, role and usage frames do not reset it. */
+  llmStreamIdleTimeoutMs: number;
+  /** Hard limit for one streamed attempt; no frame extends it. */
+  llmStreamTotalDeadlineMs: number;
+  /** Upper bound for undecoded stream bytes plus the partially assembled event. */
+  llmStreamMaxPendingBytes: number;
   otelEnabled: boolean;
   otelServiceName: string;
   otelExporterEndpoint?: string;
@@ -220,6 +230,12 @@ const DEFAULT_TOOL_DISPATCH_RATE_LIMIT_WINDOW_MS = 60_000;
 const DEFAULT_TOOL_DISPATCH_CIRCUIT_RESET_TIMEOUT_MS = 30_000;
 const DEFAULT_TOOL_RETRY_AFTER_MAX_MS = 30_000;
 const DEFAULT_TOOL_DISPATCH_STEP_LOCK_TTL_MS = 30_000;
+// Stream limits (design D8). Defaults come from the Task 3.1 measurement on the deployed Qwen
+// endpoint (evidence task3-1-latency-ccr.json); they only apply to callers with an answer sink.
+const LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS = { fallback: 10_000, min: 2_000, max: 60_000 };
+const LLM_STREAM_IDLE_TIMEOUT_MS = { fallback: 15_000, min: 3_000, max: 120_000 };
+const LLM_STREAM_TOTAL_DEADLINE_MS = { fallback: 180_000, min: 10_000, max: 600_000 };
+const LLM_STREAM_MAX_PENDING_BYTES = { fallback: 262_144, min: 4_096, max: 4_194_304 };
 
 function readPositiveInt(name: string, fallback: number): number {
   const rawValue = getEnv(name);
@@ -242,6 +258,35 @@ function readStrictPositiveInt(name: string, fallback: number): number {
     throw new Error(`${name} must be a positive integer`);
   }
   return parsed;
+}
+
+function readBoundedInt(name: string, bounds: { fallback: number; min: number; max: number }): number {
+  const rawValue = getEnv(name);
+  if (!rawValue) {
+    return bounds.fallback;
+  }
+
+  const parsed = Number(rawValue);
+  if (!Number.isSafeInteger(parsed) || parsed < bounds.min || parsed > bounds.max) {
+    throw new Error(`${name} must be an integer between ${bounds.min} and ${bounds.max}`);
+  }
+  return parsed;
+}
+
+function readStreamLimits() {
+  const limits = {
+    llmStreamFirstChunkTimeoutMs: readBoundedInt("LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS", LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS),
+    llmStreamIdleTimeoutMs: readBoundedInt("LLM_STREAM_IDLE_TIMEOUT_MS", LLM_STREAM_IDLE_TIMEOUT_MS),
+    llmStreamTotalDeadlineMs: readBoundedInt("LLM_STREAM_TOTAL_DEADLINE_MS", LLM_STREAM_TOTAL_DEADLINE_MS),
+    llmStreamMaxPendingBytes: readBoundedInt("LLM_STREAM_MAX_PENDING_BYTES", LLM_STREAM_MAX_PENDING_BYTES),
+  };
+  if (limits.llmStreamFirstChunkTimeoutMs > limits.llmStreamTotalDeadlineMs) {
+    throw new Error("LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS must not exceed LLM_STREAM_TOTAL_DEADLINE_MS");
+  }
+  if (limits.llmStreamIdleTimeoutMs > limits.llmStreamTotalDeadlineMs) {
+    throw new Error("LLM_STREAM_IDLE_TIMEOUT_MS must not exceed LLM_STREAM_TOTAL_DEADLINE_MS");
+  }
+  return limits;
 }
 
 function readLocale(): AgentLocale {
@@ -375,6 +420,10 @@ export function getAgentRuntimeConfig(): AgentRuntimeConfig {
       "RUNTIME_EVENT_ENVELOPE_ENABLED",
       true
     ),
+    answerTextStreamingEnabled: readStrictBoolean(
+      "ANSWER_TEXT_STREAMING_ENABLED",
+      false
+    ),
     identityStatusEnforcementEnabled: readStrictBoolean(
       "IDENTITY_STATUS_ENFORCEMENT_ENABLED",
       false
@@ -439,6 +488,7 @@ export function getAgentRuntimeConfig(): AgentRuntimeConfig {
       "LLM_JSON_MAX_DEPTH",
       DEFAULT_LLM_JSON_MAX_DEPTH
     ),
+    ...readStreamLimits(),
     otelEnabled: readBoolean("OTEL_ENABLED", false),
     otelServiceName:
       getEnv("OTEL_SERVICE_NAME").trim() || "chat-gun",

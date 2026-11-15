@@ -62,6 +62,55 @@ describe("usage ledger", () => {
     expect(observed.at(-1)).toBe("usage_ledger_write_failed");
   });
 
+  describe("usageMissingReason (model-usage-ledger delta)", () => {
+    const estimating = parsePriceTable(JSON.stringify([{
+      provider: "fixture", model: "model", callKind: "chat", inputPerMillion: "1", outputPerMillion: "2",
+      currency: "USD", source: "https://pricing.fixture.test", verifiedAt: "2026-11-02", missingUsageEstimateMicros: 9,
+    }]));
+
+    async function recordWith(entry: Parameters<UsageLedgerWriter["record"]>[0], table = prices) {
+      const observed: Array<{ event: string; fields: Record<string, string | number> }> = [];
+      const store = new MemoryUsageLedgerStore("USD");
+      const writer = new UsageLedgerWriter({ store, prices: table, timeZone: "UTC", observe: (event, fields) => { observed.push({ event, fields }); } });
+      writer.record(entry);
+      await writer.flush();
+      const date = datePartition(new Date(), "UTC");
+      return { observed, summary: await store.read(date), records: store.records(date) };
+    }
+
+    const missing = { ...usage, inputTokens: null, outputTokens: null };
+
+    it("carries the reason on usage_missing without changing pricing, totals or the stored record", async () => {
+      const withReason = await recordWith({ ...missing, usageMissingReason: "stream_aborted" }, estimating);
+      const without = await recordWith(missing, estimating);
+
+      expect(withReason.observed).toEqual([{ event: "usage_missing", fields: { provider: "fixture", model: "model", callKind: "chat", value: 1, reason: "stream_aborted" } }]);
+      expect(without.observed).toEqual([{ event: "usage_missing", fields: { provider: "fixture", model: "model", callKind: "chat", value: 1 } }]);
+      expect(withReason.summary).toEqual(without.summary);
+      expect(withReason.records[0]).toMatchObject({ status: "estimated", amountMicros: 9 });
+      expect(withReason.records[0]).not.toHaveProperty("usageMissingReason");
+    });
+
+    it("keeps unpriced counting identical with usage_frame_missing", async () => {
+      const result = await recordWith({ ...missing, usageMissingReason: "usage_frame_missing" });
+      expect(result.summary).toMatchObject({ amountMicros: 0, unpricedCount: 1 });
+      expect(result.observed[0]?.fields.reason).toBe("usage_frame_missing");
+    });
+
+    it("reports an out-of-set reason as unknown and still meters", async () => {
+      const result = await recordWith({ ...missing, usageMissingReason: "socket_reset" as never });
+      expect(result.observed).toEqual([expect.objectContaining({ event: "usage_missing", fields: expect.objectContaining({ reason: "unknown" }) })]);
+      expect(result.records).toHaveLength(1);
+    });
+
+    it("ignores a reason when usage is complete", async () => {
+      const result = await recordWith({ ...usage, usageMissingReason: "stream_aborted" });
+      expect(result.observed).toEqual([]);
+      expect(result.records[0]).toMatchObject({ status: "priced", amountMicros: 7 });
+      expect(result.records[0]).not.toHaveProperty("usageMissingReason");
+    });
+  });
+
   it("validates write timeout bounds", () => {
     expect(parseLedgerWriteTimeout()).toBe(1000);
     expect(parseLedgerWriteTimeout("50")).toBe(50);
