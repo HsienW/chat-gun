@@ -1,0 +1,43 @@
+{
+  "node_version": "20",
+  "dependencies": ["../../.."],
+  "graphs": {
+    "chatbot": "../../agents/chatbot.ts:chatbotGraph",
+    "custom_gate": "./custom-gate-graph.ts:customGateGraph"
+  },
+  "http": {
+    "app": "../../operations/http-app.ts:operationsHttpApp",
+    "configurable_headers": {
+      "includes": [
+        "x-request-id",
+        "x-idempotency-key",
+        "x-active-run-id",
+        "x-active-run-generation",
+        "x-bff-principal-id",
+        "x-bff-principal-type",
+        "x-bff-principal-kind",
+        "x-bff-account-id",
+        "x-bff-session-id",
+        "x-bff-device-id",
+        "x-bff-tenant-id",
+        "x-bff-roles",
+        "x-bff-scopes",
+        "x-bff-auth-source",
+        "x-bff-authenticated-at",
+        "x-bff-scope-id",
+        "x-bff-scope-type"
+      ]
+    }
+  },
+  "env": {
+    "LLM_PROVIDER": "qwen",
+    "QWEN_BASE_URL": "http://127.0.0.1:18431/v1",
+    "QWEN_API_KEY": "fixture-not-a-secret",
+    "QWEN_CHAT_MODEL": "fixture-model",
+    "CHAT_MODEL": "fixture-model",
+    "DEFAULT_MODEL": "fixture-model",
+    "OPIK_ENABLED": "false",
+    "LANGSMITH_TRACING": "false",
+    "LANGCHAIN_TRACING_V2": "false"
+  }
+}
