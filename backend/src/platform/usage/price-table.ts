@@ -18,12 +18,23 @@ const priceEntrySchema = z.object({
 
 export type PriceEntry = z.infer<typeof priceEntrySchema>;
 export type PriceTable = { readonly entries: readonly PriceEntry[]; readonly currency: string | null };
+/** Why a streamed attempt has no token usage (single source; design D7, model-usage-ledger). */
+export const USAGE_MISSING_REASONS = ["stream_aborted", "usage_frame_missing"] as const;
+export type UsageMissingReason = typeof USAGE_MISSING_REASONS[number];
+
+/** Out-of-set values are reported as `unknown` instead of failing metering. */
+export function normalizeUsageMissingReason(value: unknown): UsageMissingReason | "unknown" {
+  return (USAGE_MISSING_REASONS as readonly unknown[]).includes(value) ? value as UsageMissingReason : "unknown";
+}
+
 export type ProviderUsage = {
   provider: string;
   model: string;
   callKind: UsageCallKind;
   inputTokens: number | null;
   outputTokens: number | null;
+  /** Only for missing tokens on streamed attempts; never priced and never stored per record. */
+  usageMissingReason?: UsageMissingReason;
 };
 export type UsagePrice =
   | { status: "priced" | "estimated"; amountMicros: number }

@@ -8,12 +8,14 @@ export type ProviderErrorCategory =
   | "provider_decode_failure"
   | "structured_output_invalid"
   | "content_filter_refusal"
+  | "answer_stream_interrupted"
   | "unknown_error";
 
 const REFUSAL_CODES = new Set([
   "content_filter",
   "content_filter_refusal",
   "refusal",
+  "answer_stream_refused",
 ]);
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -38,6 +40,10 @@ export function classifyProviderError(error: unknown): ProviderErrorCategory {
   const name = readString(record, "name");
   const statusCode = readStatusCode(record);
 
+  // Answer text already reached the user: whatever the cause, it must never be retried elsewhere.
+  if (code === "answer_stream_interrupted" || name === "AnswerStreamInterruptedError") {
+    return "answer_stream_interrupted";
+  }
   if (REFUSAL_CODES.has(code) || name === "StructuredOutputRefusalError") {
     return "content_filter_refusal";
   }
@@ -50,6 +56,7 @@ export function classifyProviderError(error: unknown): ProviderErrorCategory {
   if (
     name === "ProviderResponseParseError"
     || name === "ProviderEnvelopeValidationError"
+    || name === "ChatStreamProtocolError"
     || code === "llm_response_json_parse_failed"
     || code === "provider_envelope_invalid"
     || error instanceof SyntaxError
@@ -58,6 +65,7 @@ export function classifyProviderError(error: unknown): ProviderErrorCategory {
   }
   if (
     name === "AbortError" ||
+    name === "ChatStreamTimeoutError" ||
     code === "etimedout" ||
     code === "provider_timeout" ||
     statusCode === 408

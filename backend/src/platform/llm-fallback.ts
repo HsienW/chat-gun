@@ -6,6 +6,11 @@ import type {
   ChatModelOptions,
   LlmProviderName,
 } from "./llm-gateway.js";
+import {
+  AnswerStreamRefusedError,
+  isRetryBlockedByPublishedAnswer,
+  toAnswerStreamInterruptedError,
+} from "./answer-text-sink.js";
 import { auditLogger, recordMetric } from "./observability.js";
 import {
   classifyProviderError,
@@ -21,6 +26,8 @@ export interface ModelFallbackPolicy {
   maxTotalAttempts: number;
   repairStrategy: RepairStrategy;
   perProviderTimeoutMs: number;
+  /** With an answer sink, replaces `perProviderTimeoutMs` until the first fragment is published. */
+  streamFirstChunkTimeoutMs?: number;
 }
 
 export type ProviderInvoker = {
@@ -86,7 +93,11 @@ async function invokeWithTimeout(
 ) {
   const abortController = new AbortController();
   const timeoutError = createTimeoutError(providerInvoker.provider);
-  const timer = setTimeout(() => abortController.abort(timeoutError), timeoutMs);
+  // After answer text is published the attempt is governed by its own stream deadlines only.
+  const timer = setTimeout(() => {
+    if (options?.answerTextSink?.hasPublished) return;
+    abortController.abort(timeoutError);
+  }, timeoutMs);
   const onCallerAbort = () => abortController.abort(options?.signal?.reason);
   options?.signal?.addEventListener("abort", onCallerAbort, { once: true });
 
@@ -113,6 +124,12 @@ async function invokeWithTimeout(
     clearTimeout(timer);
     options?.signal?.removeEventListener("abort", onCallerAbort);
   }
+}
+
+function attemptTimeoutMs(policy: ModelFallbackPolicy, options: ChatModelInvokeOptions | undefined): number {
+  return options?.answerTextSink && policy.streamFirstChunkTimeoutMs !== undefined
+    ? policy.streamFirstChunkTimeoutMs
+    : policy.perProviderTimeoutMs;
 }
 
 export class FallbackChatModelInvoker implements ChatModelInvoker {
@@ -165,10 +182,14 @@ export class FallbackChatModelInvoker implements ChatModelInvoker {
           current,
           input,
           options,
-          Math.max(1, Math.trunc(this.policy.perProviderTimeoutMs))
+          Math.max(1, Math.trunc(attemptTimeoutMs(this.policy, options)))
         );
       } catch (error) {
         if (options?.signal?.aborted) throw error;
+        if (error instanceof AnswerStreamRefusedError) throw error;
+        if (isRetryBlockedByPublishedAnswer(options)) {
+          throw toAnswerStreamInterruptedError(error, "provider_fallback");
+        }
 
         const category = classifyProviderError(error);
         if (!isFallbackEligibleCategory(category)) throw error;

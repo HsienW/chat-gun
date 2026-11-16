@@ -79,6 +79,10 @@ export type AnswerStreamAttempt = {
 - **閘門**：第一個實作 Task 必須證明 Agent Server、`applyInteractionGovernance`、`instrumentGraphWithUsageAttribution` 與鎖定版本的前端 SDK 能在節點返回前傳遞 custom event，並保有既有模式。未證實前，不得以節點完成後的 `updates` 當作證據。
 - **替代橋**：若 custom writer／訂閱不能穿過既有 wrapper，保留 sink 與事件契約，在 Runtime 與前端 transport 邊界各留一個 adapter，先以固定版本的真實 Runtime fixture 證明替代橋能提早送達，再開啟。若 SDK 原生訊息片段與 custom 正文同時抵達，同一回答只指定一個增量來源，完整狀態按 ID 對帳。不並行啟動第二條 HTTP 請求。若替代橋亦不可行，停止並回報 CCR。
 - **執行環境接線**：sink 以既有 composition root 提供的 `ExecutionContext` 與 `RunSequenceAllocator` 建立，節點內 MUST NOT 自行建立 allocator。功能啟用但接線缺失時 readiness 回報失敗，而非每個請求靜默降級。
+- **chatbot 接線決策（Master 於 2026-11-15 核准）**：Task 4 開工時確認，正式環境的 `chatbot` graph 沒有 `ExecutionContext`，也沒有可共用的 `RunSequenceAllocator`。處置如下：
+  - `chatbot` 比照 `deep_researcher` 接上 `instrumentGraphWithExecutionContext`、`createGraphEntryContextResolver`（`PgGraphTaskAdmission`）與 identity status instrumentation。包裝順序為 usage attribution → execution context → interaction governance → compiled graph。因此 `chatbot` 從此需要 BFF 的 trusted principal headers 與 Postgres task admission，與其他已接線的 graph 一致。
+  - allocator 由 Runtime 模組提供單一 process 範圍的實例，在 graph 組裝時注入節點，節點內不得自建（符合 KL-1 單一 process 假設）。正文事件與其他事件來源使用的 allocator 不同，同一 Run 的 `sequence` 只保證在正文事件之間單調遞增；依 D6，`sequence` 不作為放行閘門，去重以 `eventId` 與 `(messageId, textOffset)` 為準。
+  - 功能以 `ANSWER_TEXT_STREAMING_ENABLED` 啟用，預設關閉，依 D5「消費端先部署，再開啟後端發送」。readiness 在功能啟用時檢查 envelope 已啟用、`chatbot` 接線已登記；任一缺失回報失敗。
 - **關聯**：開始生成前由後端配置穩定 `messageId`，終稿沿用。Envelope 沿用可信 context 的 `threadId`、`runId`、`requestId`、`attempt`；Run ownership 與 generation 沿用既有互動治理。
 
 ### D5：`model.stream` payload 擴充（外部契約）
@@ -111,7 +115,13 @@ export type AnswerStreamAttempt = {
 - SSE 框以增量 UTF-8 解碼並保留未消費資料，支援跨 chunk 的多位元組字元、CRLF、同 chunk 多框、單框多行 `data:`；依框界線取得完整 payload 才 parse。EOF 截斷的框回報不完整；完整框內非法 JSON 回報協定解析失敗。
 - delta 結尾為單獨高位 surrogate 時暫留，與下一個 delta 合併後再發布；結束時仍未配對依協定錯誤處理。
 - 最終訊息由同一份已接受片段組成；依端點完成訊號與結束原因判定成功、截斷或拒答。空片段或 HTTP EOF 本身不足以判成功。
-- 端點宣告 `supportsStreamUsage` 時才送 `stream_options: { include_usage: true }`。每次實際上游嘗試於 `finally` 恰好呼叫一次 `recordProviderUsage`；中止或缺尾框時 token 記為缺值並帶 `usageMissingReason: "stream_aborted" | "usage_frame_missing"`（需確認 usage ledger schema 可承接，見 Task 1）。
+- 端點宣告 `supportsStreamUsage` 時才送 `stream_options: { include_usage: true }`。每次實際上游嘗試於 `finally` 恰好呼叫一次 `recordProviderUsage`；中止或缺尾框時 token 記為缺值並帶 `usageMissingReason: "stream_aborted" | "usage_frame_missing"`。
+- **缺值原因的承接（Task 1.5 結論，Master 2026-11-11 採方案 A）**：Task 1.5 確認現有 usage ledger（`model-usage-ledger`，`usage-ledger@1`）不能承接缺值原因：`ProviderUsage`／`UsageLedgerRecord` 沒有原因欄位。ledger 在儲存層只累加彙總值（`amountMicros`、`unpricedCount` 及依 graph／callKind 分組的同名欄位），不保存單筆紀錄，所以原因只需在計量事件上保留，不改儲存格式：
+  - `ProviderUsage` 新增選用欄位 `usageMissingReason`，型別為封閉 enum `UsageMissingReason`，單一來源定義於 usage 模組，值為 `"stream_aborted" | "usage_frame_missing"`。非串流路徑不帶此欄位，行為不變。
+  - token 缺值時，`usage_missing` 事件 MUST 帶上該原因；未帶原因時事件維持現狀。原因不參與計價，`estimated`／`unpriced` 判定與金額累加完全不變。
+  - token 齊全時帶原因屬呼叫端錯誤，ledger MUST 忽略該原因、不改變入帳，並以測試固定。執行期收到不在 enum 內的值時，MUST 記為未知原因 `unknown`，不得拋錯中斷計量。
+  - 儲存格式、Redis key 與彙總欄位不變，`usage-ledger@1` 不升版。若日後需要依原因統計，屬另立 Change。
+  - 契約變更以本 Change 的 `model-usage-ledger` delta spec 表達，由 Task 3.3 實作。
 - 包裝 `invoke` 的 tracing、metrics、usage attribution MUST 傳遞 options 並保留取消訊號。
 
 ### D8：串流逾時（backend）
@@ -200,15 +210,28 @@ D8 預設值（Task 3 回填）：
 
 | 設定 | 預設值 | 下限 | 上限 | 實測依據 |
 |---|---|---|---|---|
-| `llmStreamFirstChunkTimeoutMs` | 待 Task 3 回填 | 待回填 | 待回填 | 待回填 |
-| `llmStreamIdleTimeoutMs` | 待 Task 3 回填 | 待回填 | 待回填 | 待回填 |
-| `llmStreamTotalDeadlineMs` | 待 Task 3 回填 | 待回填 | 不得超過 Run deadline | 待回填 |
-| `llmStreamMaxPendingBytes` | 待 Task 3 回填 | 待回填 | 待回填 | 待回填 |
-| `answerDraftGapWaitMs` | 待 Task 3 回填 | 待回填 | 待回填 | 待回填 |
+| `llmStreamFirstChunkTimeoutMs` | 10000 | 2000 | 60000 | 首段延遲 554–2702 ms（p50 2097 ms）；預設約為最大值的 3.7 倍。依 OQ3，同時作為 Task 7.3 首段可見延遲的放行上限。 |
+| `llmStreamIdleTimeoutMs` | 15000 | 3000 | 120000 | 相鄰片段最大間隔 2835 ms，各次 p95 為 154–417 ms；預設約為最大值的 5 倍。 |
+| `llmStreamTotalDeadlineMs` | 180000 | 10000 | 600000；另須不超過 Run deadline | 約 500 字的回答最長 8156 ms（280–318 output tokens）；以 `maxOutputTokens` 8192 依實測速率推估約 140 s，預設保留餘裕。 |
+| `llmStreamMaxPendingBytes` | 262144 | 4096 | 4194304 | 實測每框只有數個字，未量測框的 byte 大小；預設值遠大於單框大小，並受 `llmProviderResponseMaxBytes` 限制。 |
+| `answerDraftGapWaitMs` | 3000 | 500 | 不得超過 `llmStreamIdleTimeoutMs` | 依相鄰片段最大間隔 2835 ms；前端設定，由 Task 6.2 實作。 |
+
+實測方式（Task 3.1，2026-11-15）：`answer-stream-latency.live.test.ts` 經真正的 Gateway 串流路徑，對部署端點（provider `qwen`，host `dashscope.aliyuncs.com`，模型 `qwen3.5-flash`，thinking 關閉）連續送出 5 次約 500 字的純文字請求。5 次都以 `stop` 完成，每次 87–96 段，都收到 usage 尾框。evidence 見 `.agent-runtime/stream-chat-answer-text/artifacts/task3-1-latency-ccr.json`，只記時間、片段數與 usage，不含正文。
+
+限制：樣本只有單一時段的 5 次；runtime config 目前沒有 Run deadline 設定，「不超過 Run deadline」尚無可比對的來源。量測的是 backend 收到第一段的時間，不是瀏覽器顯示的時間；後者由 Task 7.3 量測。
 
 ### 已知限制
 
 - **KL-1**：`RunSequenceAllocator` 為單一 process 範圍。本 Change 假設單一 LangGraph worker（單 session）部署；多 worker 下同一 Run 的序號連續性不在本 Change 保證範圍。Task 1.6 的確認結果須回填此處；若發現目前部署已是多 worker，停止並回報 CCR。
+  - **Task 1.6 確認結果（2026-11-09）**：
+    - `RunSequenceAllocator` 由 `@gun-ai/harness-kernel` 提供，以 process 內的 `Map` 依 `runId` 計數（預設 TTL 30 分鐘、上限 10,000 筆），不跨 process 共享。
+    - `docker-compose.yml` 只有一個 `langgraph-api` 容器，未設定 replicas 或 worker 數；Agent Server 啟動時的「Starting 10 workers」是同一 process 內的並行 run，共用同一個 allocator 實例。
+    - 正式程式目前沒有建立 allocator 的位置：`execution-composition-root` 只接受注入，`chatbot` 節點未接線。Task 4 依 D4 由 composition root 提供，不得在節點內自建。
+    - 結論：目前部署不是多 worker／多 session，未觸發停止條件。
+  - **補充證據（2026-11-11，implementation-result-ccr-04）**：
+    - 本機 `@langchain/langgraph-api` 1.4.5 的 `dist/server.mjs` 以 `for (let i = 0; i < nWorkers; i++) queue(ops)` 啟動 worker；`dist/queue.mjs` 的 `queue` 是 async `while` 迴圈。所以「N workers」是同一 Node process 內的並行迴圈，不是 thread 或子 process，module 層級狀態（含 allocator 的 `Map`）由它們共用。`worker_threads` 只用於 graph parser，與 run 執行無關。
+    - `docker-compose.yml` 的 `langgraph-api` 以 `Dockerfile` target `langgraph-api`（`FROM docker.io/langchain/langgraphjs-api:22`）建置，為單一 service，沒有 `deploy`／`replicas`／`scale` 設定。
+    - 未驗證：正式映像檔 `langchain/langgraphjs-api:22` 內含的 langgraph-api 版本與 worker 實作未實測。部署前若映像檔改為多 process，屬 FU-2 範圍，本 Change 的序號保證不適用。
 
 ### 後續待辦（不在本 Change 範圍）
 

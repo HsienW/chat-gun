@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { UsageAttribution } from "./attribution.js";
-import { priceUsage, type PriceTable, type ProviderUsage, type UsagePrice } from "./price-table.js";
+import { normalizeUsageMissingReason, priceUsage, type PriceTable, type ProviderUsage, type UsagePrice } from "./price-table.js";
 
-export type UsageLedgerRecord = ProviderUsage & UsagePrice & {
+export type UsageLedgerRecord = Omit<ProviderUsage, "usageMissingReason"> & UsagePrice & {
   recordId: string;
   recordedAt: string;
   date: string;
@@ -91,8 +91,8 @@ export class UsageLedgerWriter {
   }
   get failedWrites(): number { return this.failureCount; }
 
-  private observe(event: UsageEvent, usage: ProviderUsage): void {
-    try { this.options.observe?.(event, { provider: usage.provider, model: usage.model, callKind: usage.callKind, value: 1 }); }
+  private observe(event: UsageEvent, usage: ProviderUsage, reason?: string): void {
+    try { this.options.observe?.(event, { provider: usage.provider, model: usage.model, callKind: usage.callKind, value: 1, ...(reason ? { reason } : {}) }); }
     catch { /* Telemetry must not affect delivery or create an unhandled rejection. */ }
   }
 
@@ -106,9 +106,13 @@ export class UsageLedgerWriter {
 
   private schedule(usage: ProviderUsage, attribution?: UsageAttribution): void {
     const now = this.options.now?.() ?? new Date();
-    if (usage.inputTokens === null || usage.outputTokens === null) this.observe("usage_missing", usage);
+    // The missing-usage reason only travels on the event; it never reaches pricing or the stored record.
+    const { usageMissingReason, ...metered } = usage;
+    if (metered.inputTokens === null || metered.outputTokens === null) {
+      this.observe("usage_missing", metered, usageMissingReason === undefined ? undefined : normalizeUsageMissingReason(usageMissingReason));
+    }
     const record: UsageLedgerRecord = {
-      ...usage, ...priceUsage(this.options.prices, usage), recordId: randomUUID(), recordedAt: now.toISOString(),
+      ...metered, ...priceUsage(this.options.prices, metered), recordId: randomUUID(), recordedAt: now.toISOString(),
       date: datePartition(now, this.options.timeZone), graphId: attribution?.graphId ?? "unattributed", currency: this.options.prices.currency,
     };
     // Dispatch after the current provider response continuation, with a separate timeout.

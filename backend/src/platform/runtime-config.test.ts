@@ -172,6 +172,73 @@ describe("getAgentRuntimeConfig tool scheduling and resilience", () => {
   });
 });
 
+describe("getAgentRuntimeConfig answer stream limits (design D8)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const names = {
+    firstChunk: "LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS",
+    idle: "LLM_STREAM_IDLE_TIMEOUT_MS",
+    total: "LLM_STREAM_TOTAL_DEADLINE_MS",
+    pending: "LLM_STREAM_MAX_PENDING_BYTES",
+  } as const;
+
+  function clearStreamEnv() {
+    for (const name of Object.values(names)) vi.stubEnv(name, "");
+  }
+
+  it("uses bounded defaults", () => {
+    clearStreamEnv();
+    const config = getAgentRuntimeConfig();
+    expect(config.llmStreamFirstChunkTimeoutMs).toBeLessThanOrEqual(config.llmStreamTotalDeadlineMs);
+    expect(config.llmStreamIdleTimeoutMs).toBeLessThanOrEqual(config.llmStreamTotalDeadlineMs);
+    expect(config.llmStreamMaxPendingBytes).toBeGreaterThan(0);
+  });
+
+  it("reads valid overrides", () => {
+    clearStreamEnv();
+    vi.stubEnv(names.firstChunk, "5000");
+    vi.stubEnv(names.idle, "8000");
+    vi.stubEnv(names.total, "60000");
+    vi.stubEnv(names.pending, "131072");
+    expect(getAgentRuntimeConfig()).toMatchObject({
+      llmStreamFirstChunkTimeoutMs: 5000,
+      llmStreamIdleTimeoutMs: 8000,
+      llmStreamTotalDeadlineMs: 60000,
+      llmStreamMaxPendingBytes: 131072,
+    });
+  });
+
+  it.each([
+    [names.firstChunk, "999"],
+    [names.firstChunk, "120001"],
+    [names.idle, "0"],
+    [names.total, "4999"],
+    [names.total, "600001"],
+    [names.pending, "4095"],
+    [names.pending, "1.5"],
+    [names.idle, "abc"],
+  ])("rejects %s=%s instead of guessing", (name, value) => {
+    clearStreamEnv();
+    vi.stubEnv(name, value);
+    expect(() => getAgentRuntimeConfig()).toThrow(name);
+  });
+
+  it("rejects first-chunk or idle timeouts longer than the total deadline", () => {
+    clearStreamEnv();
+    vi.stubEnv(names.total, "10000");
+    vi.stubEnv(names.firstChunk, "20000");
+    expect(() => getAgentRuntimeConfig()).toThrow(/LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS must not exceed/);
+
+    clearStreamEnv();
+    vi.stubEnv(names.total, "10000");
+    vi.stubEnv(names.firstChunk, "5000");
+    vi.stubEnv(names.idle, "20000");
+    expect(() => getAgentRuntimeConfig()).toThrow(/LLM_STREAM_IDLE_TIMEOUT_MS must not exceed/);
+  });
+});
+
 describe("getAgentRuntimeConfig context budget", () => {
   afterEach(() => {
     vi.unstubAllEnvs();

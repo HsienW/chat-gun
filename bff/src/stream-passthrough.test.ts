@@ -2,7 +2,20 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Writable } from "node:stream";
 
-import { pipeWebResponseBody } from "./stream-passthrough.js";
+import { applySseAntiBufferingHeaders, pipeWebResponseBody } from "./stream-passthrough.js";
+
+test("sets anti-buffering headers only for SSE media types", () => {
+  for (const contentType of ["text/event-stream", "text/event-stream; charset=utf-8", "Text/Event-Stream"]) {
+    const headers = new Map<string, string>();
+    assert.equal(applySseAntiBufferingHeaders(contentType, { setHeader: (name, value) => headers.set(name, value) }), true);
+    assert.deepEqual(Object.fromEntries(headers), { "x-accel-buffering": "no", "cache-control": "no-cache, no-transform" });
+  }
+  for (const contentType of [null, "", "application/json", "text/plain", "text/event-streamx"]) {
+    const headers = new Map<string, string>();
+    assert.equal(applySseAntiBufferingHeaders(contentType, { setHeader: (name, value) => headers.set(name, value) }), false);
+    assert.equal(headers.size, 0);
+  }
+});
 
 const encoder = new TextEncoder();
 

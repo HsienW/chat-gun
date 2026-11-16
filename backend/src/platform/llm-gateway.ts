@@ -4,6 +4,23 @@ import type { ToolCall } from "@langchain/core/messages/tool";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
+import {
+  AnswerStreamRefusedError,
+  assertAnswerSinkCompatible,
+  isRetryBlockedByPublishedAnswer,
+  recordAnswerStreamDegraded,
+  toAnswerStreamInterruptedError,
+  type AnswerStreamDegradedReason,
+  type AnswerTextAttemptWriter,
+  type AnswerTextSink,
+} from "./answer-text-sink.js";
+import {
+  AnswerTextWriterError,
+  ChatStreamDeadlines,
+  ChatStreamProtocolError,
+  consumeOpenAiChatStream,
+  type ChatStreamLimits,
+} from "./openai-chat-stream.js";
 import { getEnv } from "./env.js";
 import { createErrorEnvelope, formatErrorEnvelope } from "./errors.js";
 import { DEFAULT_GENERATION_MODEL } from "./generation-model-profile.js";
@@ -36,7 +53,8 @@ import {
 import type { RepairStrategy } from "./llm-fallback.js";
 import type { UsageAttribution } from "./usage/attribution.js";
 import { callKindForPurpose, recordProviderUsage } from "./usage/runtime.js";
-import { tokenUsageFromText } from "./usage/token-usage.js";
+import { tokenUsageFromBody, tokenUsageFromText } from "./usage/token-usage.js";
+import type { UsageMissingReason } from "./usage/price-table.js";
 import type { EnabledUsageModel } from "./usage/budget-configuration.js";
 
 configureNetwork();
@@ -100,6 +118,8 @@ type ChatModelOutput = BaseMessage;
 
 export type ChatModelInvokeOptions = {
   attribution?: UsageAttribution;
+  /** Opt-in answer-text streaming (design D2); only valid without responseFormat and bound tools. */
+  answerTextSink?: AnswerTextSink;
   signal?: AbortSignal;
   runId?: string;
   taskId?: string;
@@ -226,7 +246,8 @@ function appendStructuredOutputHint(input: ChatModelInput, hint?: string): ChatM
       : [input, { role: "user", content: instruction }];
 }
 
-class StructuredOutputRepairChatModelInvoker implements ChatModelInvoker {
+/** Exported for the answer-stream retry boundary tests; production callers go through llmGateway. */
+export class StructuredOutputRepairChatModelInvoker implements ChatModelInvoker {
   constructor(
     private readonly delegate: ChatModelInvoker,
     private readonly strategy: RepairStrategy
@@ -250,8 +271,16 @@ class StructuredOutputRepairChatModelInvoker implements ChatModelInvoker {
     options?: ChatModelInvokeOptions
   ): Promise<ChatModelOutput> {
     let lastResponse: BaseMessage | undefined;
+    let invocations = 0;
     const result = await repairStructuredOutput({
       invoke: async (hint) => {
+        invocations += 1;
+        if (invocations > 1 && isRetryBlockedByPublishedAnswer(options)) {
+          throw toAnswerStreamInterruptedError(
+            new Error("structured_output_repair_after_published_answer"),
+            "structured_output_repair"
+          );
+        }
         lastResponse = await this.delegate.invoke(
           appendStructuredOutputHint(input, hint),
           options
@@ -295,6 +324,10 @@ export type LlmCapabilities = {
   supportsUsageMetadata: boolean;
   /** Whether the provider accepts an explicit `enable_thinking` request field. */
   supportsThinkingControl: boolean;
+  /** Whether a streamed request may ask for a trailing usage frame (`stream_options.include_usage`). */
+  supportsStreamUsage: boolean;
+  /** Endpoints that only moderate the final text cannot publish fragments early (Task 3.4). */
+  requiresFinalModeration: boolean;
   contextWindowTokens: number;
   maxOutputTokens: number;
 };
@@ -499,6 +532,8 @@ function capabilitiesForProvider(provider: LlmProviderName, purpose: ModelPurpos
       supportsStreaming: false,
       supportsUsageMetadata: false,
       supportsThinkingControl: false,
+      supportsStreamUsage: false,
+      requiresFinalModeration: false,
       contextWindowTokens: 200_000,
       maxOutputTokens: 8_192,
     };
@@ -508,10 +543,14 @@ function capabilitiesForProvider(provider: LlmProviderName, purpose: ModelPurpos
     supportsStructuredOutput: true,
     supportsToolCalling: true,
     supportsVision: purpose === "vision",
-    supportsStreaming: false,
+    // Answer streaming is declared per provider adapter for the deployed endpoint (design D7),
+    // never derived from the model name; other OpenAI-compatible endpoints stay whole-reply.
+    supportsStreaming: provider === "qwen",
     supportsUsageMetadata: true,
     // Capability declared per provider adapter, never derived from the model name.
     supportsThinkingControl: provider === "qwen",
+    supportsStreamUsage: provider === "qwen",
+    requiresFinalModeration: false,
     contextWindowTokens: 128_000,
     maxOutputTokens: 8_192,
   };
@@ -1414,13 +1453,30 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
       );
     }
 
+    assertAnswerSinkCompatible(invokeOptions, {
+      hasResponseFormat: Boolean(this.options.responseFormat),
+      hasTools: Boolean(this.options.tools?.length),
+    });
+    const answerStreaming = resolveAnswerStreaming(capabilities, invokeOptions);
+    if (answerStreaming.degradedReason) {
+      await recordAnswerStreamDegraded(answerStreaming.degradedReason, {
+        messageId: invokeOptions?.answerTextSink?.messageId,
+        provider: this.options.provider,
+      });
+    }
+
     // Resolved once so provider retries and tool-argument repair resends carry the same value.
     const thinkingEnabled = effectiveThinking(capabilities, this.options.thinkingEnabled);
     let lastError: Error | undefined;
     let providerFailureCount = 0;
     let requestInput = input;
     let isRepairRequest = false;
+    let attemptIndex = 0;
     while (true) {
+      const attemptWriter: AnswerTextAttemptWriter | undefined =
+        invokeOptions?.answerTextSink?.beginAttempt({ provider: this.options.provider, attemptIndex });
+      attemptIndex += 1;
+      let attemptOutcome: "completed" | "abandoned" = "abandoned";
       try {
         const body = {
           model: this.options.model,
@@ -1433,6 +1489,17 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
             ? { tool_choice: this.options.toolChoice ?? "auto" }
             : {}),
         };
+        if (answerStreaming.stream && attemptWriter) {
+          const streamed = await this.streamAnswerAttempt(url, headers, body, {
+            capabilities,
+            runtimeConfig,
+            invokeOptions,
+            writer: attemptWriter,
+            thinkingEnabled,
+          });
+          attemptOutcome = "completed";
+          return streamed;
+        }
         const response = await fetch(url, {
           method: "POST",
           headers,
@@ -1501,6 +1568,12 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
             && runtimeConfig.llmRepairStrategy !== "none"
             && isToolArgumentRepairEligible(diagnostic, finishReason)
           ) {
+            if (isRetryBlockedByPublishedAnswer(invokeOptions)) {
+              throw toAnswerStreamInterruptedError(
+                toolArgumentDecodeError({ diagnostic, provider: this.options.provider, endpointKind, finishReason, invokeOptions }),
+                "tool_argument_repair"
+              );
+            }
             requestInput = runtimeConfig.llmRepairStrategy === "retry_with_hint"
               ? appendToolArgumentRepairHint(input)
               : input;
@@ -1516,6 +1589,7 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
           });
         }
         const content = contentToString(message?.content);
+        attemptOutcome = "completed";
         return new AIMessage({
           content: toolCalls.length ? "" : content,
           tool_calls: toolCalls.length ? toolCalls : undefined,
@@ -1538,6 +1612,13 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
         if (invokeOptions?.signal?.aborted) {
           throw lastError;
         }
+        // A refusal or a failing answer writer is final whether or not text was published.
+        if (lastError instanceof AnswerStreamRefusedError || lastError instanceof AnswerTextWriterError) {
+          throw lastError;
+        }
+        if (isRetryBlockedByPublishedAnswer(invokeOptions)) {
+          throw toAnswerStreamInterruptedError(lastError, "provider_retry");
+        }
         if (
           lastError instanceof ToolArgumentDecodeError
           || lastError instanceof StructuredOutputRefusalError
@@ -1547,8 +1628,170 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
           throw lastError;
         }
         providerFailureCount += 1;
+      } finally {
+        attemptWriter?.seal(attemptOutcome);
       }
     }
+  }
+
+  /**
+   * One streamed upstream attempt (design D7, D8): visible text goes to the attempt writer as it
+   * is decoded, deadlines abort the reader, and usage is recorded exactly once in `finally`.
+   */
+  private async streamAnswerAttempt(
+    url: string,
+    headers: Record<string, string>,
+    body: Record<string, unknown>,
+    context: {
+      capabilities: LlmCapabilities;
+      runtimeConfig: ReturnType<typeof getAgentRuntimeConfig>;
+      invokeOptions?: ChatModelInvokeOptions;
+      writer: AnswerTextAttemptWriter;
+      thinkingEnabled: boolean | undefined;
+    }
+  ): Promise<ChatModelOutput> {
+    const { capabilities, runtimeConfig, invokeOptions, writer } = context;
+    const endpointKind = "openai-chat-completions" as const;
+    const provider = this.options.provider;
+    const callerSignal = invokeOptions?.signal;
+    if (callerSignal?.aborted) throw callerSignal.reason;
+
+    const controller = new AbortController();
+    const onCallerAbort = () => controller.abort(callerSignal?.reason);
+    callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+    const limits: ChatStreamLimits = {
+      firstChunkTimeoutMs: runtimeConfig.llmStreamFirstChunkTimeoutMs,
+      idleTimeoutMs: runtimeConfig.llmStreamIdleTimeoutMs,
+      totalDeadlineMs: runtimeConfig.llmStreamTotalDeadlineMs,
+      maxPendingBytes: runtimeConfig.llmStreamMaxPendingBytes,
+      maxFrameBytes: runtimeConfig.llmProviderResponseMaxBytes,
+      maxDepth: runtimeConfig.llmJsonMaxDepth,
+    };
+    const deadlines = new ChatStreamDeadlines(limits, (error) => controller.abort(error));
+    let tokens: { inputTokens: number | null; outputTokens: number | null } = { inputTokens: null, outputTokens: null };
+    let usageMissingReason: UsageMissingReason | undefined = "stream_aborted";
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          ...body,
+          stream: true,
+          ...(capabilities.supportsStreamUsage ? { stream_options: { include_usage: true } } : {}),
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const responseText = await response.text();
+        tokens = tokenUsageFromText(responseText, endpointKind, runtimeConfig.llmProviderResponseMaxBytes);
+        usageMissingReason = undefined;
+        throw createProviderHttpError(response.status, response.statusText, responseText, provider, endpointKind);
+      }
+
+      const mediaType = (response.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
+      if (mediaType === "application/json") {
+        // A legal whole reply from an endpoint that did not stream: validated, delivered, not published.
+        const responseText = await response.text();
+        tokens = tokenUsageFromText(responseText, endpointKind, runtimeConfig.llmProviderResponseMaxBytes);
+        usageMissingReason = undefined;
+        await recordAnswerStreamDegraded("capability_unsupported", {
+          messageId: invokeOptions?.answerTextSink?.messageId,
+          provider,
+        });
+        const parsed = validateProviderEnvelope(
+          parseJsonResponse<unknown>(responseText, provider, endpointKind, {
+            maxBytes: runtimeConfig.llmProviderResponseMaxBytes,
+            maxDepth: runtimeConfig.llmJsonMaxDepth,
+            signal: controller.signal,
+          }),
+          endpointKind
+        );
+        const choice = parsed.choices?.[0];
+        const finishReason = typeof choice?.finish_reason === "string" ? choice.finish_reason : undefined;
+        if (finishReason === "content_filter") throw new AnswerStreamRefusedError();
+        return this.answerMessage({
+          content: contentToString(choice?.message?.content),
+          finishReason,
+          usage: parsed.usage,
+          model: parsed.model,
+          id: parsed.id,
+          streamed: false,
+          capabilities,
+          thinkingEnabled: context.thinkingEnabled,
+        });
+      }
+      if (mediaType !== "text/event-stream" || !response.body) {
+        throw new ChatStreamProtocolError("answer_stream_unexpected_media_type");
+      }
+
+      const result = await consumeOpenAiChatStream({
+        body: response.body,
+        writer,
+        limits,
+        signal: controller.signal,
+        onVisibleFragment: () => deadlines.onVisibleFragment(),
+      });
+      if (result.usage) tokens = tokenUsageFromBody({ usage: result.usage }, endpointKind);
+      usageMissingReason = tokens.inputTokens === null || tokens.outputTokens === null
+        ? "usage_frame_missing"
+        : undefined;
+      if (result.finishReason === "content_filter") throw new AnswerStreamRefusedError();
+      return this.answerMessage({
+        content: result.text,
+        finishReason: result.finishReason,
+        usage: result.usage,
+        model: result.model,
+        id: result.id,
+        streamed: true,
+        capabilities,
+        thinkingEnabled: context.thinkingEnabled,
+      });
+    } catch (error) {
+      // A fired deadline aborted the reader; report the deadline rather than the abort it caused.
+      if (deadlines.error && !callerSignal?.aborted) throw deadlines.error;
+      throw error;
+    } finally {
+      deadlines.dispose();
+      callerSignal?.removeEventListener("abort", onCallerAbort);
+      controller.abort();
+      const missing = tokens.inputTokens === null || tokens.outputTokens === null;
+      recordProviderUsage({
+        provider,
+        model: this.options.model,
+        callKind: callKindForPurpose(this.options.purpose),
+        ...tokens,
+        ...(missing && usageMissingReason ? { usageMissingReason } : {}),
+      }, invokeOptions?.attribution);
+    }
+  }
+
+  private answerMessage(input: {
+    content: string;
+    finishReason?: string;
+    usage: OpenAiChatCompletionResponse["usage"] | undefined;
+    model: unknown;
+    id: unknown;
+    streamed: boolean;
+    capabilities: LlmCapabilities;
+    thinkingEnabled: boolean | undefined;
+  }): AIMessage {
+    return new AIMessage({
+      content: input.content,
+      usage_metadata: usageMetadataFromResponse(input.usage),
+      response_metadata: {
+        provider: this.options.provider,
+        endpointKind: "openai-chat-completions",
+        model: metadataModel(input.model, this.options.model),
+        provider_model: providerReportedModel(input.model),
+        id: typeof input.id === "string" ? input.id : undefined,
+        finish_reason: input.finishReason,
+        tool_call_diagnostic_count: 0,
+        thinking_enabled: input.thinkingEnabled ?? null,
+        answer_streamed: input.streamed,
+        capabilities: input.capabilities,
+      },
+    });
   }
 
   redactForDiagnostics(): Record<string, unknown> {
@@ -1557,6 +1800,20 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
       apiKey: this.options.apiKey ? sanitizeHeaderValue(this.options.apiKey) : undefined,
     };
   }
+}
+
+/**
+ * Decides once per invoke whether a sink caller streams or degrades to a whole reply (design D9).
+ * Driven by declared capabilities only, never by model name or answer text.
+ */
+function resolveAnswerStreaming(
+  capabilities: LlmCapabilities,
+  invokeOptions: ChatModelInvokeOptions | undefined
+): { stream: boolean; degradedReason?: AnswerStreamDegradedReason } {
+  if (!invokeOptions?.answerTextSink) return { stream: false };
+  if (capabilities.requiresFinalModeration) return { stream: false, degradedReason: "final_moderation_required" };
+  if (!capabilities.supportsStreaming) return { stream: false, degradedReason: "capability_unsupported" };
+  return { stream: true };
 }
 
 class OpenAiCompatibleGateway implements ProviderGateway {
@@ -1634,6 +1891,9 @@ class CcrAnthropicChatModel implements ChatModelInvoker {
     let lastError: Error | undefined;
     const attempts = Math.max(1, this.options.maxRetries + 1);
     for (let attempt = 1; attempt <= attempts; attempt++) {
+      const attemptWriter: AnswerTextAttemptWriter | undefined =
+        invokeOptions?.answerTextSink?.beginAttempt({ provider, attemptIndex: attempt - 1 });
+      let attemptOutcome: "completed" | "abandoned" = "abandoned";
       try {
         const response = await fetch(url, {
           method: "POST",
@@ -1681,6 +1941,7 @@ class CcrAnthropicChatModel implements ChatModelInvoker {
           ?.map((block) => block.type === "text" ? contentToString(block.text) : "")
           .filter(Boolean)
           .join("\n") ?? "";
+        attemptOutcome = "completed";
         return new AIMessage({
           content,
           // CCR cannot control thinking, so nothing was sent.
@@ -1697,9 +1958,14 @@ class CcrAnthropicChatModel implements ChatModelInvoker {
         if (invokeOptions?.signal?.aborted) {
           throw lastError;
         }
+        if (isRetryBlockedByPublishedAnswer(invokeOptions)) {
+          throw toAnswerStreamInterruptedError(lastError, "provider_retry");
+        }
         if (attempt >= attempts) {
           throw lastError;
         }
+      } finally {
+        attemptWriter?.seal(attemptOutcome);
       }
     }
 
@@ -1798,6 +2064,7 @@ export function getDefaultFallbackPolicy(): ModelFallbackPolicy {
     maxTotalAttempts: config.llmFallbackMaxAttempts,
     repairStrategy: config.llmRepairStrategy,
     perProviderTimeoutMs: config.llmFallbackTimeoutMs,
+    streamFirstChunkTimeoutMs: config.llmStreamFirstChunkTimeoutMs,
   };
 }
 

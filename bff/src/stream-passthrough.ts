@@ -6,6 +6,20 @@ import {
   type BffAbortReason,
 } from "./errors.js";
 
+type HeaderTarget = { setHeader(name: string, value: string): unknown };
+
+/**
+ * SSE passthrough must not be buffered or transformed by intermediaries (bff-stream-proxy spec,
+ * design D10). Only SSE responses are touched; every other response keeps its upstream headers.
+ */
+export function applySseAntiBufferingHeaders(upstreamContentType: string | null, response: HeaderTarget): boolean {
+  const mediaType = (upstreamContentType ?? "").split(";")[0]?.trim().toLowerCase();
+  if (mediaType !== "text/event-stream") return false;
+  response.setHeader("x-accel-buffering", "no");
+  response.setHeader("cache-control", "no-cache, no-transform");
+  return true;
+}
+
 export type StreamPipeResult = {
   completed: boolean;
   clientDisconnected: boolean;
