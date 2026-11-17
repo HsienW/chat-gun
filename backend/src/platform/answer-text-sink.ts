@@ -1,5 +1,6 @@
 import type { LlmProviderName } from "./llm-gateway.js";
 import { recordMetric } from "./observability.js";
+import { classifyProviderError } from "./provider-error-category.js";
 
 /**
  * Answer-text streaming contract between the Gateway and the node that opted in (design D2).
@@ -198,4 +199,47 @@ export class AnswerStreamRefusedError extends Error {
     super("answer_stream_refused");
     this.name = "AnswerStreamRefusedError";
   }
+}
+
+const SAFE_CODE = /^[a-z][a-z0-9_]{0,63}$/;
+
+function readCauseCode(cause: unknown): string {
+  const code = typeof cause === "object" && cause !== null && "code" in cause ? Reflect.get(cause, "code") : undefined;
+  return typeof code === "string" && SAFE_CODE.test(code) ? code : classifyProviderError(cause);
+}
+
+/**
+ * The run error a node throws for answer streaming failures (design D12, error code delivery).
+ * Agent Server serializes it as `{ error: name, message }`; the message is an ErrorEnvelope the
+ * frontend already parses. It carries codes only: no provider text and no answer text.
+ */
+export class AnswerStreamRunError extends Error {
+  constructor(
+    readonly code: "answer_stream_interrupted" | "answer_stream_refused",
+    readonly causeCode: string | undefined,
+    cause: unknown,
+  ) {
+    super(
+      JSON.stringify({
+        error: {
+          source: "backend",
+          stage: "chat_response",
+          code,
+          message: code,
+          ...(causeCode ? { cause: { code: causeCode } } : {}),
+        },
+      }),
+      { cause },
+    );
+    this.name = "AnswerStreamRunError";
+  }
+}
+
+/** Maps the two answer streaming failures to a run error; anything else is left to the caller. */
+export function toAnswerStreamRunError(error: unknown): AnswerStreamRunError | undefined {
+  if (error instanceof AnswerStreamRefusedError) return new AnswerStreamRunError("answer_stream_refused", undefined, error);
+  if (error instanceof AnswerStreamInterruptedError) {
+    return new AnswerStreamRunError("answer_stream_interrupted", readCauseCode(error.cause), error);
+  }
+  return undefined;
 }

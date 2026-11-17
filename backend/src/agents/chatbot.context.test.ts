@@ -2,6 +2,8 @@ import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildChatbotGraph, chatbotGraph } from "./chatbot.js";
+import { AnswerStreamInterruptedError, AnswerStreamRefusedError } from "../platform/answer-text-sink.js";
+import { ChatStreamTimeoutError } from "../platform/openai-chat-stream.js";
 import type { ChatModelInvokeOptions } from "../platform/llm-gateway.js";
 import { llmGateway } from "../platform/llm-gateway.js";
 import { REGISTERED_GRAPH_IDS, instrumentGraphWithUsageAttribution } from "../platform/usage/attribution.js";
@@ -141,6 +143,9 @@ describe("chatbot answer streaming wiring (Task 4)", () => {
     const final = messages.at(-1);
     expect(final).toBeInstanceOf(AIMessage);
     expect(final).toMatchObject({ id: "msg-fixed", content: "你好，世界" });
+    // The id must survive serialization, which is what the thread state and the browser receive.
+    const serialized: unknown = JSON.parse(JSON.stringify(final));
+    expect(serialized).toMatchObject({ kwargs: { id: "msg-fixed", content: "你好，世界" } });
     expect(metrics.map((metric) => metric.name)).not.toContain("answer.stream.degraded");
   });
 
@@ -165,23 +170,32 @@ describe("chatbot answer streaming wiring (Task 4)", () => {
     expect(metrics).toContainEqual({ name: "answer.stream.degraded", payload: { reason } });
   });
 
-  it("propagates an interruption after published text instead of committing a partial answer", async () => {
-    const interrupted = Object.assign(new Error("answer_stream_interrupted"), { code: "answer_stream_interrupted" });
+  it.each([
+    [
+      "interruption",
+      () => new AnswerStreamInterruptedError(new ChatStreamTimeoutError("answer_stream_idle_timeout"), "provider_retry"),
+      { code: "answer_stream_interrupted", cause: { code: "answer_stream_idle_timeout" } },
+    ],
+    ["refusal", () => new AnswerStreamRefusedError(), { code: "answer_stream_refused" }],
+  ])("turns a %s after published text into a coded run error without committing the partial answer", async (_label, makeError, expected) => {
     const invoke = vi.fn(async (_prompt: unknown, options?: ChatModelInvokeOptions) => {
       const writer = options?.answerTextSink?.beginAttempt({ provider: "qwen", attemptIndex: 0 });
       await writer?.append("partial");
-      throw interrupted;
+      throw makeError();
     });
     vi.spyOn(llmGateway, "createChatModel").mockReturnValue({ invoke });
 
-    await expect(
-      collect(
-        await harness(enabled).graph.stream(
-          { messages: [new HumanMessage("hi")] },
-          { streamMode: ["custom", "values"], configurable: { execution_context: executionContext } },
-        ),
+    const failure = await collect(
+      await harness(enabled).graph.stream(
+        { messages: [new HumanMessage("hi")] },
+        { streamMode: ["custom", "values"], configurable: { execution_context: executionContext } },
       ),
-    ).rejects.toMatchObject({ code: "answer_stream_interrupted" });
+    ).then(() => undefined, (error: unknown) => error);
+
+    expect(failure).toMatchObject({ name: "AnswerStreamRunError" });
+    const envelope: unknown = JSON.parse((failure as Error).message);
+    expect(envelope).toEqual({ error: { source: "backend", stage: "chat_response", message: expected.code, ...expected } });
+    expect((failure as Error).message).not.toContain("partial");
   });
 
   it("production graph refuses a run without a trusted execution context before calling the model", async () => {

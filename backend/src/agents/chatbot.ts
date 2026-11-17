@@ -1,9 +1,10 @@
-import { AIMessage } from "@langchain/core/messages";
+import { AIMessage, type BaseMessage } from "@langchain/core/messages";
 import type { LangGraphRunnableConfig } from "@langchain/langgraph";
 import { END, MessagesAnnotation, START, StateGraph } from "@langchain/langgraph";
 
 import { getEnv } from "../platform/env.js";
 import { isContextHardLimitError } from "../context/context-errors.js";
+import { toAnswerStreamRunError } from "../platform/answer-text-sink.js";
 import { chatModelDefaults, llmGateway } from "../platform/llm-gateway.js";
 import { REGISTERED_GRAPH_IDS, instrumentGraphWithUsageAttribution, readUsageAttribution } from "../platform/usage/attribution.js";
 import {
@@ -27,6 +28,24 @@ import {
   isContextAssemblyEnabled,
   legacyChatbotPrompt,
 } from "./context-integration.js";
+
+/**
+ * The final message carries the streamed draft's id (design D4). Messages serialize from their
+ * constructor fields, so the id must be set by constructing a new message, not by assignment.
+ */
+function withMessageId(message: BaseMessage, id: string): BaseMessage {
+  if (!AIMessage.isInstance(message)) return message;
+  return new AIMessage({
+    id,
+    content: message.content,
+    name: message.name,
+    additional_kwargs: message.additional_kwargs,
+    response_metadata: message.response_metadata,
+    tool_calls: message.tool_calls,
+    invalid_tool_calls: message.invalid_tool_calls,
+    usage_metadata: message.usage_metadata,
+  });
+}
 
 function createChatResponseNode(answerStream: AnswerStreamWiring) {
   return async function chatResponse(
@@ -63,9 +82,11 @@ function createChatResponseNode(answerStream: AnswerStreamWiring) {
         attribution: readUsageAttribution(config),
         ...(streaming.kind === "stream" ? { answerTextSink: streaming.sink } : {}),
       });
-      if (streaming.kind === "stream") response.id = streaming.messageId;
-      return { messages: [response] };
+      return { messages: [streaming.kind === "stream" ? withMessageId(response, streaming.messageId) : response] };
     } catch (error) {
+      // Answer streaming failures reach the browser as a coded ErrorEnvelope (design D12).
+      const answerStreamError = toAnswerStreamRunError(error);
+      if (answerStreamError) throw answerStreamError;
       if (!isContextHardLimitError(error)) throw error;
       return { messages: [contextHardLimitErrorMessage(error, config)] };
     }
