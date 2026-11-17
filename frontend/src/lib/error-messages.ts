@@ -14,6 +14,12 @@ export const FRONTEND_ERROR_MESSAGES = {
     stage: 'langgraph_stream',
     unknownCode: 'unknown_error',
   },
+  answerStream: {
+    interrupted: '回答已中斷，以上是中斷前收到的內容。',
+    timeout: '回答逾時，以上是逾時前收到的內容。',
+    refused: '這個回答因內容政策無法顯示。',
+    regenerate: '重新生成',
+  },
   rateLimit: {
     title: '請求過於頻繁',
     message: (retryAfter: number) =>

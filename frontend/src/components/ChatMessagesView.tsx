@@ -12,6 +12,7 @@ import {
   ProcessedEvent,
 } from '@/components/ActivityTimeline'; // ActivityTimeline 位於同一 components 目錄
 import { AVAILABLE_AGENTS } from '@/types/agents';
+import { FRONTEND_ERROR_MESSAGES } from '@/lib/error-messages';
 import { ToolMessageDisplay } from '@/components/ToolMessageDisplay';
 import {
   extractImageAttachments,
@@ -364,6 +365,9 @@ interface AiMessageBubbleProps {
   allMessages: Message[];
   onClarificationReply: (payload: ClarificationReplyPayload) => void;
   onClarificationCancel: () => void;
+  answerStreamNotices?: Readonly<Record<string, string>>;
+  regenerableAnswerIds?: ReadonlySet<string>;
+  onRegenerateAnswer?: () => void;
 }
 
 // AiMessageBubble component
@@ -380,6 +384,9 @@ const AiMessageBubble = React.memo(function AiMessageBubble({
   allMessages,
   onClarificationReply,
   onClarificationCancel,
+  answerStreamNotices,
+  regenerableAnswerIds,
+  onRegenerateAnswer,
 }: AiMessageBubbleProps) {
   // Tool message state
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
@@ -455,6 +462,21 @@ const AiMessageBubble = React.memo(function AiMessageBubble({
                   {displayText}
                 </ReactMarkdown>
               )}
+              {message.id && answerStreamNotices?.[message.id] && (
+                <p role="status" className="text-xs text-[#E7D9C1]/70">
+                  {answerStreamNotices[message.id]}
+                </p>
+              )}
+              {message.id && onRegenerateAnswer && regenerableAnswerIds?.has(message.id) && (
+                <button
+                  type="button"
+                  disabled={isOverallLoading}
+                  onClick={onRegenerateAnswer}
+                  className="rounded-md border border-[#7A1E1E]/60 px-2 py-1 text-xs text-[#E7D9C1] hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                >
+                  {FRONTEND_ERROR_MESSAGES.answerStream.regenerate}
+                </button>
+              )}
 
               {/* 在觸發 tool calls 的 AI message 後方立即 render tool calls */}
               {!shouldHideToolMessages && toolCalls.length > 0 && (
@@ -528,6 +550,11 @@ interface ChatMessagesViewProps {
   onClarificationResume?: (resumeValue: ClarificationResumeValue) => void;
   /** Structured commerce cards and approvals, rendered after the messages. */
   commercePanel?: React.ReactNode;
+  /** Catalog copy for an answer draft that ended early, keyed by message id. */
+  answerStreamNotices?: Readonly<Record<string, string>>;
+  /** Ended drafts that may offer a user-triggered regeneration (a new Run). */
+  regenerableAnswerIds?: ReadonlySet<string>;
+  onRegenerateAnswer?: () => void;
 }
 
 export function ChatMessagesView({
@@ -545,6 +572,9 @@ export function ChatMessagesView({
   onClarificationResume,
   commercePanel,
   draft,
+  answerStreamNotices,
+  regenerableAnswerIds,
+  onRegenerateAnswer,
 }: ChatMessagesViewProps) {
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -618,6 +648,9 @@ export function ChatMessagesView({
                       allMessages={messages}
                       onClarificationReply={handleClarificationReply}
                       onClarificationCancel={handleClarificationCancel}
+                      answerStreamNotices={answerStreamNotices}
+                      regenerableAnswerIds={regenerableAnswerIds}
+                      onRegenerateAnswer={onRegenerateAnswer}
                     />
                   )}
                 </div>
