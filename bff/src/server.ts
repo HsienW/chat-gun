@@ -162,7 +162,12 @@ export type ServerDependencies = {
   anonymousMigrationService?: AnonymousMigrationService;
   subjectRightsBackend?: SubjectRightsBackendPort;
   identityGovernedStore?: IdentityGovernedStoreAdapter;
+  /** Set by the application profile composition; absent means the full profile. */
+  applicationProfile?: ApplicationProfileName;
 };
+
+/** Closed set reported to the frontend by GET /api/application-profile (design D12). */
+export type ApplicationProfileName = "demo" | "full";
 
 type RateLimitDecision = {
   allowed: boolean;
@@ -1517,6 +1522,17 @@ export function createServer(
         },
         ctx.requestId
       );
+      return;
+    }
+
+    if (reqUrl.pathname === "/api/application-profile") {
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        sendJson(res, 405, { error: "Method not allowed" }, ctx.requestId);
+        return;
+      }
+      // Derived from the single deployment switch; never cached so a redeploy is seen at once.
+      res.setHeader("cache-control", "no-store");
+      sendJson(res, 200, { schemaVersion: "1", profile: dependencies.applicationProfile ?? "full" }, ctx.requestId);
       return;
     }
 
