@@ -92,18 +92,71 @@
 
 ## 6. 前端正文消費（design D6、D11、D12）
 
-- [ ] 6.1 custom 資料入口 runtime validation 與 ownership 核對，獨立於 `showActivityTimeline`。
-- [ ] 6.2 正文 reducer（純函式）：`(threadId, runId, messageId)` 身分、`textOffset` 接合、重複只套一次、`answerDraftGapWaitMs` 有界等待、終稿取代與封住晚到片段。
-- [ ] 6.3 正文事件同時進入 `BoundedRuntimeEventBuffer`；活動流程略過 `outputKind = "answer_text"`。
-- [ ] 6.4 渲染：穩定 React key、繪製週期合併、貼底跟隨、每幀同一安全 Markdown 渲染器；卸載與終止清理排程。
-- [ ] 6.5 依 application profile 的斷線恢復呈現（demo 只提供重新生成）；拒答時同一泡泡收回已顯示片段並改顯示拒答提示；中斷保留片段並標記。中斷、逾時、拒答狀態由錯誤碼經文案目錄產生。
+- [x] 6.1 custom 資料入口 runtime validation 與 ownership 核對，獨立於 `showActivityTimeline`。
+- [x] 6.2 正文 reducer（純函式）：`(threadId, runId, messageId)` 身分、`textOffset` 接合、重複只套一次、`answerDraftGapWaitMs` 有界等待、終稿取代與封住晚到片段。
+  （2026-11-16，Codex primary implementer，handoff-apply-fix-f1-01：
+  - F1 修復：`AnswerFragment` 保留 `eventId`；純函式 reducer 的 state 保留最多 2,048 筆事件身分，超限依 FIFO 淘汰，重複交付不刷新順序。既有訊息身分／文字偏移與內容比對去重、終稿與 Run 取代後的封存均保留；正文仍不進入活動 reordering buffer。
+  - readiness 固定輸入已先重現預期 A／實際 AB，修復後同一輸入得到 A。新增 9 項回歸，涵蓋同 eventId 不同偏移、不同 eventId 同偏移同內容、容量／FIFO、終稿先於最後片段、Run 取代、同批／跨批與 metadata 前暫存。
+  - 驗證：定向 3 files／48 passed；frontend `npm run lint`（0 error、2 項既有 warning）、`npm run test`（36 files／360 passed）、`npm run build`、`npm run test:e2e`（38 passed，含 4 項既有預期失敗）全部通過。完整 unit test 首輪因驗證副本漏帶共用 contracts fixtures 而未載入兩個 suite；補齊後重跑全綠，原始程式未因此調整。
+  - evidence：`.agent-runtime/stream-chat-answer-text/artifacts/fix-f1-codex-01/` 的 `baseline.json`、`probe-before.json`、`probe-after.json`、`red.log`、`green.log`、`lint.log`、`test.log`、`test-attempt2.log`、`build.log`、`test-e2e.log`；結果見 `implementation-result-codex-f1-01.json`。本次只修復 F1；7.1、7.3 維持未勾選，後續複審與 readiness 交 CCR 協調。
+  ）
+- [x] 6.3 正文事件同時進入 `BoundedRuntimeEventBuffer`；活動流程略過 `outputKind = "answer_text"`。（依 design D11「分流修訂」：D4 決定正文事件另用 allocator，所以正文事件改為**不進入** buffer，只略過活動流程；並以測試證明略過的正文事件不佔用活動流程的序號。）
+- [x] 6.4 渲染：穩定 React key、繪製週期合併、貼底跟隨、每幀同一安全 Markdown 渲染器；卸載與終止清理排程。（貼底跟隨依賴真實捲動尺寸，jsdom 無法量測，未自動化，由 Task 7 E2E 承接。）
+- [x] 6.5 依 application profile 的斷線恢復呈現（demo 只提供重新生成）；拒答時同一泡泡收回已顯示片段並改顯示拒答提示；中斷保留片段並標記。中斷、逾時、拒答狀態由錯誤碼經文案目錄產生。
+  （2026-11-16：
+  - Master 決定：profile 由 BFF 提供，維持 `on_disconnect: "cancel"`。決策已先寫入 design D12「斷線恢復修訂」，再施工。
+  - BFF：新增 `GET /api/application-profile`，回傳 `{ schemaVersion: "1", profile }`。值由 `composeApplicationProfile`（`DEMO_ENABLED`）決定，不快取，非 GET／HEAD 回 405。
+  - 前端：
+    - `lib/application-profile.ts`：讀取失敗或收到未知值時視為 `demo`。`ANSWER_STREAM_RECOVERY` 是單一來源的對照表，目前 `demo` 與 `full` 都是 `regenerate_only`。
+    - 中斷或逾時的草稿顯示「重新生成」，以最後一則純文字問題建立新的 Run。拒答、最後一則問題帶附件，或目標為 deep research 時不提供；Run 進行中按鈕停用。
+  - 測試：bff `test/application-profile.test.mjs` 3 項，`demo.test.ts` 新增 1 個斷言；frontend `application-profile.test.ts` 10 項、`App.answer-stream.test.tsx` 新增 3 項、`ChatMessagesView.answer-stream.test.tsx` 新增 2 項。
+  - 驗證：
+    - `cd bff && npm run build && npm run test` 全部通過：vitest 224、`test:node` 31/31。
+    - `cd frontend && npm run lint && npm run test && npm run build` 全部通過：36 files／351 passed；lint 只有既有的 2 個 warning；bundle 690.34 kB。
+    - evidence：`task6-5-*-ccr.txt`。
+  - 未自動化：demo 分支的 `composeApplicationProfile` 需要 Redis，現有測試沒有涵蓋，所以 `applicationProfile: "demo"` 只透過 server 測試以注入方式驗證。）
 
 驗證：`cd frontend && npm run lint && npm run test && npm run build`。reducer 測試涵蓋重複、亂序、缺段、終稿先到、取消後晚到、跨通道晚到的非正文事件；回歸深度研究、購物卡、工具失敗與 HITL resume。
+
+（2026-11-16，CCR implementation_secondary，handoff-apply-task2-8-03-ccr：
+- 前端新增：
+  - `lib/answer-text-stream.ts`（純函式）：解析、ownership、草稿 reducer、可見草稿 selector。
+  - `lib/use-answer-text-stream.ts`：繪製週期合併、metadata 到達前的有界暫存、缺段計時、`endRun` 封存，卸載時清理。
+- App 接上 `onCustomEvent` 與 `onMetadataEvent`，ownership 取自當次串流 metadata 的 run_id 與 thread_id。
+- 草稿以終稿 `messageId` 作為 AI 訊息 id，終稿出現時在同一次計算中取代。
+- 拒答時收回片段，同一泡泡改顯示文案目錄的拒答提示；中斷、逾時保留片段，並以 `role="status"` 顯示提示；此時不再另外顯示錯誤泡泡。
+- 依 design D12「錯誤碼傳遞」，backend `chatbot` 把兩種失敗轉為帶 ErrorEnvelope 的 `AnswerStreamRunError`，前端只依 `code` 與 `cause.code` 判斷。
+- 測試：
+  - frontend：`answer-text-stream.test.ts` 23 項、`use-answer-text-stream.test.tsx` 6 項、`App.answer-stream.test.tsx` 7 項、`ChatMessagesView.answer-stream.test.tsx` 3 項。
+  - backend：`chatbot.context.test.ts` 的中斷與拒答 envelope 2 項。
+- 驗證：
+  - `cd frontend && npm run lint && npm run test && npm run build` 全部通過：35 files／336 passed；lint 0 error，2 個 warning 在既有的 `ui/badge.tsx`、`ui/button.tsx`；bundle 680.48 → 688.74 kB（gzip +2.6 kB），chunk size warning 為既有。
+  - `cd backend && npm run lint && npm run test && npm run build` 全部通過：306 files／2548 passed。
+  - evidence：`task6-frontend-*-ccr.txt`、`task6-backend-*-ccr.txt`。
+- 新 Run 開始時，會移除舊 Run 留在畫面上的草稿。所以使用者取消（cancel 會送出新 Run）後，已顯示的片段會消失，只保留既有的「已取消」訊息。）
 
 ## 7. 跨層確定性 E2E 與 live smoke（spec 全部 Requirement）
 
 - [ ] 7.1 跨層 E2E：Provider 第一框後鎖住第二框；斷言首段已顯示、可取消、第二段未出現；讀取泡泡身分後放行第二框並斷言同一泡泡追加；放行完成框後重載核對歷史只有一則回答；斷言本次未記錄降級。
-- [ ] 7.2 E2E 補充：兩段正文之間插入另一通道晚到的非正文事件；demo profile 斷線；串流途中拒答（斷言片段被收回、顯示拒答提示，重新載入後歷史不含片段）；開啟時間軸的 agent 不重複顯示正文。
+  （2026-11-16 部分完成，未勾選：
+  - **確定性 E2E**：`e2e/stream-chat-answer-text/answer-stream.spec.ts` 第一個情境已涵蓋瀏覽器端的全部斷言：fixture 送出與 backend 相同格式的 envelope，第二框以 gate 鎖住時首段已顯示、可取消、第二段未出現；以 element handle 證明同一泡泡追加；完成後只有一則回答，thread 只含 `msg-1`；首段在終稿前出現，表示沒有降級。
+  - fixture server 新增 `/api/application-profile` 路由與 `disconnect()`。
+  - `npm run test:e2e` 38/38 通過，含 4 項既有 `test.fail()` 已知限制 KL-1～KL-3。evidence：`task7-frontend-e2e-ccr.txt`。
+  - **真實跨層驗證（第一次）未完成**：在真正的 backend（`langgraphjs dev`）、BFF、mock provider 上送出聊天時，Run 在 graph entry 的 `PgGraphTaskAdmission` 失敗，錯誤為 `connect ECONNREFUSED 127.0.0.1:5433`。原因是 Task 4 依 D4 讓 chatbot 改走 Postgres task admission，而 backend 設定的資料庫在 5433，本機 Docker 沒有啟動。provider 一次請求都沒收到。
+  - **真實跨層驗證（Master 啟動 Docker 後，2026-11-16）**：
+    - 第二次跑通鏈路，同時發現一個缺陷：放行後答案出現兩次。查 thread 權威狀態發現終稿 AI 訊息沒有 id。根因是 Task 4 在節點中以 `response.id = messageId` 事後改屬性，而 LangChain 訊息依建構時的 `lc_kwargs` 序列化，事後賦值不會進入 thread state；Task 4 的單元測試只比對同一 process 內的物件，沒能抓到。
+    - 修正：`chatbot` 改以帶 `id` 的新 `AIMessage` 建構終稿，測試同時斷言序列化後的 `kwargs.id`。
+    - 修正後以 `e2e/stream-chat-answer-text/cross-layer-run.mjs`（Playwright 驅動真實瀏覽器）重跑，8 項全部通過：provider 收到 `stream: true`；鎖住第二框時首段 380 ms 可見、可取消、第二段未出現；放行後同一元素就地追加；完成後只有一則回答、沒有錯誤泡泡；thread 終稿帶 id。
+    - evidence：`task7-1-cross-layer-ccr.json`、`task7-1-thread-state-ccr.json`、`task7-1-provider-events.jsonl`、`task7-1-*.log`。
+  - 仍未勾選，原因只有一項：7.1 要求的「重載核對歷史」受限於 app 不保存 threadId（見下）。其餘條件都已在真實跨層與確定性 E2E 兩層取得證據。
+  - 「重新載入後核對歷史」受限於 app 不保存 threadId，重新整理後會回到首頁，所以改以 fixture thread 的權威狀態核對。）
+- [x] 7.2 E2E 補充：兩段正文之間插入另一通道晚到的非正文事件；demo profile 斷線；串流途中拒答（斷言片段被收回、顯示拒答提示，重新載入後歷史不含片段）；開啟時間軸的 agent 不重複顯示正文。
+  （2026-11-16：同一 spec 的其餘 4 個情境：
+  - 另一來源、序號同為 1 的非正文事件插在兩段正文之間時，正文不受影響，也不會顯示該事件內容。
+  - demo profile 斷線（`disconnect()`）時保留片段並顯示中斷提示，「重新生成」以原問題建立新 Run。
+  - 串流途中拒答時收回片段、只顯示拒答文案、不提供重新生成，fixture thread 不含 AI 訊息。
+  - Gun Shop（開啟時間軸）的正文只顯示一次。
+  - 以上都是確定性 E2E；真實跨層的同類情境與 7.1 一起待環境就緒後重跑。）
 - [ ] 7.3 live smoke：對每個宣告支援的端點，以足夠長的純文字回答記錄 Provider、模型、首段可見、後續片段、usage 與終止證據，並驗證部署代理未緩衝。只有 loading、時間軸或回放動畫不符合放行條件。放行 MUST 同時滿足：
   - 首段可見延遲（送出到瀏覽器顯示第一段正文）在 Task 3.1 回填於 design D8 預設值表的上限內，並記錄實測值。
   - 首段可見之後、完成之前，瀏覽器至少再收到兩段正文更新，且相鄰更新的最大間隔不超過閒置逾時設定。
@@ -113,8 +166,30 @@
 
 驗證：`cd frontend && npm run test:e2e`；live smoke 結果以 evidence 保存。mock 與 E2E 通過不等同 live 驗收。
 
+（7.3，2026-11-16，部分完成，未勾選：
+- 以 `e2e/stream-chat-answer-text/live-smoke-run.mjs`，經本機真實 BFF 與 backend 對部署端點（`qwen`／`qwen3.5-flash`）執行一次約 400 字的純文字回答。
+- 結果全部通過：
+  - 首段可見 631 ms，在 D8 上限 10 s 內。
+  - 首段之後共 53 次正文更新，相鄰最大間隔 941 ms，在閒置上限 15 s 內；總長 4319 ms。
+  - 完成後只有一則回答，終稿 418 字與頁面逐字相同，`finish_reason: stop`、`answer_streamed: true`。
+  - usage 為 141／261 tokens。
+- 第一次量測因腳本在歡迎畫面就抓取捲動區塊而取得 0 個樣本，屬量測腳本錯誤，修正後重跑；兩次都對真實端點送出請求。
+- evidence：`task7-3-live-smoke-ccr.json`、`task7-3-langgraph-server.log`。
+- **未滿足的放行條件**：
+  - 「經部署代理量測並與直連 BFF 比較」：repo 與 docker compose 都沒有部署代理（nginx 等）設定，只量了直連 BFF，部署代理的量測需在實際部署環境進行。
+  - 「每次上游嘗試恰好一筆 usage 紀錄」：live 只確認終稿帶 usage；恰好一筆由 Task 3 的單元與 Gateway 測試證明，live 未直接讀取 ledger。
+- 本機服務已全部停止，臨時 bundle 已刪除。）
+
 ## 8. 收尾
 
-- [ ] 8.1 執行三套件完整驗證：backend 與 frontend 的 `npm run lint`、`npm run test`、`npm run build`；bff 的 `npm run build`、`npm run test`；frontend 的 `npm run test:e2e`。
-- [ ] 8.2 implementation_result 如實列出未執行的驗證、live 限制與規格差異。
-- [ ] 8.3 確認 design「後續待辦」FU-1（demo 斷線後重新同步）與 FU-2（多 worker／多 session 事件序號）已列入待辦清單或另立 Change，並在 implementation_result 引用；不得在本 Change 內實作。
+- [x] 8.1 執行三套件完整驗證：backend 與 frontend 的 `npm run lint`、`npm run test`、`npm run build`；bff 的 `npm run build`、`npm run test`；frontend 的 `npm run test:e2e`。
+- [x] 8.2 implementation_result 如實列出未執行的驗證、live 限制與規格差異。
+- [x] 8.3 確認 design「後續待辦」FU-1（demo 斷線後重新同步）與 FU-2（多 worker／多 session 事件序號）已列入待辦清單或另立 Change，並在 implementation_result 引用；不得在本 Change 內實作。
+
+（2026-11-16，CCR implementation_secondary：
+- 8.1：最後一次程式修改（終稿 id 修正）之後執行，全部通過：
+  - backend：lint、build 通過，306 files／2548 passed。evidence：`task7-backend-*-ccr.txt`。
+  - frontend：lint 0 error、build 通過，36 files／351 passed，`test:e2e` 38/38（含 4 項既有 `test.fail()`）。evidence：`task8-frontend-*-ccr.txt`。
+  - bff：build 通過，vitest 224，`test:node` 31/31。evidence：`task8-bff-*-ccr.txt`。
+- 8.2：`implementation-result-ccr-06`（status `partial`）列出 7.1、7.3 未滿足的條件、design D8／D11／D12 的差異與後續待辦。
+- 8.3：FU-1、FU-2 已列於 design「後續待辦」，未在本 Change 實作；implementation_result 另外列出三項新的後續待辦。）

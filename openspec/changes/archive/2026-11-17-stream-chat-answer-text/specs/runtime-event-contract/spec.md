@@ -2,7 +2,7 @@
 
 ### Requirement: 前端去重與 bounded reordering
 
-Frontend MUST 以 `eventId` 去重、以 `(runId, sequence)` 做 bounded reordering buffer，且 buffer MUST 有上限（有預設值、可配置、超窗推進具可觀察 metric）；duplicate 交付 MUST 只改變一次狀態。bounded reordering MUST NOT 作為回答正文事件的放行閘門：回答正文 MUST 以其訊息身分與文字偏移為唯一順序依據，抵達即可套用；正文事件仍 MUST 進入 reordering buffer 以維持 `sequence` 連續。
+Frontend MUST 以 `eventId` 去重、以 `(runId, sequence)` 做 bounded reordering buffer，且 buffer MUST 有上限（有預設值、可配置、超窗推進具可觀察 metric）；duplicate 交付 MUST 只改變一次狀態。bounded reordering MUST NOT 作為回答正文事件的放行閘門：回答正文 MUST 以其訊息身分與文字偏移為唯一順序依據，抵達即可套用。回答正文事件的 `sequence` 屬於獨立的序號空間，MUST NOT 進入其他事件的 reordering buffer，以免被當成重複或缺號而干擾其他事件的順序；正文去重 MUST 以 `eventId` 與（訊息身分、文字偏移）為準。
 
 #### Scenario: duplicate 交付只改變一次狀態
 
@@ -24,7 +24,7 @@ Frontend MUST 以 `eventId` 去重、以 `(runId, sequence)` 做 bounded reorder
 - GIVEN 一個回答正文事件的 `sequence` 之前仍有未抵達的事件
 - WHEN 正文事件抵達
 - THEN 正文 MUST 依其文字偏移立即套用
-- AND 該事件 MUST 仍進入 reordering buffer
+- AND 該事件 MUST NOT 進入其他事件的 reordering buffer，也 MUST NOT 佔用其他事件的 `sequence`
 - AND 活動流程 MUST NOT 因此重複呈現該正文
 
 ## ADDED Requirements

@@ -153,6 +153,7 @@ export type AnswerStreamAttempt = {
 - **分流**：合法 `answer_text` 事件同時交給兩個消費者：
   - 正文 reducer：抵達即依 `textOffset` 套用，不等待 Run 序號缺口。
   - `BoundedRuntimeEventBuffer`：照常收下以維持序號連續；活動流程輸出端略過 `outputKind = "answer_text"`，避免時間軸重複顯示正文。
+- **分流修訂（2026-11-15，承接 D4 chatbot 接線決策）**：正文事件改用自己的 allocator，`sequence` 與同一 Run 的其他事件各自從 1 起算。如果放進同一個 `BoundedRuntimeEventBuffer`，會被當成重複或缺號，干擾其他事件的排序。因此正文事件**不進入** `BoundedRuntimeEventBuffer`，只交給正文 reducer；活動流程在入口略過 `outputKind = "answer_text"`。去重依 D6，以 `(messageId, textOffset)` 為準。
 - **草稿**：以 `(threadId, runId, messageId)` 識別；第一段即顯示，保留合法空白與換行；重複片段只套用一次；缺段於 `answerDraftGapWaitMs` 內有限等待，超窗或內容衝突則保留可證明前綴並等待權威快照。
 - **終稿對帳**：`thread.messages` 出現相同 ID 時，於同一次展示計算以權威內容取代草稿並移除暫存；終稿先到則封住同 ID 晚到片段。只收到結束通知時做一次有界狀態同步。
 - **渲染**：穩定 message ID 作為 React key；高頻片段按繪製週期合併，終止或卸載時清理排程；僅在使用者原本貼近底部時跟隨。每一幀交給同一個安全 Markdown 渲染器；不另寫「未閉合」偵測（CommonMark 已將未閉合 fence 視為延伸至結尾的程式碼區塊），避免版面跳動與以 Regex 判斷結構。
@@ -169,6 +170,14 @@ export type AnswerStreamAttempt = {
 | 取消、切換對話、新 Run 取代舊 Run | 沿用 `thread.stop()` 與既有 cancel／ownership 路徑，傳遞 `AbortSignal`，於 `finally` 清理 reader、timer、listener、緩衝並封存 sink。 | 立即停止追加；晚到片段、終稿或舊 generation 不寫入新泡泡。 |
 | 串流途中拒答（如 `finish_reason === "content_filter"`） | 使用正文專屬分類 `answer_stream_refused`，不沿用 `StructuredOutputRefusalError`。節點不提交含已發布片段的 `AIMessage`，片段不進入歷史與下一輪輸入。需終稿審核才能揭露正文的端點以 capability 宣告，呼叫前降級（`final_moderation_required`）。 | 依 OQ1 決策收回草稿：同一泡泡移除已顯示片段，改顯示由錯誤碼產生的拒答提示；重新載入後只見拒答提示，不見片段。可分辨「被拒答」與「連線中斷」。 |
 | 解碼器、渲染函式失敗或未知事件版號 | 在所屬邊界捕獲並保留 cause，上傳可分類錯誤；單一不可渲染內容降級為安全文字或既有錯誤元件；未知事件沿用現行降級。 | 使用者可分辨內容受限或整次中斷；console 只供診斷，不取代使用者提示。 |
+
+**斷線恢復修訂（Master 於 2026-11-16 決定）**：
+- 鎖定的前端 SDK（`@langchain/langgraph-sdk` 0.0.74）提交 Run 時預設送出 `on_disconnect: "cancel"`，demo admission 也強制要求此值；這版 SDK 也沒有加入既有串流的能力。因此目前兩種 profile 的 Run 都會在斷線時取消，上表「完整 profile 讀取 thread 狀態對帳」的前提不成立。Master 決定維持 `cancel`，不改變 Run 生命週期與成本。
+- profile 由 BFF 提供：`GET /api/application-profile` 回傳 `{ "schemaVersion": "1", "profile": "demo" | "full" }`。值由 BFF 唯一的部署開關 `DEMO_ENABLED` 決定，回應不快取；非 GET／HEAD 回 405。前端讀取失敗或收到未知值時視為 `demo`（fail closed）。
+- 前端以集中、封閉的對照表把 profile 對應到恢復方式。目前 `demo` 與 `full` 都對應 `regenerate_only`：斷線、中斷或逾時的草稿保留片段並標記，只提供使用者明確觸發的「重新生成」。日後若完整 profile 改用 `on_disconnect: "continue"`，再將 `full` 改為 `thread_resync`，屬另立 Change。
+- 「重新生成」沿用一般提交路徑，以最後一則使用者文字訊息建立新的 Run，所以歷史中會再出現一次該問題。最後一則使用者訊息含附件（非純文字）時不提供，避免遺失附件；被拒答的草稿也不提供。
+
+**錯誤碼傳遞（2026-11-15 補充）**：Agent Server 把節點拋出的錯誤序列化為 `{ error: name, message }`，前端既有的結構化通道會把 `message` 解析為 ErrorEnvelope。所以 `chatbot` 節點會把 `answer_stream_interrupted` 與 `answer_stream_refused` 轉成 `message` 為 ErrorEnvelope JSON 的錯誤：`source = "backend"`、`stage = "chat_response"`、`code` 為上述兩者之一。中斷時以 `cause.code` 帶出可分類的原因，例如 `answer_stream_idle_timeout`。envelope 不帶原始 Provider 訊息或正文。前端依 `code` 與 `cause.code` 從文案目錄產生「已中斷」「逾時」「拒答」提示。
 
 ### D13：三種輸入分開解碼
 
