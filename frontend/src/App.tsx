@@ -41,6 +41,19 @@ import {
 import { extractIncomingRuntimeEventResults } from '@/lib/legacy-event-adapter';
 import { BoundedRuntimeEventBuffer } from '@/lib/runtime-event-envelope';
 import {
+  isAnswerTextEnvelope,
+  selectVisibleDrafts,
+  type AnswerDraft,
+  type AnswerRunOutcome,
+} from '@/lib/answer-text-stream';
+import { useAnswerTextStream } from '@/lib/use-answer-text-stream';
+import {
+  ANSWER_STREAM_RECOVERY,
+  FALLBACK_APPLICATION_PROFILE,
+  fetchApplicationProfile,
+  type ApplicationProfile,
+} from '@/lib/application-profile';
+import {
   createInteractionMetadataFetch,
   createInteractionRequestMetadata,
   withInteractionRequestMetadata,
@@ -66,7 +79,9 @@ import {
 import { getAgentById } from '@/lib/agents';
 import {
   classifyStreamError,
+  isAnswerStreamTimeoutCause,
   isStreamAbortError,
+  readAnswerStreamFailure,
 } from '@/lib/stream-error-classification';
 import type { ClarificationResumeValue } from '@/components/WeatherToolResult';
 import {
@@ -96,7 +111,31 @@ const STREAM_ERROR_MESSAGE_ID = 'stream-error';
 const WEATHER_CLARIFICATION_AI_MESSAGE_ID = 'weather-clarification-interrupt-ai';
 const WEATHER_CLARIFICATION_TOOL_MESSAGE_ID = 'weather-clarification-interrupt-tool';
 
+/** User-visible copy for a draft's terminal state; always from the copy catalog, never from text. */
+function answerDraftNotice(draft: AnswerDraft): string | undefined {
+  const copy = FRONTEND_ERROR_MESSAGES.answerStream;
+  if (draft.status === 'interrupted') return copy.interrupted;
+  if (draft.status === 'timeout') return copy.timeout;
+  return undefined;
+}
+
+/** Maps a run failure to the draft outcome by error code and cause code only. */
+function answerRunOutcome(error: unknown, cancelledByUser: boolean): AnswerRunOutcome {
+  const failure = readAnswerStreamFailure(error);
+  if (failure?.code === 'answer_stream_refused') return 'refused';
+  if (failure && isAnswerStreamTimeoutCause(failure.causeCode)) return 'timeout';
+  if (!failure && classifyStreamError(error) === 'timeout') return 'timeout';
+  if (cancelledByUser) return 'cancelled';
+  return 'interrupted';
+}
+
 function formatStreamError(error: unknown): string {
+  const answerFailure = readAnswerStreamFailure(error);
+  if (answerFailure) {
+    const copy = FRONTEND_ERROR_MESSAGES.answerStream;
+    if (answerFailure.code === 'answer_stream_refused') return copy.refused;
+    return isAnswerStreamTimeoutCause(answerFailure.causeCode) ? copy.timeout : copy.interrupted;
+  }
   const envelope =
     parseErrorEnvelope(error) ||
     parseErrorEnvelope(error instanceof Error ? error.message : String(error));
@@ -317,6 +356,15 @@ function ChatWorkspace({
   const dispatchingRef = useRef(false);
   const activeRunHintRef = useRef<InteractionActiveRunHint | undefined>(undefined);
   const runtimeEventBufferRef = useRef(new BoundedRuntimeEventBuffer());
+  // Follow the growing draft only when the reader was already at the bottom before the frame.
+  const followDraftRef = useRef(true);
+  const captureDraftFollow = useCallback(() => {
+    const viewport = scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
+    if (!viewport) return;
+    followDraftRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 48;
+  }, []);
+  const answerStream = useAnswerTextStream({ onBeforeFrame: captureDraftFollow });
+  const endAnswerRun = answerStream.endRun;
   const interactionMetadataFetch = useMemo(
     () => createAdmissionTransport(createInteractionMetadataFetch()),
     []
@@ -352,6 +400,12 @@ function ChatWorkspace({
 
   const handleStreamError = useCallback((error: unknown) => {
     releaseDispatch();
+    endAnswerRun(
+      answerRunOutcome(
+        error,
+        isStreamAbortError(error) && streamActivityStateRef.current.lifecycle === 'cancelled'
+      )
+    );
     const submission = confirmationSubmissionRef.current;
     if (submission?.status === 'submitting') {
       // The decision is not assumed to have taken effect; the card stays open.
@@ -406,11 +460,12 @@ function ChatWorkspace({
       archiveMessageId: STREAM_ERROR_MESSAGE_ID,
     });
     console.error('LangGraph stream error:', error);
-  }, [releaseDispatch, setIdentityFailure, setRateLimitRetryAfter, updateConfirmationSubmission]);
+  }, [endAnswerRun, releaseDispatch, setIdentityFailure, setRateLimitRetryAfter, updateConfirmationSubmission]);
 
   const handleStreamFinish = useCallback((event: unknown) => {
     void event;
     releaseDispatch();
+    endAnswerRun('completed');
     // From here the server thread state decides what the operation shows.
     if (confirmationSubmissionRef.current?.status === 'submitting') {
       updateConfirmationSubmission(undefined);
@@ -424,7 +479,7 @@ function ChatWorkspace({
       messagesLengthAtTerminal: messagesRef.current.length,
       archiveMessageId: getCurrentFinalAssistantMessageId(messagesRef.current),
     });
-  }, [releaseDispatch, updateConfirmationSubmission]);
+  }, [endAnswerRun, releaseDispatch, updateConfirmationSubmission]);
 
   const handleStreamUpdate = useCallback((event: Record<string, unknown>) => {
     releaseDispatch();
@@ -464,6 +519,8 @@ function ChatWorkspace({
     const versionedEvents = extractIncomingRuntimeEventResults(event).flatMap(
       (result) => {
         if (result.kind === 'legacy') return [];
+        // Answer text belongs to the draft only; its own sequence must not enter the activity buffer (design D11).
+        if (result.kind === 'versioned' && isAnswerTextEnvelope(result.envelope)) return [];
         if (result.kind === 'unknown') {
           console.info({
             code: 'events.parse.degraded',
@@ -528,8 +585,23 @@ function ChatWorkspace({
     onError: handleStreamError,
     onFinish: handleStreamFinish,
     onUpdateEvent: handleStreamUpdate,
+    onCustomEvent: answerStream.onCustomEvent,
+    onMetadataEvent: answerStream.onMetadataEvent,
     callerOptions: interactionMetadataFetch,
   });
+
+  const finalizeAnswerDrafts = answerStream.finalize;
+  const finalMessageIds = useMemo(
+    () => new Set(thread.messages.flatMap((message) => (message.id ? [message.id] : []))),
+    [thread.messages]
+  );
+  useEffect(() => {
+    finalizeAnswerDrafts([...finalMessageIds]);
+  }, [finalMessageIds, finalizeAnswerDrafts]);
+  const visibleAnswerDrafts = useMemo(
+    () => selectVisibleDrafts(answerStream.state, finalMessageIds),
+    [answerStream.state, finalMessageIds]
+  );
 
   useEffect(() => {
     messagesRef.current = thread.messages;
@@ -736,6 +808,25 @@ function ChatWorkspace({
     ]
   );
 
+  // Disconnect recovery comes from the BFF profile through the single recovery table (design D12).
+  const [applicationProfile, setApplicationProfile] = useState<ApplicationProfile>(FALLBACK_APPLICATION_PROFILE);
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchApplicationProfile(fetch, controller.signal).then((profile) => {
+      if (!controller.signal.aborted) setApplicationProfile(profile);
+    });
+    return () => controller.abort();
+  }, []);
+  const answerStreamRecovery = ANSWER_STREAM_RECOVERY[applicationProfile];
+  // Regeneration resends the last plain-text question as a new Run; attachments are never dropped silently.
+  const lastHumanText = useMemo(() => {
+    const lastHuman = [...thread.messages].reverse().find((message) => message.type === 'human');
+    return typeof lastHuman?.content === 'string' && lastHuman.content.trim() ? lastHuman.content : undefined;
+  }, [thread.messages]);
+  const handleRegenerateAnswer = useCallback(() => {
+    if (lastHumanText) handleSubmit(lastHumanText, '', '', []);
+  }, [handleSubmit, lastHumanText]);
+
   const handleClarificationResume = useCallback(
     (resumeValue: ClarificationResumeValue) => {
       if (rateLimitRetryAfter !== null) return;
@@ -779,6 +870,7 @@ function ChatWorkspace({
       messagesLengthAtTerminal: messagesRef.current.length,
       archiveMessageId: localCancelledMessage.id,
     });
+    endAnswerRun('cancelled');
     thread.stop();
     const activeRunHint = activeRunHintRef.current;
     thread.submit(
@@ -794,26 +886,69 @@ function ChatWorkspace({
       )
     );
     setCancelledMessage(localCancelledMessage);
-  }, [releaseDispatch, thread]);
+  }, [endAnswerRun, releaseDispatch, thread]);
 
   const activeStreamErrorMessage =
     rateLimitRetryAfter === null
       ? streamErrorMessage
       : formatRateLimitMessage(rateLimitRetryAfter);
-  const messagesWithStreamError = useMemo(
+  // Drafts render as AI messages with their final message id, so the bubble is kept when the
+  // authoritative message replaces it. A refused draft retracts its text and shows the refusal.
+  const answerDraftMessages = useMemo(
     () =>
-      activeStreamErrorMessage
+      visibleAnswerDrafts.flatMap((draft): Message[] => {
+        const content = draft.status === 'refused' ? FRONTEND_ERROR_MESSAGES.answerStream.refused : draft.text;
+        return content ? [{ type: 'ai', id: draft.messageId, content }] : [];
+      }),
+    [visibleAnswerDrafts]
+  );
+  const answerStreamNotices = useMemo(
+    () =>
+      Object.fromEntries(
+        visibleAnswerDrafts.flatMap((draft) => {
+          const notice = answerDraftNotice(draft);
+          return notice ? [[draft.messageId, notice]] : [];
+        })
+      ),
+    [visibleAnswerDrafts]
+  );
+  const regenerableAnswerIds = useMemo(
+    () =>
+      new Set(
+        answerStreamRecovery === 'regenerate_only' && lastHumanText && targetAgentId !== AgentId.DEEP_RESEARCHER
+          ? visibleAnswerDrafts
+              .filter((draft) => draft.status === 'interrupted' || draft.status === 'timeout')
+              .map((draft) => draft.messageId)
+          : []
+      ),
+    [answerStreamRecovery, lastHumanText, targetAgentId, visibleAnswerDrafts]
+  );
+  // The draft bubble already tells the user what happened; no second error bubble.
+  const draftCarriesFailure = visibleAnswerDrafts.some(
+    (draft) => draft.status === 'refused' || draft.status === 'interrupted' || draft.status === 'timeout'
+  );
+  const messagesWithStreamError = useMemo(
+    () => {
+      const withDrafts = answerDraftMessages.length > 0 ? [...thread.messages, ...answerDraftMessages] : thread.messages;
+      return activeStreamErrorMessage && !draftCarriesFailure
         ? [
-            ...thread.messages,
+            ...withDrafts,
             {
               type: 'ai',
               content: activeStreamErrorMessage,
               id: STREAM_ERROR_MESSAGE_ID,
             } as Message,
           ]
-        : thread.messages,
-    [activeStreamErrorMessage, thread.messages]
+        : withDrafts;
+    },
+    [activeStreamErrorMessage, answerDraftMessages, draftCarriesFailure, thread.messages]
   );
+  const answerDraftLength = visibleAnswerDrafts.reduce((total, draft) => total + draft.text.length, 0);
+  useEffect(() => {
+    if (answerDraftLength === 0 || !followDraftRef.current) return;
+    const viewport = scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
+    if (viewport) viewport.scrollTop = viewport.scrollHeight;
+  }, [answerDraftLength]);
   const messagesWithWeatherClarification = useMemo(
     () =>
       weatherClarificationMessages
@@ -929,6 +1064,9 @@ function ChatWorkspace({
                 : streamActivityState.liveActivityEvents
             }
             historicalActivities={streamActivityState.historicalActivities}
+            answerStreamNotices={answerStreamNotices}
+            regenerableAnswerIds={regenerableAnswerIds}
+            onRegenerateAnswer={handleRegenerateAnswer}
             targetAgentId={targetAgentId}
             deepResearch={deepResearch}
             onNewConversation={startNewConversation}

@@ -43,3 +43,27 @@ export function classifyStreamError(error: unknown): StreamErrorKind {
 
   return 'generic';
 }
+
+export type AnswerStreamFailure = {
+  code: 'answer_stream_interrupted' | 'answer_stream_refused';
+  causeCode?: string;
+};
+
+/** Reads the coded answer streaming failure from the structured error channel (design D12). */
+export function readAnswerStreamFailure(error: unknown): AnswerStreamFailure | undefined {
+  const envelope = getStreamErrorEnvelope(error);
+  const code = envelope?.error.code;
+  if (code !== 'answer_stream_interrupted' && code !== 'answer_stream_refused') return undefined;
+  const causeCode = envelope?.error.cause?.code;
+  return { code, ...(causeCode ? { causeCode } : {}) };
+}
+
+/** Timeouts are told apart from other interruptions by their cause code, never by text. */
+export function isAnswerStreamTimeoutCause(causeCode: string | undefined): boolean {
+  return (
+    causeCode === 'answer_stream_first_chunk_timeout' ||
+    causeCode === 'answer_stream_idle_timeout' ||
+    causeCode === 'answer_stream_total_deadline_exceeded' ||
+    causeCode === 'provider_timeout'
+  );
+}

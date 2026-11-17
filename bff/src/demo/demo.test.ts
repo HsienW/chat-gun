@@ -54,6 +54,7 @@ describe("Demo strict settings", () => {
     expect(() => readDemoSettings(environment(), config)).toThrow("BFF_ALLOWED_ORIGINS");
     expect(() => settings({ ...environment(), DEMO_GRAPH_BUDGETS_JSON: '{"math_agent":"gun_chat"}' })).toThrow("DEMO_GRAPH_BUDGETS_JSON");
     expect(composeApplicationProfile(loadConfig(), { DEMO_ENABLED: "false" })).toEqual({});
+    expect(composeApplicationProfile(loadConfig(), {})).not.toHaveProperty("applicationProfile");
     expect(() => composeApplicationProfile(loadConfig(), { DEMO_ENABLED: "yes" })).toThrow("DEMO_ENABLED");
   });
 });

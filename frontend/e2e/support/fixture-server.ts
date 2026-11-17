@@ -32,6 +32,7 @@ export type RequestRoute =
   | 'thread.create'
   | 'thread.history'
   | 'run.stream'
+  | 'application.profile'
   | 'unexpected';
 
 /** What the browser sent, without anything credential-like (there are none). */
@@ -139,6 +140,8 @@ export interface RunContext {
   error(envelope: unknown): void;
   /** Resolves when the test releases this gate; nothing after it is sent before. */
   gate(name: string): Promise<void>;
+  /** Breaks the connection mid-stream without a terminal frame, like a dropped network. */
+  disconnect(): void;
 }
 
 export type RunScript = (run: RunContext) => Promise<void> | void;
@@ -210,6 +213,8 @@ export class FixtureServer {
   });
   private runCount = 0;
   private origin_ = '';
+  /** What GET /api/application-profile reports, like the BFF (design D12). */
+  applicationProfile: 'demo' | 'full' = 'full';
 
   get origin(): string {
     return this.origin_;
@@ -256,7 +261,9 @@ export class FixtureServer {
   }
 
   apiRequests(): RecordedRequest[] {
-    return this.requests.filter((request) => request.route !== 'static');
+    return this.requests.filter(
+      (request) => request.route !== 'static' && request.route !== 'application.profile'
+    );
   }
 
   recordExternal(url: string): void {
@@ -337,6 +344,12 @@ export class FixtureServer {
 
     if (method === 'GET' && url.pathname.startsWith(APP_BASE)) {
       await this.serveStatic(url.pathname, request, response);
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/api/application-profile') {
+      this.record(request, 'application.profile', response);
+      writeJson(response, 200, { schemaVersion: '1', profile: this.applicationProfile });
       return;
     }
 
@@ -471,6 +484,11 @@ export class FixtureServer {
         gate.reached = true;
         gate.reachedWaiters.splice(0).forEach((resolve) => resolve());
         await gate.promise;
+      },
+      disconnect: () => {
+        // The run is cancelled upstream on disconnect, so nothing reaches thread state.
+        closed = true;
+        response.socket?.destroy();
       },
     };
 

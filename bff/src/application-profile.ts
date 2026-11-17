@@ -26,7 +26,7 @@ export function composeApplicationProfile(config: BffConfig, env: NodeJS.Process
       return response.json();
     },
   });
-  return { admissionPolicy: new DemoAdmissionPolicy(settings, reader, new RedisDemoAdmissionStore(redis, `${settings.keyPrefix}:admission`)),
+  return { applicationProfile: "demo", admissionPolicy: new DemoAdmissionPolicy(settings, reader, new RedisDemoAdmissionStore(redis, `${settings.keyPrefix}:admission`)),
     subjectResolver: new VisitorSessionResolver(settings.sessionSecret, settings.sessionLifetimeMs),
     redisClient: redis, closeRedis: async () => { redis.disconnect(); }, onClose: () => redis.disconnect(),
     readinessCheck: async () => { await reader.read(); return true; },
