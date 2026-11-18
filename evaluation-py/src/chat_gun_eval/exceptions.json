@@ -1,0 +1,176 @@
+{
+  "schemaVersion": "parity-exceptions@1",
+  "entries": [
+    {
+      "run": "kb-eval-v1-2026-10-23/run-vector_only.json",
+      "sha256": "7ed9abb3fa10bdd9a68d02853b6537e39b2696ff9a4f7293273dbfc39c8e1fd4",
+      "reason": "Recorded before 0a2d2dd5b7550eaa36db01006b7060e6eb4cb133 (2026-11-03): runner.ts summarize did not emit stageLatency, retrievalP50Ms, retrievalP95Ms or degradedCases. All older fields still require exact/count or absolute 1e-9 parity.",
+      "missingPythonPaths": [
+        "dev.stageLatency",
+        "dev.retrievalP50Ms",
+        "dev.retrievalP95Ms",
+        "dev.degradedCases",
+        "test.stageLatency",
+        "test.retrievalP50Ms",
+        "test.retrievalP95Ms",
+        "test.degradedCases",
+        "all.stageLatency",
+        "all.retrievalP50Ms",
+        "all.retrievalP95Ms",
+        "all.degradedCases"
+      ]
+    },
+    {
+      "run": "kb-eval-v1-2026-10-23-r2/run-vector_only.json",
+      "sha256": "5c1d403669255a63e6a7b09d77b3661d15d12d49baff9bd4777626ccf96874c9",
+      "reason": "Recorded before 0a2d2dd5b7550eaa36db01006b7060e6eb4cb133 (2026-11-03): runner.ts summarize did not emit stageLatency, retrievalP50Ms, retrievalP95Ms or degradedCases. All older fields still require exact/count or absolute 1e-9 parity.",
+      "missingPythonPaths": [
+        "dev.stageLatency",
+        "dev.retrievalP50Ms",
+        "dev.retrievalP95Ms",
+        "dev.degradedCases",
+        "test.stageLatency",
+        "test.retrievalP50Ms",
+        "test.retrievalP95Ms",
+        "test.degradedCases",
+        "all.stageLatency",
+        "all.retrievalP50Ms",
+        "all.retrievalP95Ms",
+        "all.degradedCases"
+      ]
+    },
+    {
+      "run": "kb-eval-v1-2026-10-23-r2/run-vector_rerank.json",
+      "sha256": "cf7b84ce4135d1b30b2d24e81b4f325a563cb366b6a7dce64789a18e526aa69e",
+      "reason": "Recorded before 0a2d2dd5b7550eaa36db01006b7060e6eb4cb133 (2026-11-03): runner.ts summarize did not emit stageLatency, retrievalP50Ms, retrievalP95Ms or degradedCases. All older fields still require exact/count or absolute 1e-9 parity.",
+      "missingPythonPaths": [
+        "dev.stageLatency",
+        "dev.retrievalP50Ms",
+        "dev.retrievalP95Ms",
+        "dev.degradedCases",
+        "test.stageLatency",
+        "test.retrievalP50Ms",
+        "test.retrievalP95Ms",
+        "test.degradedCases",
+        "all.stageLatency",
+        "all.retrievalP50Ms",
+        "all.retrievalP95Ms",
+        "all.degradedCases"
+      ]
+    },
+    {
+      "run": "kb-eval-v1-2026-10-23-r3/run-vector_only.json",
+      "sha256": "c762a4b971b20121161fd8fe8bbda641c34e28157bcad22c838b009b012ae7d8",
+      "reason": "Recorded before 0a2d2dd5b7550eaa36db01006b7060e6eb4cb133 (2026-11-03): runner.ts summarize did not emit stageLatency, retrievalP50Ms, retrievalP95Ms or degradedCases. All older fields still require exact/count or absolute 1e-9 parity.",
+      "missingPythonPaths": [
+        "dev.stageLatency",
+        "dev.retrievalP50Ms",
+        "dev.retrievalP95Ms",
+        "dev.degradedCases",
+        "test.stageLatency",
+        "test.retrievalP50Ms",
+        "test.retrievalP95Ms",
+        "test.degradedCases",
+        "all.stageLatency",
+        "all.retrievalP50Ms",
+        "all.retrievalP95Ms",
+        "all.degradedCases"
+      ]
+    },
+    {
+      "run": "kb-eval-v1-2026-10-23-r3/run-vector_rerank.json",
+      "sha256": "917fd955d51db4a6bb693006fc44fe2d259627e63a4b6d48a503f4402e146f6f",
+      "reason": "Recorded before 0a2d2dd5b7550eaa36db01006b7060e6eb4cb133 (2026-11-03): runner.ts summarize did not emit stageLatency, retrievalP50Ms, retrievalP95Ms or degradedCases. All older fields still require exact/count or absolute 1e-9 parity.",
+      "missingPythonPaths": [
+        "dev.stageLatency",
+        "dev.retrievalP50Ms",
+        "dev.retrievalP95Ms",
+        "dev.degradedCases",
+        "test.stageLatency",
+        "test.retrievalP50Ms",
+        "test.retrievalP95Ms",
+        "test.degradedCases",
+        "all.stageLatency",
+        "all.retrievalP50Ms",
+        "all.retrievalP95Ms",
+        "all.degradedCases"
+      ]
+    },
+    {
+      "run": "kb-eval-v1-2026-10-27/run-vector_only.json",
+      "sha256": "f9e7e8eb4626504e1d389176f3700746b8b7bb9628f2b0fdcba96395a1fc2aae",
+      "reason": "Recorded before 0a2d2dd5b7550eaa36db01006b7060e6eb4cb133 (2026-11-03): runner.ts summarize did not emit stageLatency, retrievalP50Ms, retrievalP95Ms or degradedCases. All older fields still require exact/count or absolute 1e-9 parity.",
+      "missingPythonPaths": [
+        "dev.stageLatency",
+        "dev.retrievalP50Ms",
+        "dev.retrievalP95Ms",
+        "dev.degradedCases",
+        "test.stageLatency",
+        "test.retrievalP50Ms",
+        "test.retrievalP95Ms",
+        "test.degradedCases",
+        "all.stageLatency",
+        "all.retrievalP50Ms",
+        "all.retrievalP95Ms",
+        "all.degradedCases"
+      ]
+    },
+    {
+      "run": "kb-eval-v1-2026-10-27/run-vector_rerank.json",
+      "sha256": "226c64b25f90654f7779c506c52be513cb9bc0b5a5134bc799dc397722ef6a19",
+      "reason": "Recorded before 0a2d2dd5b7550eaa36db01006b7060e6eb4cb133 (2026-11-03): runner.ts summarize did not emit stageLatency, retrievalP50Ms, retrievalP95Ms or degradedCases. All older fields still require exact/count or absolute 1e-9 parity.",
+      "missingPythonPaths": [
+        "dev.stageLatency",
+        "dev.retrievalP50Ms",
+        "dev.retrievalP95Ms",
+        "dev.degradedCases",
+        "test.stageLatency",
+        "test.retrievalP50Ms",
+        "test.retrievalP95Ms",
+        "test.degradedCases",
+        "all.stageLatency",
+        "all.retrievalP50Ms",
+        "all.retrievalP95Ms",
+        "all.degradedCases"
+      ]
+    },
+    {
+      "run": "kb-eval-v1-2026-10-27-r2/run-vector_only.json",
+      "sha256": "f511bd8ea816b03d50176c793448e91c45442a203acf89dbb3b25d0b4854bf3a",
+      "reason": "Recorded before 0a2d2dd5b7550eaa36db01006b7060e6eb4cb133 (2026-11-03): runner.ts summarize did not emit stageLatency, retrievalP50Ms, retrievalP95Ms or degradedCases. All older fields still require exact/count or absolute 1e-9 parity.",
+      "missingPythonPaths": [
+        "dev.stageLatency",
+        "dev.retrievalP50Ms",
+        "dev.retrievalP95Ms",
+        "dev.degradedCases",
+        "test.stageLatency",
+        "test.retrievalP50Ms",
+        "test.retrievalP95Ms",
+        "test.degradedCases",
+        "all.stageLatency",
+        "all.retrievalP50Ms",
+        "all.retrievalP95Ms",
+        "all.degradedCases"
+      ]
+    },
+    {
+      "run": "kb-eval-v1-2026-10-27-r2/run-vector_rerank.json",
+      "sha256": "2a06dce9dc00a546ba5e64e5a61fdcae6a51bbe794f0c71604f2262902801646",
+      "reason": "Recorded before 0a2d2dd5b7550eaa36db01006b7060e6eb4cb133 (2026-11-03): runner.ts summarize did not emit stageLatency, retrievalP50Ms, retrievalP95Ms or degradedCases. All older fields still require exact/count or absolute 1e-9 parity.",
+      "missingPythonPaths": [
+        "dev.stageLatency",
+        "dev.retrievalP50Ms",
+        "dev.retrievalP95Ms",
+        "dev.degradedCases",
+        "test.stageLatency",
+        "test.retrievalP50Ms",
+        "test.retrievalP95Ms",
+        "test.degradedCases",
+        "all.stageLatency",
+        "all.retrievalP50Ms",
+        "all.retrievalP95Ms",
+        "all.degradedCases"
+      ]
+    }
+  ]
+}
