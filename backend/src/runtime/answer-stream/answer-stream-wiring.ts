@@ -34,6 +34,8 @@ export type AnswerStreamPreparation =
 export type AnswerStreamWiringDependencies = {
   sequenceAllocator: RunSequenceAllocator;
   readSettings?: () => AnswerStreamSettings;
+  /** False when the call cannot request the response format required by its sink. */
+  supportsAnswerSink?: boolean;
   createMessageId?: () => string;
   now?: () => Date;
   observer?: AnswerTextSinkObserver;
@@ -71,6 +73,7 @@ export function createAnswerStreamWiring(dependencies: AnswerStreamWiringDepende
       const settings = readSettings();
       if (!settings.enabled) return degrade("feature_disabled");
       if (!settings.envelopeEnabled) return degrade("envelope_disabled");
+      if (dependencies.supportsAnswerSink === false) return degrade("capability_unsupported");
       const executionContext = readContext(config);
       if (!executionContext) return degrade("execution_context_missing");
       const writer = config.writer;
@@ -107,7 +110,7 @@ export function registerAnswerStreamGraph(graphId: string): void {
   wiredGraphs.add(graphId);
 }
 
-export const ANSWER_STREAM_REQUIRED_GRAPHS = ["chatbot"] as const;
+export const ANSWER_STREAM_REQUIRED_GRAPHS = ["chatbot", "deep_researcher", "shopping_assistant"] as const;
 
 export type AnswerStreamReadiness = { ready: boolean; reasonCodes: string[] };
 

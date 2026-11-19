@@ -6,6 +6,11 @@ import { getConfiguredLlmCapabilities, llmGateway } from "../../platform/llm-gat
 import { instrumentGraphWithUsageAttribution } from "../../platform/usage/attribution.js";
 import { auditLogger } from "../../platform/observability.js";
 import { instrumentGraphWithOpik } from "../../platform/tracing/opik/opik-graph.js";
+import {
+  answerStreamSequenceAllocator,
+  createAnswerStreamWiring,
+  registerAnswerStreamGraph,
+} from "../../runtime/answer-stream/answer-stream-wiring.js";
 import { getRuntimeIdentityStatusInstrumentation } from "../../runtime/authorization/identity-status-composition.js";
 import { instrumentGraphWithExecutionContext } from "../../runtime/execution-context/instrument-graph.js";
 import { getPool } from "../../runtime/persistence/connection.js";
@@ -73,6 +78,10 @@ const graph = createShoppingAssistantGraph({
   confirmationWithdrawal: runtime.confirmationWithdrawal,
   originalOperationResolver,
   operationRequests: pool ? new PgOrderOperationRequestStore(pool) : unavailableOrderOperationRequestStore,
+  policyAnswerStream: createAnswerStreamWiring({
+    sequenceAllocator: answerStreamSequenceAllocator,
+    supportsAnswerSink: routingCapabilities.supportsStructuredOutput,
+  }),
   policyAnswerSynthesizer: new LlmPolicyAnswerSynthesizer(() =>
     llmGateway.createChatModel({
       purpose: "chat",
@@ -111,3 +120,5 @@ export const shoppingAssistantGraph = instrumentGraphWithUsageAttribution(instru
   createShoppingAssistantEntryResolver(graph),
   getRuntimeIdentityStatusInstrumentation(),
 ), SHOPPING_ASSISTANT_GRAPH_ID);
+
+registerAnswerStreamGraph(SHOPPING_ASSISTANT_GRAPH_ID);

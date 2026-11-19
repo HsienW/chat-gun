@@ -9,10 +9,12 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { END, START, type BaseCheckpointSaver } from "@langchain/langgraph";
 
+import { toAnswerStreamRunError } from "../../platform/answer-text-sink.js";
 import type { ChatModelInvoker } from "../../platform/llm-gateway.js";
 import { REGISTERED_GRAPH_IDS, readUsageAttribution } from "../../platform/usage/attribution.js";
 import type { AuditPayload } from "../../platform/observability.js";
 import { withOpikNode } from "../../platform/tracing/opik/opik-graph.js";
+import type { AnswerStreamWiring } from "../../runtime/answer-stream/answer-stream-wiring.js";
 import type {
   AuthorizationConfirmationStore,
   AuthorizationConfirmationWithdrawalStore,
@@ -120,6 +122,7 @@ export interface ShoppingAssistantGraphDependencies {
   /** Binds kb_search for both the product and the policy lookup. */
   createProductRequestModel: () => ChatModelInvoker;
   policyAnswerSynthesizer: PolicyAnswerSynthesizer;
+  policyAnswerStream?: AnswerStreamWiring;
   /** Binds only the order tools. */
   createOrderRequestModel: () => ChatModelInvoker;
   /** Pipeline, side-effect ledger and approval store must be usable before an approval is created. */
@@ -161,8 +164,8 @@ function evidenceCitations(result: {
   return result.citations.map(({ citationId, chunkId, sourceId }) => ({ citationId, chunkId, sourceId }));
 }
 
-function reply(content: string): AIMessage {
-  return new AIMessage({ content });
+function reply(content: string, id?: string): AIMessage {
+  return new AIMessage({ content, ...(id === undefined ? {} : { id }) });
 }
 
 export function createShoppingAssistantGraph(
@@ -443,24 +446,30 @@ export function createShoppingAssistantGraph(
     // Only this turn's citations count as evidence (design §4.2).
     const citations = evidenceCitations(outcome.result);
     const ended = (answerStatus: ShoppingAnswerStatus) => ({ citations, answerStatus });
+    const prepared = await dependencies.policyAnswerStream?.prepare(config);
+    const stream = prepared?.kind === "stream" ? prepared : undefined;
+    const messageId = stream?.messageId;
     let answer;
     try {
       answer = await dependencies.policyAnswerSynthesizer.synthesize(
         human ? messageText(human.content) : "",
         outcome.result,
         config.signal,
-        readUsageAttribution(config)
+        readUsageAttribution(config),
+        ...(stream ? [{ answerTextSink: stream.sink }] as const : [])
       );
-    } catch {
+    } catch (error) {
       await audit("shopping.policy.synthesis_failed", {
         promptVersion,
         errorCode: config.signal?.aborted ? "POLICY_ANSWER_CANCELLED" : "POLICY_ANSWER_UNAVAILABLE",
       });
-      return { messages: [reply(REPLIES.policyUnavailable)], turnEvidence: ended("synthesis_failed"), runtimeEvents: [] };
+      const streamError = toAnswerStreamRunError(error);
+      if (streamError) throw streamError;
+      return { messages: [reply(REPLIES.policyUnavailable, messageId)], turnEvidence: ended("synthesis_failed"), runtimeEvents: [] };
     }
     if (answer.abstained) {
       await audit("shopping.policy.abstained", { promptVersion, reason: "synthesizer_abstained" });
-      return { messages: [reply(REPLIES.policyNotCovered)], turnEvidence: ended("abstained"), runtimeEvents: [] };
+      return { messages: [reply(REPLIES.policyNotCovered, messageId)], turnEvidence: ended("abstained"), runtimeEvents: [] };
     }
     // An answer without a citation is an unverified policy statement as well.
     const verification = verifyAnswerCitations(answer.answer, [outcome.result]);
@@ -472,9 +481,9 @@ export function createShoppingAssistantGraph(
         citedCount: verification.cited.length,
         unresolvedCount: verification.unresolved.length,
       });
-      return { messages: [reply(REPLIES.policyUnverified)], turnEvidence: ended("unverified"), runtimeEvents: [] };
+      return { messages: [reply(REPLIES.policyUnverified, messageId)], turnEvidence: ended("unverified"), runtimeEvents: [] };
     }
-    return { messages: [reply(answer.answer)], turnEvidence: ended("answered"), runtimeEvents: [] };
+    return { messages: [reply(answer.answer, messageId)], turnEvidence: ended("answered"), runtimeEvents: [] };
   }
 
   async function respondScope(state: ShoppingAssistantState): Promise<Partial<ShoppingAssistantState>> {
