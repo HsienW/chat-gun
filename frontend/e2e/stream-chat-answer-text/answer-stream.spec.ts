@@ -1,6 +1,9 @@
 import { FRONTEND_ERROR_MESSAGES } from '../../src/lib/error-messages';
-import { ai, envelope } from '../support/contract';
-import type { RunContext } from '../support/fixture-server';
+import type { Page } from '@playwright/test';
+
+import { RUNTIME_EVENT_LABELS } from '../../src/lib/runtime-event-config';
+import { activeRunUpdate, ai, envelope } from '../support/contract';
+import type { FixtureServer, RunContext } from '../support/fixture-server';
 import { cancelButton, expect, expectIdle, expectStreaming, openEntry, sendMessage, test } from '../support/test';
 
 // stream-chat-answer-text Task 7.1 / 7.2: the browser consumes versioned answer_text model.stream
@@ -184,4 +187,141 @@ test.describe('answer text streaming', () => {
     await expectIdle(page);
     await expect(page.getByText('時間軸代理的答案')).toHaveCount(1);
   });
+});
+
+// stream-agent-answer-text Task 6: both new graph entries use the existing browser pipeline.
+const agentEntries = [
+  { entry: 'Gun Chat', assistant: 'deep_researcher' },
+  { entry: 'Gun Shop', assistant: 'shopping_assistant' },
+] as const;
+
+type AnswerAgentEntry = (typeof agentEntries)[number];
+
+async function startAgentAnswer(page: Page, server: FixtureServer, agent: AnswerAgentEntry) {
+  await openEntry(page, server, agent.entry);
+  if (agent.assistant === 'deep_researcher') {
+    const toggle = page.getByRole('switch', { name: '深度研究' });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  }
+  const request = page.waitForRequest((candidate) =>
+    candidate.method() === 'POST' && new URL(candidate.url()).pathname.endsWith('/runs/stream')
+  );
+  await sendMessage(page, '請用來源回答我的問題');
+  expect((await request).postDataJSON()).toMatchObject({ assistant_id: agent.assistant });
+}
+
+async function expectAuthoritativeHistory(page: Page, server: FixtureServer, content: string) {
+  await page.reload();
+  const response = await page.request.post(server.origin + '/api/langgraph/threads/thread-1/history', { data: { limit: 1 } });
+  expect(response.ok()).toBe(true);
+  const states: { values: { messages: { type: string; id: string; content: unknown }[] } }[] = await response.json();
+  expect(states[0]?.values.messages.filter((message) => message.type === 'ai')).toEqual([ai(content, 'msg-1')]);
+}
+
+test.describe('deep research and policy answer text streaming', () => {
+  test('deep research streams with its timeline open and replaces the draft with the guarded answer', async ({ page, server }) => {
+    const first = '有來源支持的結論。';
+    const suffix = '沒有來源的引用 [2]。';
+    const final = '有來源支持的結論 [1]。';
+    const timeline = page.getByRole('button', { name: RUNTIME_EVENT_LABELS.timelineTitle });
+    const timelinePanel = timeline.locator('xpath=ancestor::div[contains(@class, "max-h-96")][1]');
+    const toolEvent = page.getByText(RUNTIME_EVENT_LABELS.toolStarted('web_search'), { exact: true });
+    server.onRun(async (run) => {
+      run.values({ messages: [...run.inputMessages] });
+      run.update(activeRunUpdate(run.runId, 1));
+      run.update({ search_web: { runtimeEvents: [envelope({
+        runId: run.runId, sequence: 1, type: 'tool.start', payload: { toolName: 'web_search' },
+      })] } });
+      answer(run, 1, 0, first);
+      await run.gate('research-second');
+      answer(run, 2, first.length, suffix);
+      await run.gate('research-final');
+      const guarded = ai(final, 'msg-1');
+      run.update({ synthesize_answer: { messages: [guarded] } });
+      run.values({ messages: [...run.inputMessages, guarded] });
+    });
+    await startAgentAnswer(page, server, agentEntries[0]);
+    await server.gateReached('research-second');
+    await expect(timeline).toBeVisible();
+    await expect(toolEvent).toBeVisible();
+    await expect(page.getByText(first, { exact: true })).toHaveCount(1);
+    await expect(timelinePanel).not.toContainText(first);
+    await expect(page.getByText(suffix)).toHaveCount(0);
+    server.release('research-second');
+    await server.gateReached('research-final');
+    await expect(page.getByText(first + suffix, { exact: true })).toHaveCount(1);
+    await expect(timelinePanel).not.toContainText(first);
+    server.release('research-final');
+    await expectIdle(page);
+    await expect(page.getByText(first + suffix, { exact: true })).toHaveCount(0);
+    await expect(page.getByText(final, { exact: true })).toBeVisible();
+    // Reopen the archived timeline to detect a second copy hidden by its default collapse.
+    if (!(await toolEvent.isVisible())) await timeline.press('Enter');
+    await expect(toolEvent).toBeVisible();
+    const finalItem = timelinePanel.getByText(RUNTIME_EVENT_LABELS.finalAnswer, { exact: true }).locator('..');
+    await expect(finalItem.locator('p').last()).toHaveText(final);
+    await expect(timelinePanel.getByText(first, { exact: true })).toHaveCount(0);
+    await expect(timelinePanel).not.toContainText(suffix);
+    await expect(page.getByText(final, { exact: true }).locator('xpath=self::*[not(ancestor::div[contains(@class, "max-h-96")])]')).toHaveCount(1);
+    await expectAuthoritativeHistory(page, server, final);
+  });
+
+  test('Gun Shop appends policy text and withdraws an unverified answer in the same bubble', async ({ page, server }) => {
+    const first = '商品可退貨';
+    const suffix = '，而且免運費。';
+    const final = '目前無法提供經驗證的答案。';
+    server.onRun(async (run) => {
+      run.values({ messages: [...run.inputMessages] });
+      answer(run, 1, 0, first);
+      await run.gate('policy-second');
+      answer(run, 2, first.length, suffix);
+      await run.gate('policy-final');
+      const unverified = ai(final, 'msg-1');
+      run.update({ policy_answer: { messages: [unverified], turnEvidence: { citations: [], answerStatus: 'unverified' }, runtimeEvents: [] } });
+      run.values({ messages: [...run.inputMessages, unverified] });
+    });
+    await startAgentAnswer(page, server, agentEntries[1]);
+    await server.gateReached('policy-second');
+    const draft = page.getByText(first, { exact: true });
+    await expect(draft).toBeVisible();
+    const bubbleText = await draft.elementHandle();
+    await expect(page.getByText(suffix)).toHaveCount(0);
+    server.release('policy-second');
+    await server.gateReached('policy-final');
+    await expect(page.getByText(first + suffix, { exact: true })).toHaveCount(1);
+    server.release('policy-final');
+    await expectIdle(page);
+    await expect(page.getByText(final, { exact: true })).toHaveCount(1);
+    expect(await bubbleText?.evaluate((node) => [node.isConnected, node.textContent])).toEqual([true, final]);
+    await expect(page.getByText(first + suffix, { exact: true })).toHaveCount(0);
+    await expectAuthoritativeHistory(page, server, final);
+  });
+
+  for (const agent of agentEntries) {
+    for (const outcome of ['interrupted', 'refused'] as const) {
+      test(agent.assistant + ' shows ' + outcome + ' after publishing visible text', async ({ page, server }) => {
+        const partial = '上游停止前的正文';
+        server.onRun(async (run) => {
+          run.values({ messages: [...run.inputMessages] });
+          answer(run, 1, 0, partial);
+          await run.gate('terminate');
+          answerRunError(run, 'answer_stream_' + outcome, outcome === 'interrupted' ? 'upstream_unavailable' : undefined);
+        });
+        await startAgentAnswer(page, server, agent);
+        await server.gateReached('terminate');
+        await expect(page.getByText(partial, { exact: true })).toBeVisible();
+        server.release('terminate');
+        await expectIdle(page);
+        if (outcome === 'refused') {
+          await expect(page.getByText(partial, { exact: true })).toHaveCount(0);
+          await expect(page.getByText(COPY.refused, { exact: true })).toHaveCount(1);
+        } else {
+          await expect(page.getByText(partial, { exact: true })).toHaveCount(1);
+          await expect(page.getByRole('status').filter({ hasText: COPY.interrupted })).toBeVisible();
+        }
+        expect(server.thread('thread-1')?.messages.filter((message) => message.type === 'ai')).toEqual([]);
+      });
+    }
+  }
 });
