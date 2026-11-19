@@ -49,7 +49,7 @@ Chat Gun is a full-stack agent application composed of a Frontend, a BFF, and a 
 ## Feature Demo
 
 <p align="center">
-  <img src="./assets/chat-gun-demo.webp" alt="Chat Gun demo" width="1280" />
+  <img src="./assets/chat-gun-demo-01.webp" alt="Chat Gun demo" width="1280" />
 </p>
 
 <p align="center">

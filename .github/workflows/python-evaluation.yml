@@ -1,0 +1,36 @@
+name: Python evaluation analysis
+'on':
+  pull_request:
+    paths:
+      - 'evaluation-py/**'
+      - 'backend/data/knowledge-eval/results/**'
+      - 'backend/data/research-eval/results/**'
+      - '.github/workflows/python-evaluation.yml'
+  push:
+    paths:
+      - 'evaluation-py/**'
+      - 'backend/data/knowledge-eval/results/**'
+      - 'backend/data/research-eval/results/**'
+      - '.github/workflows/python-evaluation.yml'
+permissions:
+  contents: read
+jobs:
+  evaluation:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: evaluation-py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.19'
+          python-version: '3.12'
+          enable-cache: true
+          cache-dependency-glob: evaluation-py/uv.lock
+      - run: uv sync --locked
+      - run: uv run --locked ruff format --check .
+      - run: uv run --locked ruff check .
+      - run: uv run --locked mypy
+      - run: uv run --locked pytest
+      - run: uv run --locked chat-gun-eval parity ../backend/data/knowledge-eval/results ../backend/data/research-eval/results

@@ -49,7 +49,7 @@ Chat Gun 是一套由 Frontend、BFF 與 LangGraph Runtime 組成的全端 Agent
 ## 功能演示
 
 <p align="center">
-  <img src="./assets/chat-gun-demo.webp" alt="Chat Gun demo" width="1280" />
+  <img src="./assets/chat-gun-demo-01.webp" alt="Chat Gun demo" width="1280" />
 </p>
 
 <p align="center">

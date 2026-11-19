@@ -1,0 +1,309 @@
+{
+  "source": "backend/src/evaluation/research/scoring.ts",
+  "urls": [
+    {
+      "raw": "https://EXAMPLE.test:443/a/../b/#x",
+      "normalized": "https://example.test/b"
+    },
+    {
+      "raw": "https://example.test/a//b/../c",
+      "normalized": "https://example.test/a//c"
+    },
+    {
+      "raw": "https://例子.test/中文",
+      "normalized": "https://xn--fsqu00a.test/%E4%B8%AD%E6%96%87"
+    },
+    {
+      "raw": "https://example.test/a?x='quote'",
+      "normalized": "https://example.test/a?x=%27quote"
+    },
+    {
+      "raw": "http://example.test\\a\\b",
+      "normalized": "http://example.test/a/b"
+    },
+    {
+      "raw": "https://user:pass@example.test/a",
+      "normalized": "https://example.test/a"
+    },
+    {
+      "raw": "https://[2001:0db8:0000:0000::0001]:443/a",
+      "normalized": "https://[2001:db8::1]/a"
+    },
+    {
+      "raw": "https://example.test/a?",
+      "normalized": "https://example.test/a"
+    },
+    {
+      "raw": "https:example.test/a",
+      "normalized": "https://example.test/a"
+    },
+    {
+      "raw": "not a url",
+      "normalized": "not a url"
+    },
+    {
+      "raw": "mailto:user@example.test",
+      "normalized": "mailto://user@example.test"
+    },
+    {
+      "raw": "https://example.test/%2e%2e/b",
+      "normalized": "https://example.test/b"
+    },
+    {
+      "raw": "https://%65xample.test/a",
+      "normalized": "https://example.test/a"
+    }
+  ],
+  "markers": [
+    {
+      "answer": "[1，2、3-5] [0] [2026] [１] [9-40]",
+      "markers": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    {
+      "answer": "[12] [1﻿,2]",
+      "markers": [
+        1,
+        2
+      ]
+    },
+    {
+      "answer": "[21-1] [1-21] [1-22] [99-101]",
+      "markers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        99
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "caseId": "answerable",
+      "category": "answerable",
+      "status": "completed",
+      "latencyMs": 2,
+      "queries": [],
+      "searchResultCount": 2,
+      "rankedUrls": [],
+      "sources": [
+        {
+          "index": 1,
+          "url": "https://EXAMPLE.test/a/",
+          "usable": true
+        },
+        {
+          "index": 2,
+          "url": "https://b.test",
+          "usable": false
+        }
+      ],
+      "answer": "Facts [1-2] https://EXAMPLE.test/a/（說明）",
+      "answerMode": "research",
+      "rerank": {
+        "ok": false,
+        "latencyMs": 3,
+        "candidates": 2,
+        "selected": 1,
+        "changedSelections": 1
+      },
+      "citationGuard": {
+        "modified": true,
+        "removedMarkers": 1,
+        "removedUrls": 2
+      }
+    },
+    {
+      "caseId": "no-source",
+      "category": "no_source",
+      "status": "failed",
+      "latencyMs": 3,
+      "queries": [],
+      "searchResultCount": 0,
+      "rankedUrls": [],
+      "sources": [],
+      "answer": "No usable sources"
+    },
+    {
+      "caseId": "clarify",
+      "category": "clarify",
+      "status": "timeout",
+      "latencyMs": 5,
+      "queries": [],
+      "searchResultCount": 0,
+      "rankedUrls": [],
+      "sources": [],
+      "answer": "Please clarify",
+      "answerMode": "clarify"
+    }
+  ],
+  "scores": [
+    {
+      "caseId": "answerable",
+      "category": "answerable",
+      "citation": {
+        "markers": [
+          1,
+          2
+        ],
+        "urls": [
+          "https://example.test/a"
+        ],
+        "citedCount": 3,
+        "usableCitedCount": 2,
+        "unresolved": [
+          "[2]"
+        ],
+        "pass": false
+      }
+    },
+    {
+      "caseId": "no-source",
+      "category": "no_source",
+      "citation": {
+        "markers": [],
+        "urls": [],
+        "citedCount": 0,
+        "usableCitedCount": 0,
+        "unresolved": [],
+        "pass": null
+      },
+      "refusal": {
+        "usableSourceCount": 0,
+        "limitationStated": true,
+        "citedEvidence": false,
+        "urlsMentioned": [],
+        "pass": false
+      }
+    },
+    {
+      "caseId": "clarify",
+      "category": "clarify",
+      "citation": {
+        "markers": [],
+        "urls": [],
+        "citedCount": 0,
+        "usableCitedCount": 0,
+        "unresolved": [],
+        "pass": null
+      },
+      "clarifyPass": false
+    }
+  ],
+  "summary": {
+    "rerank": {
+      "calls": 1,
+      "failed": 1,
+      "latency": {
+        "n": 1,
+        "p50Ms": 3,
+        "p90Ms": 3,
+        "meanMs": 3
+      },
+      "casesWithChangedSelection": {
+        "passed": 1,
+        "n": 0,
+        "rate": null
+      }
+    },
+    "citationGuard": {
+      "answersModified": {
+        "passed": 1,
+        "n": 1,
+        "rate": 1
+      },
+      "removedMarkers": 1,
+      "removedUrls": 2
+    },
+    "cases": 3,
+    "completed": 1,
+    "failedOrTimeout": 2,
+    "citation": {
+      "answerPassRate": {
+        "passed": 0,
+        "n": 1,
+        "rate": 0
+      },
+      "citationPrecision": {
+        "passed": 2,
+        "n": 3,
+        "rate": 0.6666666666666666
+      },
+      "answerableWithoutCitation": 0,
+      "answerableWithZeroUsableSources": 0,
+      "allCategoriesAnswerPassRate": {
+        "passed": 0,
+        "n": 1,
+        "rate": 0
+      }
+    },
+    "refusal": {
+      "passed": 0,
+      "n": 1,
+      "rate": 0,
+      "stubEffective": 1
+    },
+    "clarify": {
+      "passed": 0,
+      "n": 1,
+      "rate": 0
+    },
+    "fetchedUsable": {
+      "passed": 1,
+      "n": 2,
+      "rate": 0.5
+    },
+    "routing": {
+      "answerable:research": 1
+    },
+    "latency": {
+      "all": {
+        "n": 1,
+        "p50Ms": 2,
+        "p90Ms": 2,
+        "meanMs": 2
+      },
+      "answerable": {
+        "n": 1,
+        "p50Ms": 2,
+        "p90Ms": 2,
+        "meanMs": 2
+      },
+      "no_source": {
+        "n": 0,
+        "p50Ms": null,
+        "p90Ms": null,
+        "meanMs": null
+      },
+      "clarify": {
+        "n": 0,
+        "p50Ms": null,
+        "p90Ms": null,
+        "meanMs": null
+      }
+    }
+  }
+}

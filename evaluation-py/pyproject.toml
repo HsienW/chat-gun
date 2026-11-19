@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chat-gun-eval"
+version = "0.1.0"
+description = "Offline independent parity and comparison of recorded Chat Gun evaluations"
+requires-python = ">=3.12,<3.13"
+dependencies = ["pydantic>=2.12,<3"]
+
+[project.scripts]
+chat-gun-eval = "chat_gun_eval.cli:main"
+
+[dependency-groups]
+dev = ["mypy>=1.18,<2", "pytest>=8.4,<10", "ruff>=0.14,<1", "pyyaml>=6,<7", "types-pyyaml>=6,<7"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/chat_gun_eval"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_typed = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
