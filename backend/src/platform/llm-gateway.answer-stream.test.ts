@@ -122,6 +122,72 @@ describe("OpenAI-compatible answer streaming", () => {
     expect(harness.metrics.map((metric) => metric.name)).not.toContain("answer.stream.degraded");
   });
 
+  const answerProjection = { kind: "json_string_field", field: "answer" } as const;
+  const jsonFormat = { type: "json_object" } as const;
+
+  it("projects only the answer and reuses the raw JSON for the final message and usage", async () => {
+    const pieces = ['{"abstained":false,"reason":"hidden","answer":"你好\\uD83D', '\\uDE00！"}'];
+    const { llmGateway, harness, sink } = await loadGateway([sseResponse([...pieces.map(delta), finish(), usageFrame])]);
+    const message = await llmGateway.createChatModel({ responseFormat: jsonFormat, maxRetries: 0 }).invoke("hi", {
+      answerTextSink: sink, answerTextProjection: answerProjection,
+    });
+    expect(harness.fragments).toEqual([{ delta: "你好", textOffset: 0 }, { delta: "😀！", textOffset: 2 }]);
+    expect(message.content).toBe(pieces.join(""));
+    expect(requestBody(harness)).toMatchObject({ stream: true, response_format: jsonFormat });
+    expect(harness.usage).toEqual([expect.objectContaining({ inputTokens: 10, outputTokens: 4 })]);
+  });
+
+  it("rejects sink plus projection without json_object before making any request", async () => {
+    const { llmGateway, harness, sink } = await loadGateway([]);
+    for (const responseFormat of [undefined, { type: "json_schema" } as unknown as typeof jsonFormat]) {
+      await expect(llmGateway.createChatModel({ responseFormat }).invoke("hi", {
+        answerTextSink: sink, answerTextProjection: answerProjection,
+      })).rejects.toMatchObject({ code: "answer_sink_incompatible_call" });
+    }
+    expect(harness.fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores projection when no sink was supplied", async () => {
+    const { llmGateway, harness } = await loadGateway([jsonResponse('{"answer":"whole"}')]);
+    const message = await llmGateway.createChatModel({ responseFormat: jsonFormat, maxRetries: 0 }).invoke("hi", { answerTextProjection: answerProjection });
+    expect(message.content).toBe('{"answer":"whole"}');
+    expect(requestBody(harness)).not.toHaveProperty("stream");
+    expect(harness.fragments).toEqual([]);
+  });
+
+  it("degrades before requesting a structured stream from an undeclared adapter", async () => {
+    const { llmGateway, harness, sink } = await loadGateway([jsonResponse('{"answer":"whole"}')], {
+      LLM_PROVIDER: "openai-compatible", OPENAI_COMPATIBLE_BASE_URL: "http://other.internal/v1",
+    });
+    const message = await llmGateway.createChatModel({ responseFormat: jsonFormat, maxRetries: 0 }).invoke("hi", {
+      answerTextSink: sink, answerTextProjection: answerProjection,
+    });
+    expect(message.content).toBe('{"answer":"whole"}');
+    expect(requestBody(harness)).not.toHaveProperty("stream");
+    expect(harness.fragments).toEqual([]);
+    expect(harness.metrics).toContainEqual({ name: "answer.stream.degraded", payload: { reason: "capability_unsupported", messageId: "msg-1", provider: "openai-compatible" } });
+  });
+
+  it("stops projection once on malformed JSON but returns it for domain validation", async () => {
+    const pieces = ['{"answer":"partial', '\\xhidden"', '}'];
+    const { llmGateway, harness, sink } = await loadGateway([sseResponse([...pieces.map(delta), finish(), usageFrame])]);
+    const message = await llmGateway.createChatModel({ responseFormat: jsonFormat, maxRetries: 0 }).invoke("hi", {
+      answerTextSink: sink, answerTextProjection: answerProjection,
+    });
+    expect(harness.fragments).toEqual([{ delta: "partial", textOffset: 0 }]);
+    expect(message.content).toBe(pieces.join(""));
+    expect(harness.metrics.filter(({ name }) => name === "answer.stream.projection_stopped")).toHaveLength(1);
+  });
+
+  it("does not retry if a projected answer was already published", async () => {
+    const { llmGateway, harness, sink } = await loadGateway([sseResponse([delta('{"answer":"partial')])]);
+    await expect(llmGateway.createChatModel({ responseFormat: jsonFormat, maxRetries: 2 }).invoke("hi", {
+      answerTextSink: sink, answerTextProjection: answerProjection,
+    })).rejects.toMatchObject({ code: "answer_stream_interrupted" });
+    expect(harness.fragments).toEqual([{ delta: "partial", textOffset: 0 }]);
+    expect(harness.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("records usage_frame_missing when the stream completes without a usage frame", async () => {
     const { llmGateway, harness, sink } = await loadGateway([sseResponse([delta("ok"), finish(), "data: [DONE]\n\n"])]);
 
