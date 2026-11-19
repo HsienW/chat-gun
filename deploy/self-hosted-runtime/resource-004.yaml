@@ -1,0 +1,18 @@
+services:
+  runtime:
+    environment:
+      QWEN_BASE_URL: http://fake-model:8080/v1
+      QWEN_API_KEY: ${SPIKE_FAKE_API_KEY:?V5 requires a local fixture value}
+    depends_on:
+      fake-model:
+        condition: service_healthy
+  fake-model:
+    image: chat-gun-runtime-spike:local
+    entrypoint: ["node", "/validation/fake-model-004.mjs"]
+    volumes:
+      - ./fake-model-004.mjs:/validation/fake-model-004.mjs:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
