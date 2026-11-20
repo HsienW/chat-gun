@@ -3,7 +3,9 @@ import { z } from "zod";
 
 import type { KbSearchResult } from "../../knowledge/retrieval.js";
 import { decodeJsonText } from "../../platform/json-decode.js";
+import type { AnswerTextSink } from "../../platform/answer-text-sink.js";
 import type { ChatModelInvoker } from "../../platform/llm-gateway.js";
+import type { UsageAttribution } from "../../platform/usage/attribution.js";
 
 export const SHOPPING_POLICY_ANSWER_PROMPT_VERSION = "shopping-policy-answer-v1";
 
@@ -29,7 +31,9 @@ export class PolicyAnswerOutputError extends Error {
   readonly code = "POLICY_ANSWER_SCHEMA_INVALID";
 }
 
-import type { UsageAttribution } from "../../platform/usage/attribution.js";
+export interface PolicyAnswerOptions {
+  answerTextSink?: AnswerTextSink;
+}
 
 export interface PolicyAnswerSynthesizer {
   readonly promptVersion: string;
@@ -37,7 +41,8 @@ export interface PolicyAnswerSynthesizer {
     question: string,
     evidence: Extract<KbSearchResult, { outcome: "evidence_found" }>,
     signal?: AbortSignal,
-    attribution?: UsageAttribution
+    attribution?: UsageAttribution,
+    options?: PolicyAnswerOptions
   ): Promise<PolicyAnswer>;
 }
 
@@ -79,14 +84,22 @@ export class LlmPolicyAnswerSynthesizer implements PolicyAnswerSynthesizer {
     question: string,
     evidence: Extract<KbSearchResult, { outcome: "evidence_found" }>,
     signal?: AbortSignal,
-    attribution?: UsageAttribution
+    attribution?: UsageAttribution,
+    options?: PolicyAnswerOptions
   ): Promise<PolicyAnswer> {
     const response = await this.createModel().invoke(
       [
         new SystemMessage(POLICY_ANSWER_SYSTEM_PROMPT),
         new HumanMessage(`Question:\n${question}\n\nEvidence:\n${evidenceBlock(evidence)}`),
       ],
-      { signal, attribution }
+      {
+        signal,
+        attribution,
+        ...(options?.answerTextSink ? {
+          answerTextSink: options.answerTextSink,
+          answerTextProjection: { kind: "json_string_field", field: "answer" },
+        } : {}),
+      }
     );
     const parsed = parsePolicyAnswer(response.content);
     if (parsed === undefined) throw new PolicyAnswerOutputError("Policy answer does not match the expected schema");

@@ -134,7 +134,9 @@ export class AnswerStreamInterruptedError extends Error {
   }
 }
 
-type SinkCarrier = { answerTextSink?: AnswerTextSink } | undefined;
+export type AnswerTextProjection = { kind: "json_string_field"; field: string };
+
+type SinkCarrier = { answerTextSink?: AnswerTextSink; answerTextProjection?: AnswerTextProjection } | undefined;
 
 export function isRetryBlockedByPublishedAnswer(options: SinkCarrier): boolean {
   return options?.answerTextSink?.hasPublished === true;
@@ -150,14 +152,17 @@ export function toAnswerStreamInterruptedError(
 
 export function assertAnswerSinkCompatible(
   options: SinkCarrier,
-  call: { hasResponseFormat: boolean; hasTools: boolean },
+  call: { responseFormat?: { type: string }; hasTools: boolean },
 ): void {
   if (!options?.answerTextSink) return;
-  if (call.hasResponseFormat || call.hasTools) {
-    throw new AnswerTextSinkConfigurationError(
-      "answer_sink_incompatible_call",
-      call.hasResponseFormat ? "responseFormat" : "bindTools",
-    );
+  if (call.hasTools) {
+    throw new AnswerTextSinkConfigurationError("answer_sink_incompatible_call", "bindTools");
+  }
+  const compatibleFormat = options.answerTextProjection
+    ? call.responseFormat?.type === "json_object"
+    : call.responseFormat === undefined;
+  if (!compatibleFormat) {
+    throw new AnswerTextSinkConfigurationError("answer_sink_incompatible_call", "responseFormat");
   }
 }
 

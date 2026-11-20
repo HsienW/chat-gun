@@ -6,11 +6,14 @@ import { MemorySaver } from "@langchain/langgraph";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { AnswerStreamInterruptedError, AnswerStreamRefusedError } from "../../platform/answer-text-sink.js";
 import type { ChatModelInvoker } from "../../platform/llm-gateway.js";
 import { applyToolGovernance } from "../../platform/tool-governance.js";
+import { createAnswerStreamWiring } from "../../runtime/answer-stream/answer-stream-wiring.js";
 import type { CompensationRegistry } from "../../runtime/compensation/compensation-registry.js";
 import type { SagaOrchestrator } from "../../runtime/compensation/saga-orchestrator.js";
 import { parseRuntimeEventEnvelope } from "../../runtime/event-envelope.js";
+import { RunSequenceAllocator } from "../../runtime/event-sequence.js";
 import { NoopStepLock } from "../../runtime/lock/step-lock.js";
 import type { ToolExecutionRunner } from "../../runtime/side-effect/tool-execution-runner.js";
 import { createRuntimeToolDispatchPipeline } from "../../runtime/tool-dispatch/pipeline.js";
@@ -19,7 +22,7 @@ import { kbSearchInputSchema } from "../../tools/kb-search.js";
 import { emitCardEvents } from "./card-events.js";
 import { createShoppingAssistantGraph, type ShoppingAssistantGraphDependencies } from "./graph.js";
 import type { ShoppingIntentRouteResult, ShoppingIntentRouter } from "./intent-router.js";
-import type { PolicyAnswerSynthesizer } from "./policy-answer.js";
+import { PolicyAnswerOutputError, type PolicyAnswerSynthesizer } from "./policy-answer.js";
 import { buildProductCards } from "./product-results.js";
 
 const executionContext = {
@@ -181,6 +184,7 @@ function setup(
     kbOutput?: () => string;
     toolCalls?: { name: string; id: string; args: Record<string, unknown> }[];
     synthesize?: PolicyAnswerSynthesizer["synthesize"];
+    policyAnswerStream?: ShoppingAssistantGraphDependencies["policyAnswerStream"];
   } = {}
 ) {
   vi.stubEnv("TOOL_AUDIT_ENABLED", "false");
@@ -202,6 +206,7 @@ function setup(
     intentRouter: router,
     createProductRequestModel: () => model.model,
     policyAnswerSynthesizer: { promptVersion: "shopping-policy-answer-v1", synthesize },
+    policyAnswerStream: options.policyAnswerStream,
     ...unusedOrderBranch,
     audit,
     now: () => new Date("2026-10-24T12:00:00.000Z"),
@@ -602,6 +607,92 @@ describe("shopping assistant policy answers", () => {
       .invoke({ messages: [new HumanMessage("那個呢？")] }, runConfig("thread-restore", "run-2"));
 
     expect(restored.turnEvidence).toBeNull();
+  });
+
+  describe("policy answer text streaming", () => {
+    function streamWiring() {
+      const wiring = createAnswerStreamWiring({
+        sequenceAllocator: new RunSequenceAllocator(),
+        readSettings: () => ({ enabled: true, envelopeEnabled: true }),
+        createMessageId: () => "policy-draft",
+        observer: { recordMetric: () => undefined },
+      });
+      return { wiring, prepare: vi.spyOn(wiring, "prepare") };
+    }
+
+    const supported = "可在 30 天內退貨 [c1]。";
+    const unsupported = "退貨免運費。";
+    it.each([
+      ["answered", supported, supported, { abstained: false, answer: supported }],
+      ["unverified", unsupported, "目前無法提供經驗證的答案。", { abstained: false, answer: unsupported }],
+      ["abstained", unsupported, "知識庫沒有涵蓋這個問題，我無法提供答案。", { abstained: true, answer: unsupported }],
+      ["synthesis_failed", unsupported, "目前無法回答這個問題，請稍後再試。", new PolicyAnswerOutputError("invalid JSON")],
+    ] as const)("uses the draft id for a serialized %s reply", async (status, draft, final, output) => {
+      const { wiring, prepare } = streamWiring();
+      const { graph } = setup(policyRoute, {
+        kbOutput: policyKb,
+        toolCalls: policyCall,
+        policyAnswerStream: wiring,
+        synthesize: async (_question, _evidence, _signal, _usage, options) => {
+          await options?.answerTextSink?.beginAttempt({ provider: "qwen", attemptIndex: 0 }).append(draft);
+          if (output instanceof Error) throw output;
+          return output;
+        },
+      });
+      const config = runConfig("thread-policy-stream");
+      const stream = await graph.stream({ messages: [new HumanMessage("退貨期限？")] }, { ...config, streamMode: ["custom", "updates"] });
+      const custom: unknown[] = [];
+      for await (const [mode, value] of stream) if (mode === "custom") custom.push(value);
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(custom).toEqual([expect.objectContaining({ type: "model.stream", payload: {
+        delta: draft, messageId: "policy-draft", outputKind: "answer_text", textOffset: 0,
+      } })]);
+      const state = (await graph.getState(config)).values;
+      expect(state.messages.at(-1)?.toJSON()).toMatchObject({ kwargs: { id: "policy-draft", content: final } });
+      expect(state.turnEvidence).toMatchObject({ answerStatus: status, citations: [{ citationId: "c1" }, { citationId: "c2" }] });
+      expect(state.runtimeEvents).toEqual([]);
+    });
+
+    it.each([
+      new AnswerStreamInterruptedError(new Error("reader failed"), "provider_retry"),
+      new AnswerStreamRefusedError(),
+    ])("propagates $code after publication while preserving the synthesis audit", async (error) => {
+      const { wiring } = streamWiring();
+      const { graph, audit } = setup(policyRoute, {
+        kbOutput: policyKb,
+        toolCalls: policyCall,
+        policyAnswerStream: wiring,
+        synthesize: async (_question, _evidence, _signal, _usage, options) => {
+          await options?.answerTextSink?.beginAttempt({ provider: "qwen", attemptIndex: 0 }).append(supported);
+          throw error;
+        },
+      });
+      const config = runConfig("thread-policy-error");
+      const custom: unknown[] = [];
+      const consume = async () => {
+        const stream = await graph.stream({ messages: [new HumanMessage("退貨期限？")] }, { ...config, streamMode: ["custom", "updates"] });
+        for await (const [mode, value] of stream) if (mode === "custom") custom.push(value);
+      };
+      await expect(consume()).rejects.toMatchObject({ name: "AnswerStreamRunError", code: error.code });
+      expect(custom).toEqual([expect.objectContaining({ type: "model.stream", payload: expect.objectContaining({ delta: supported }) })]);
+      expect(audit).toHaveBeenCalledWith("shopping.policy.synthesis_failed", expect.objectContaining({
+        graphId: "shopping_assistant", promptVersion: "shopping-policy-answer-v1", errorCode: "POLICY_ANSWER_UNAVAILABLE",
+      }), expect.any(Object));
+      expect((await graph.getState(config)).values.turnEvidence).toBeNull();
+    });
+
+    it.each([
+      { schemaVersion: "kb_search_result@1", outcome: "no_source_found", retrieval },
+      { schemaVersion: "kb_search_result@1", outcome: "error", errorCode: "KB_TIMEOUT", retryable: true },
+    ])("does not prepare a draft for pre-synthesis $outcome", async (outcome) => {
+      const { wiring, prepare } = streamWiring();
+      const { graph, synthesize } = setup(policyRoute, {
+        kbOutput: () => JSON.stringify(outcome), toolCalls: policyCall, policyAnswerStream: wiring,
+      });
+      await graph.invoke({ messages: [new HumanMessage("退貨期限？")] }, runConfig("thread-policy-early"));
+      expect(prepare).not.toHaveBeenCalled();
+      expect(synthesize).not.toHaveBeenCalled();
+    });
   });
 
   describe("answer status (design §20.6)", () => {

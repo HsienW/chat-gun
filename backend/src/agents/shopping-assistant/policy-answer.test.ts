@@ -4,6 +4,8 @@ import { AIMessage } from "@langchain/core/messages";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { createAnswerTextSink } from "../../platform/answer-text-sink.js";
+import type { ChatModelInvoker } from "../../platform/llm-gateway.js";
 import { LlmPolicyAnswerSynthesizer, parsePolicyAnswer, PolicyAnswerOutputError } from "./policy-answer.js";
 
 const evidence = {
@@ -55,6 +57,22 @@ describe("LlmPolicyAnswerSynthesizer", () => {
     const [system, human] = invoke.mock.calls[0]?.[0] as unknown as { content: string }[];
     expect(system?.content).not.toContain("退貨期限？");
     expect(human?.content).toContain("[c1] Return Window\nMost items can be returned within 30 days.");
+  });
+
+  it("requests projection of only the answer field when it receives a sink", async () => {
+    const invoke = vi.fn<ChatModelInvoker["invoke"]>(async () => new AIMessage({ content: '{"abstained":false,"answer":"30 days [c1]."}' }));
+    const signal = new AbortController().signal;
+    const sink = createAnswerTextSink({ messageId: "policy-draft", publish: async () => undefined });
+    const synthesizer = new LlmPolicyAnswerSynthesizer(() => ({ invoke }));
+
+    await expect(synthesizer.synthesize("Returns?", evidence, signal, undefined, { answerTextSink: sink }))
+      .resolves.toEqual({ abstained: false, answer: "30 days [c1]." });
+    expect(invoke).toHaveBeenCalledWith(expect.any(Array), {
+      signal,
+      attribution: undefined,
+      answerTextSink: sink,
+      answerTextProjection: { kind: "json_string_field", field: "answer" },
+    });
   });
 
   it("fails with a typed error instead of regenerating an invalid answer", async () => {

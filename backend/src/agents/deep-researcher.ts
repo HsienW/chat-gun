@@ -27,6 +27,8 @@ import {
   deepResearcherExecutionManifest,
 } from "./deep-researcher-graph-contract.js";
 
+import { answerStreamSequenceAllocator, createAnswerStreamWiring, registerAnswerStreamGraph, type AnswerStreamWiring } from "../runtime/answer-stream/answer-stream-wiring.js";
+import { toAnswerStreamRunError } from "../platform/answer-text-sink.js";
 import { getBooleanEnv } from "../platform/env.js";
 import { GOVERNANCE_CANCELLED_PREFIX } from "../platform/tool-governance.js";
 import { BACKEND_ERROR_MESSAGES } from "../platform/error-messages.js";
@@ -3001,9 +3003,27 @@ function buildTargetedToolErrorAnswer(
   return envelope ? new AIMessage(formatErrorEnvelope(envelope)) : undefined;
 }
 
+const deepResearchAnswerStream = createAnswerStreamWiring({ sequenceAllocator: answerStreamSequenceAllocator });
+
+function finalResearchMessage(message: BaseMessage, content: BaseMessage["content"], id = message.id): AIMessage {
+  return new AIMessage({
+    id,
+    content,
+    name: message.name,
+    additional_kwargs: message.additional_kwargs,
+    response_metadata: message.response_metadata,
+    ...(AIMessage.isInstance(message) ? {
+      tool_calls: message.tool_calls,
+      invalid_tool_calls: message.invalid_tool_calls,
+      usage_metadata: message.usage_metadata,
+    } : {}),
+  });
+}
+
 async function synthesizeAnswer(
   state: typeof DeepResearchState.State,
-  config: RunnableConfig
+  config: RunnableConfig,
+  answerStream: AnswerStreamWiring = deepResearchAnswerStream,
 ): Promise<Partial<typeof DeepResearchState.State>> {
   const plan = state.plan ?? fallbackPlan(getResearchTopic(state.messages), state);
 
@@ -3098,11 +3118,17 @@ async function synthesizeAnswer(
         ].join("\n\n");
     const model = state.reasoning_model.trim() || undefined;
     const llm = llmGateway.createChatModel({ purpose: "research", model, temperature: 0.1 });
-    const response = await llm.invoke(prompt, { signal: config?.signal, attribution: readUsageAttribution(config) });
+    const prepared = plan.answerMode === "research" ? await answerStream.prepare(config) : undefined;
+    const streaming = prepared?.kind === "stream" ? prepared : undefined;
+    const response = await llm.invoke(prompt, {
+      signal: config?.signal,
+      attribution: readUsageAttribution(config),
+      ...(streaming ? { answerTextSink: streaming.sink } : {}),
+    });
     const normalized = normalizeAiMessageForStream(response);
     if (isCitationGuardEnabled() && plan.answerMode === "research" && typeof normalized.content === "string") {
       const guarded = guardCitations(normalized.content, state.extractedSources);
-      normalized.content = guarded.answer;
+
       if (guarded.report.modified) {
         void recordMetric("deep_research.citation_guard", {
           removedMarkers: guarded.report.removedMarkers.length,
@@ -3110,7 +3136,7 @@ async function synthesizeAnswer(
         }, readCanonicalExecutionContext(config) ?? undefined);
       }
       return {
-        messages: [normalized],
+        messages: [finalResearchMessage(normalized, guarded.answer, streaming?.messageId)],
         verification: {
           ...(state.verification ?? { usableSourceCount: 0, rejectedSourceCount: 0, warnings: [] }),
           citationGuard: guarded.report,
@@ -3118,9 +3144,11 @@ async function synthesizeAnswer(
       };
     }
     return {
-      messages: [normalized],
+      messages: [streaming ? finalResearchMessage(normalized, normalized.content, streaming.messageId) : normalized],
     };
   } catch (error) {
+    const answerStreamError = toAnswerStreamRunError(error);
+    if (answerStreamError) throw answerStreamError;
     if (isContextHardLimitError(error)) {
       return { messages: [contextHardLimitErrorMessage(error, config)] };
     }
@@ -3166,7 +3194,10 @@ const builder = new StateGraph(DeepResearchState)
   .addNode(DEEP_RESEARCH_GRAPH_NODES.fetchSources, traceNode(DEEP_RESEARCH_GRAPH_NODES.fetchSources, fetchSources))
   .addNode(DEEP_RESEARCH_GRAPH_NODES.extractEvidence, traceNode(DEEP_RESEARCH_GRAPH_NODES.extractEvidence, extractEvidence))
   .addNode(DEEP_RESEARCH_GRAPH_NODES.verifyCitations, traceNode(DEEP_RESEARCH_GRAPH_NODES.verifyCitations, verifyCitations))
-  .addNode(DEEP_RESEARCH_GRAPH_NODES.synthesizeAnswer, traceNode(DEEP_RESEARCH_GRAPH_NODES.synthesizeAnswer, synthesizeAnswer))
+  .addNode(DEEP_RESEARCH_GRAPH_NODES.synthesizeAnswer, traceNode(
+    DEEP_RESEARCH_GRAPH_NODES.synthesizeAnswer,
+    (state: typeof DeepResearchState.State, config: RunnableConfig) => synthesizeAnswer(state, config, deepResearchAnswerStream),
+  ))
   .addEdge(START, DEEP_RESEARCH_GRAPH_NODES.validateUploads)
   .addConditionalEdges(DEEP_RESEARCH_GRAPH_NODES.validateUploads, routeAfterUploadValidation, {
     [DEEP_RESEARCH_GRAPH_ROUTES.buildContextPack]: DEEP_RESEARCH_GRAPH_NODES.buildContextPack,
@@ -3217,3 +3248,4 @@ export const deepResearcherGraph = instrumentGraphWithUsageAttribution(instrumen
   getRuntimeIdentityStatusInstrumentation(),
 ), REGISTERED_GRAPH_IDS.deepResearcher);
 
+registerAnswerStreamGraph(REGISTERED_GRAPH_IDS.deepResearcher);

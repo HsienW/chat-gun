@@ -88,6 +88,22 @@ describe("createAnswerStreamWiring", () => {
     expect(metrics).toEqual([{ name: "answer.stream.degraded", payload: { reason: "writer_missing" } }]);
   });
 
+  it("degrades before allocating an id when the call cannot request the required response format", async () => {
+    const recordMetric = vi.fn();
+    const createMessageId = vi.fn(() => "unused");
+    const wiring = createAnswerStreamWiring({
+      sequenceAllocator: new RunSequenceAllocator(),
+      readSettings: () => ({ enabled: true, envelopeEnabled: true }),
+      supportsAnswerSink: false,
+      createMessageId,
+      observer: { recordMetric },
+    });
+    await expect(wiring.prepare({ writer: vi.fn(), configurable: { execution_context: executionContext } }))
+      .resolves.toEqual({ kind: "whole", reason: "capability_unsupported" });
+    expect(createMessageId).not.toHaveBeenCalled();
+    expect(recordMetric).toHaveBeenCalledWith("answer.stream.degraded", { reason: "capability_unsupported" });
+  });
+
   it("treats an invalid execution context as missing wiring", async () => {
     const metrics: unknown[] = [];
     const wiring = createAnswerStreamWiring({
@@ -104,14 +120,25 @@ describe("createAnswerStreamWiring", () => {
 });
 
 describe("evaluateAnswerStreamReadiness", () => {
-  const wired = new Set<string>(ANSWER_STREAM_REQUIRED_GRAPHS);
+  const required = ["chatbot", "deep_researcher", "shopping_assistant"] as const;
+  const wired = new Set<string>(required);
 
   it("is ready while the feature is disabled, whatever the wiring", () => {
     expect(evaluateAnswerStreamReadiness({ enabled: false, envelopeEnabled: false }, new Set())).toEqual({ ready: true, reasonCodes: [] });
   });
 
-  it("is ready when enabled with envelopes and the chatbot wiring registered", () => {
+  it("is ready when enabled with envelopes and all three graphs registered", () => {
+    expect(ANSWER_STREAM_REQUIRED_GRAPHS).toEqual(required);
     expect(evaluateAnswerStreamReadiness({ enabled: true, envelopeEnabled: true }, wired)).toEqual({ ready: true, reasonCodes: [] });
+  });
+
+  it.each(required)("fails when %s is the only unregistered graph", (graphId) => {
+    const registered = new Set(wired);
+    registered.delete(graphId);
+    expect(evaluateAnswerStreamReadiness({ enabled: true, envelopeEnabled: true }, registered)).toEqual({
+      ready: false,
+      reasonCodes: ["answer_stream_wiring_missing"],
+    });
   });
 
   it("fails when enabled but the envelope or the wiring is missing", () => {

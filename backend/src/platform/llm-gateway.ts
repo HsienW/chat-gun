@@ -13,6 +13,7 @@ import {
   type AnswerStreamDegradedReason,
   type AnswerTextAttemptWriter,
   type AnswerTextSink,
+  type AnswerTextProjection,
 } from "./answer-text-sink.js";
 import {
   AnswerTextWriterError,
@@ -22,6 +23,7 @@ import {
   type ChatStreamLimits,
 } from "./openai-chat-stream.js";
 import { getEnv } from "./env.js";
+import { JsonStringFieldProjector } from "./json-string-field-projector.js";
 import { createErrorEnvelope, formatErrorEnvelope } from "./errors.js";
 import { DEFAULT_GENERATION_MODEL } from "./generation-model-profile.js";
 import {
@@ -118,8 +120,9 @@ type ChatModelOutput = BaseMessage;
 
 export type ChatModelInvokeOptions = {
   attribution?: UsageAttribution;
-  /** Opt-in answer-text streaming (design D2); only valid without responseFormat and bound tools. */
+  /** Opt-in answer streaming. Structured output requires a projection, and bound tools are incompatible. */
   answerTextSink?: AnswerTextSink;
+  answerTextProjection?: AnswerTextProjection;
   signal?: AbortSignal;
   runId?: string;
   taskId?: string;
@@ -318,6 +321,7 @@ export type LlmEndpointKind = ProviderEnvelopeKind;
 
 export type LlmCapabilities = {
   supportsStructuredOutput: boolean;
+  supportsStructuredOutputStreaming: boolean;
   supportsToolCalling: boolean;
   supportsVision: boolean;
   supportsStreaming: boolean;
@@ -527,6 +531,7 @@ function capabilitiesForProvider(provider: LlmProviderName, purpose: ModelPurpos
   if (provider === "ccr") {
     return {
       supportsStructuredOutput: false,
+      supportsStructuredOutputStreaming: false,
       supportsToolCalling: false,
       supportsVision: false,
       supportsStreaming: false,
@@ -541,6 +546,8 @@ function capabilitiesForProvider(provider: LlmProviderName, purpose: ModelPurpos
 
   return {
     supportsStructuredOutput: true,
+    // Verified against the deployed Qwen endpoint (stream-agent-answer-text Task 1.1).
+    supportsStructuredOutputStreaming: provider === "qwen",
     supportsToolCalling: true,
     supportsVision: purpose === "vision",
     // Answer streaming is declared per provider adapter for the deployed endpoint (design D7),
@@ -1444,6 +1451,10 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
       );
     }
 
+    assertAnswerSinkCompatible(invokeOptions, {
+      responseFormat: this.options.responseFormat,
+      hasTools: Boolean(this.options.tools?.length),
+    });
     if (this.options.responseFormat) {
       assertProviderCapability(
         capabilities,
@@ -1453,10 +1464,7 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
       );
     }
 
-    assertAnswerSinkCompatible(invokeOptions, {
-      hasResponseFormat: Boolean(this.options.responseFormat),
-      hasTools: Boolean(this.options.tools?.length),
-    });
+
     const answerStreaming = resolveAnswerStreaming(capabilities, invokeOptions);
     if (answerStreaming.degradedReason) {
       await recordAnswerStreamDegraded(answerStreaming.degradedReason, {
@@ -1670,6 +1678,7 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
     const deadlines = new ChatStreamDeadlines(limits, (error) => controller.abort(error));
     let tokens: { inputTokens: number | null; outputTokens: number | null } = { inputTokens: null, outputTokens: null };
     let usageMissingReason: UsageMissingReason | undefined = "stream_aborted";
+    let projector: JsonStringFieldProjector | undefined;
 
     try {
       const response = await fetch(url, {
@@ -1725,13 +1734,25 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
         throw new ChatStreamProtocolError("answer_stream_unexpected_media_type");
       }
 
+      const projection = invokeOptions?.answerTextProjection;
+      const fieldProjector = projection ? new JsonStringFieldProjector(projection.field) : undefined;
+      projector = fieldProjector;
+      const sinkWriter: AnswerTextAttemptWriter = fieldProjector ? {
+        append: async (delta) => {
+          const text = fieldProjector.push(delta);
+          if (text) await writer.append(text);
+        },
+        seal: (outcome) => writer.seal(outcome),
+      } : writer;
       const result = await consumeOpenAiChatStream({
         body: response.body,
-        writer,
+        writer: sinkWriter,
         limits,
         signal: controller.signal,
         onVisibleFragment: () => deadlines.onVisibleFragment(),
       });
+      projector?.finish();
+
       if (result.usage) tokens = tokenUsageFromBody({ usage: result.usage }, endpointKind);
       usageMissingReason = tokens.inputTokens === null || tokens.outputTokens === null
         ? "usage_frame_missing"
@@ -1755,6 +1776,12 @@ class OpenAiCompatibleChatModel implements ChatModelInvoker {
       deadlines.dispose();
       callerSignal?.removeEventListener("abort", onCallerAbort);
       controller.abort();
+      if (projector?.stopped) {
+        await recordMetric("answer.stream.projection_stopped", {
+          provider,
+          messageId: invokeOptions?.answerTextSink?.messageId,
+        }).catch(() => undefined);
+      }
       const missing = tokens.inputTokens === null || tokens.outputTokens === null;
       recordProviderUsage({
         provider,
@@ -1812,7 +1839,9 @@ function resolveAnswerStreaming(
 ): { stream: boolean; degradedReason?: AnswerStreamDegradedReason } {
   if (!invokeOptions?.answerTextSink) return { stream: false };
   if (capabilities.requiresFinalModeration) return { stream: false, degradedReason: "final_moderation_required" };
-  if (!capabilities.supportsStreaming) return { stream: false, degradedReason: "capability_unsupported" };
+  if (!capabilities.supportsStreaming || (invokeOptions.answerTextProjection && !capabilities.supportsStructuredOutputStreaming)) {
+    return { stream: false, degradedReason: "capability_unsupported" };
+  }
   return { stream: true };
 }
 
@@ -1873,6 +1902,7 @@ class CcrAnthropicChatModel implements ChatModelInvoker {
     input: ChatModelInput,
     invokeOptions?: ChatModelInvokeOptions
   ): Promise<ChatModelOutput> {
+    assertAnswerSinkCompatible(invokeOptions, { hasTools: false });
     const url = buildAnthropicMessagesUrl(this.options.baseUrl);
     const provider: LlmProviderName = "ccr";
     const endpointKind = "anthropic-messages" as const;
