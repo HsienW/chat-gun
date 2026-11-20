@@ -1,5 +1,0 @@
-services:
-  runtime:
-    hostname: runtime-comparison
-    environment:
-      QWEN_API_KEY: ""

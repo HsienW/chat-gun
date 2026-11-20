@@ -58,7 +58,7 @@
 
 E4 每一筆都有 layer index、layer archive、路徑、規則、file SHA-256、各次命中 offset／match SHA-256、結論與理由。判讀涵蓋較長識別字內的前綴、PEM 格式常數、環境變數名稱常數、enum、公開 SDK 範例與 placeholder。GnuTLS 二進位各含九個完整 PEM：逐一以完整 PEM SHA-256 與 [GnuTLS 3.7.9 官方 self-test 原始碼](https://raw.githubusercontent.com/gnutls/gnutls/3.7.9/lib/crypto-selftests-pk.c) 的公開 known-answer 向量比對，記錄來源 SHA-256 與 symbol；不以系統路徑豁免。PEM 內文不進證據。掃描沒有確認出部署 secret，故沒有刪除或修補套件，也不需為此重建。啟發式掃描及已知值比對不能證明任意未知 secret 絕不存在。
 
-重現：從根目錄執行 `node deploy/self-hosted-runtime/compare-runtimes.mjs`、`node deploy/self-hosted-runtime/inspect-candidates.mjs`、`node deploy/self-hosted-runtime/positive-smoke.mjs`、`node deploy/self-hosted-runtime/scan-settings.mjs`。前三者需要 Docker；compare／positive 會啟動隔離服務。所有 mutation 前均核對 CurrentState 與目前 Handoff。
+重現所需的驗證工具保存在 commit `d4835b5` 的 `deploy/self-hosted-runtime/`。
 
 ## 版本、入口與拓樸
 
