@@ -19,7 +19,7 @@ function state(): ResearchState {
     plan: { question: "Current news request", answerMode: "research", rationale: "news", queries: [], urls: [], requiredSourceCount: 1 },
     contextPack: undefined, initial_search_query_count: 1, max_research_loops: 1,
     reasoning_model: "", searchResults: [], rankedSources: [], fetchedSources: [], extractedSources: [],
-    verification: undefined, uploadError: undefined, imageObservations: [], weatherExecution: undefined,
+    verification: undefined, uploadError: undefined, imageRecognition: undefined, imageObservations: [], weatherExecution: undefined,
     clarification: undefined,
   };
 }
@@ -74,6 +74,7 @@ describe("deep researcher current-turn evidence", () => {
     const previous = state();
     previous.messages = previous.messages.slice(0, 3);
     previous.uploadError = "old upload failure";
+    previous.imageRecognition = { status: "succeeded", provider: "qwen", model: "previous", imageCount: 1 };
     previous.imageObservations = ["old image"];
     previous.executionTaskId = "old-task";
     await deepResearcherGraph.updateState({ configurable }, previous);
@@ -83,6 +84,7 @@ describe("deep researcher current-turn evidence", () => {
     const paused = await deepResearcherGraph.getState({ configurable });
     expect(paused.next).toEqual(["synthesize_answer"]);
     expect(paused.values.uploadError).toBeUndefined();
+    expect(paused.values.imageRecognition).toBeUndefined();
     expect(paused.values).toMatchObject({ imageObservations: [], extractedSources: [] });
     expect(paused.values.executionTaskId).not.toBe("old-task");
     const resumed = await deepResearcherGraph.invoke(null, { configurable: { ...configurable, run_id: crypto.randomUUID() } });
@@ -96,13 +98,14 @@ describe("deep researcher current-turn evidence", () => {
   it("clears stale per-turn state and validates only the new input", async () => {
     const previous = state();
     previous.uploadError = "old upload failure";
+    previous.imageRecognition = { status: "succeeded", provider: "qwen", model: "previous", imageCount: 1 };
     previous.imageObservations = ["old image"];
     previous.verification = { usableSourceCount: 9, rejectedSourceCount: 0, warnings: [] };
     previous.messages.unshift(new HumanMessage({ content: [{ type: "image_url", image_url: { url: "invalid-old-image" } }] }));
     const update = await deepResearcherWeatherTestInternals.validateUploads(previous, {});
     expect(update).toMatchObject({
       plan: undefined, searchResults: [], rankedSources: [], fetchedSources: [], extractedSources: [],
-      imageObservations: [], uploadError: undefined, verification: undefined, clarification: undefined,
+      imageRecognition: undefined, imageObservations: [], uploadError: undefined, verification: undefined, clarification: undefined,
     });
     expect(previous.uploadError).toBe("old upload failure");
   });
@@ -115,7 +118,11 @@ describe("deep researcher current-turn evidence", () => {
       return new AIMessage("No current sources available.");
     });
     vi.spyOn(llmGateway, "createChatModel").mockReturnValue(model);
-    await deepResearcherWeatherTestInternals.synthesizeAnswer(state(), {});
+    const current = state();
+    current.imageRecognition = { status: "failed", provider: "fixture", model: "vision", imageCount: 1, error: "PRIVATE_DIAGNOSTIC" };
+    await deepResearcherWeatherTestInternals.synthesizeAnswer(current, {});
+    expect(prompts[0]).toContain("不得猜測圖片內容");
+    expect(prompts[0]).not.toContain("PRIVATE_DIAGNOSTIC");
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).not.toContain("OLD_WEATHER_EVIDENCE");
     expect(prompts[0]?.match(/CURRENT_SEARCH_FAILURE/g)).toHaveLength(1);

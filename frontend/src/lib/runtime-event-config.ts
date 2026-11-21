@@ -14,7 +14,11 @@ const RUN_STATUS_LABELS: Record<RunStatus, string> = {
   superseded: '已被取代',
 };
 
+// Display dispatch marker only. Real tools must not use this name.
+export const IMAGE_RECOGNITION_TOOL_NAME = 'analyze_images';
+
 export const RUNTIME_EVENT_NODE_KEYS = {
+  analyzeImages: IMAGE_RECOGNITION_TOOL_NAME,
   buildContextPack: 'build_context_pack',
   planResearch: 'plan_research',
   targetedTools: 'targeted_tools',
@@ -37,6 +41,9 @@ export const RUNTIME_EVENT_LABELS = {
   toolStarted: (toolName: string) => `工具啟動：${toolName}`,
   toolSuccess: (toolName: string) => `工具完成：${toolName}`,
   toolError: (toolName: string) => `工具錯誤：${toolName}`,
+  imageRecognitionSucceeded: (model: string) => '圖片辨識完成（模型：' + model + '）',
+  imageRecognitionFailed: (model: string) => '圖片辨識失敗（模型：' + model + '）',
+  imageRecognitionFailureMessage: '圖片無法辨識，回答不會使用圖片內容。',
   contextBuilt: '上下文已建立',
   finalAnswer: '最終回答',
   card: (cardType: string) => `卡片：${cardType}`,

@@ -498,7 +498,7 @@ function makePlannerState(
 ): Parameters<typeof deepResearcherWeatherTestInternals.planResearch>[0] {
   return ({
     messages,
-    imageObservations: [],
+    imageRecognition: undefined, imageObservations: [],
     initial_search_query_count: 3,
     max_research_loops: 5,
     reasoning_model: "qwen-plus",
@@ -628,7 +628,7 @@ describe("Deep Research weather structured result integration", () => {
         requiredSourceCount: 1,
       },
       messages: [oldClarification],
-      imageObservations: [],
+      imageRecognition: undefined, imageObservations: [],
       extractedSources: [],
       reasoning_model: "qwen-plus",
     } as unknown) as WeatherState;
@@ -1564,7 +1564,7 @@ describe("Deep Research weather structured result integration", () => {
       messages: [
         new HumanMessage("\u53f0\u5317\u73fe\u5728\u5929\u6c23\u5982\u4f55\uFF1F"),
       ],
-      imageObservations: [],
+      imageRecognition: undefined, imageObservations: [],
       initial_search_query_count: 3,
       max_research_loops: 5,
       reasoning_model: "qwen-plus",
@@ -2135,7 +2135,7 @@ describe("Deep Research weather structured result integration", () => {
 
     const state = ({
       messages: [new HumanMessage("\u5317\u4eac\u5e02\u73fe\u5728\u5e7e\u5ea6\uFF1F")],
-      imageObservations: [],
+      imageRecognition: undefined, imageObservations: [],
       initial_search_query_count: 3,
       max_research_loops: 5,
       reasoning_model: "qwen-plus",
@@ -2252,7 +2252,7 @@ describe("Deep Research weather structured result integration", () => {
 
     const state = ({
       messages: [new HumanMessage("\u9ad8\u96c4\u9cf3\u5c71\u4eca\u5929\u6703\u4e0b\u96e8\u55ce\uFF1F")],
-      imageObservations: [],
+      imageRecognition: undefined, imageObservations: [],
       initial_search_query_count: 3,
       max_research_loops: 5,
       reasoning_model: "qwen-plus",

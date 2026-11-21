@@ -23,7 +23,7 @@ function stateWithPlan(
     extractedSources: [],
     verification: undefined,
     uploadError: undefined,
-    imageObservations: [],
+    imageRecognition: undefined, imageObservations: [],
     weatherExecution: undefined,
     clarification: undefined,
   };

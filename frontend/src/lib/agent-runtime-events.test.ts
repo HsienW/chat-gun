@@ -14,6 +14,33 @@ import {
 } from '@/lib/agent-runtime-events';
 import type { RuntimeEventEnvelope } from '@/lib/runtime-event-envelope';
 
+describe('image recognition activity', () => {
+  const model = 'qwen3.5-flash';
+  it.each([
+    ['succeeded', '圖片辨識完成（模型：qwen3.5-flash）'],
+    ['failed', '圖片辨識失敗（模型：qwen3.5-flash）'],
+  ])('renders %s using the backend model', (status, title) => {
+    const events = extractAgentRuntimeEvents({
+      analyze_images: { reasoning_model: 'qwen-plus', imageRecognition: {
+        status, model, provider: 'qwen', imageCount: 1, error: 'private provider diagnostic',
+      } },
+    });
+    expect(events).toHaveLength(1);
+    expect(runtimeEventToProcessedEvent(events[0])).toMatchObject({ title });
+    expect(JSON.stringify(events)).not.toContain('private provider diagnostic');
+  });
+  it('keeps existing tool titles', () => {
+    expect(runtimeEventToProcessedEvent({ type: 'agent.tool.success', toolName: 'search', costMs: 0, ts: 1 }).title)
+      .toBe('工具完成：search');
+    expect(runtimeEventToProcessedEvent({ type: 'agent.tool.error', toolName: 'search', error: 'failure', ts: 1 }).title)
+      .toBe('工具錯誤：search');
+  });
+  it('preserves other events beside malformed image results', () => {
+    const events = extractAgentRuntimeEvents({ analyze_images: { imageRecognition: {} }, plan_research: {} });
+    expect(events.map(event => event.type)).toEqual(['agent.plan.start']);
+  });
+});
+
 describe('extractTaskEventGeneration', () => {
   it('reads the standard task event payload generation without coercion', () => {
     expect(
