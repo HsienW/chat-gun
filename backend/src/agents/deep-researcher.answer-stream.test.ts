@@ -32,7 +32,7 @@ function researchState(): ResearchState {
     initial_search_query_count: 1, max_research_loops: 1, reasoning_model: "", contextPack: undefined,
     searchResults: [], rankedSources: [], fetchedSources: [],
     extractedSources: [{ index: 1, title: "Fixture", url: "https://example.com/source", summary: "Known fact", keyClaims: [], usable: true }],
-    verification: undefined, uploadError: undefined, imageObservations: [], weatherExecution: undefined, clarification: undefined,
+    verification: undefined, uploadError: undefined, imageRecognition: undefined, imageObservations: [], weatherExecution: undefined, clarification: undefined,
   };
 }
 

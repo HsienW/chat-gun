@@ -28,7 +28,7 @@ liveDescribe("deep researcher weather live smoke", () => {
     async ({ question, expectedAnswerMode, expectedToolStatus }) => {
       const state = ({
         messages: [new HumanMessage(question)],
-        imageObservations: [],
+        imageRecognition: undefined, imageObservations: [],
         initial_search_query_count: 3,
         max_research_loops: 6,
         reasoning_model: "qwen-plus",
@@ -74,7 +74,7 @@ liveDescribe("deep researcher weather live smoke", () => {
     const question = "明天會下雨嗎";
     const state = ({
       messages: [new HumanMessage(question)],
-      imageObservations: [],
+      imageRecognition: undefined, imageObservations: [],
       initial_search_query_count: 3,
       max_research_loops: 6,
       reasoning_model: "qwen-plus",

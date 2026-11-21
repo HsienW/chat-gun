@@ -46,6 +46,8 @@ import {
 } from "../platform/im-context-pack.js";
 import {
   describeLlmGatewayConfig,
+  enabledChatModels,
+  getConfiguredLlmProvider,
   formatLlmError,
   getConfiguredLlmCapabilities,
   getProviderResponseCode,
@@ -245,6 +247,11 @@ const CITATION_GUARD_POLICY = [
   "When there are no usable sources, say that no usable source was obtained and why, and stop there: do not state any specific date, number, version, schedule, decision or publication status from prior knowledge or inference, even with hedging such as 'would have', 'should be' or 'estimated'.",
 ];
 
+type ImageRecognition = { provider: string; model: string; imageCount: number } & (
+  | { status: "succeeded" }
+  | { status: "failed"; error: string }
+);
+
 const DeepResearchState = Annotation.Root({
   executionTaskId: Annotation<string | undefined>({
     reducer: (_left, right) => right,
@@ -295,6 +302,10 @@ const DeepResearchState = Annotation.Root({
     default: () => undefined,
   }),
   uploadError: Annotation<string | undefined>({
+    reducer: (_left, right) => right,
+    default: () => undefined,
+  }),
+  imageRecognition: Annotation<ImageRecognition | undefined>({
     reducer: (_left, right) => right,
     default: () => undefined,
   }),
@@ -735,7 +746,7 @@ async function validateUploads(
     executionTaskId: readCanonicalExecutionContext(config)?.taskId,
     plan: undefined, contextPack: undefined, searchResults: [], rankedSources: [],
     fetchedSources: [], extractedSources: [], verification: undefined,
-    uploadError: undefined, imageObservations: [], weatherExecution: undefined,
+    uploadError: undefined, imageRecognition: undefined, imageObservations: [], weatherExecution: undefined,
     clarification: undefined,
   };
   const validationError = validateImageAttachments(currentTurnMessages(state));
@@ -781,7 +792,7 @@ async function buildContextPack(
   };
 }
 
-function getLatestImageUserContent(state: typeof DeepResearchState.State): unknown[] | undefined {
+function getLatestImageUserContent(state: Pick<typeof DeepResearchState.State, "messages">): unknown[] | undefined {
   const latestHumanMessage = [...state.messages]
     .reverse()
     .find((message) => message.getType?.() === "human");
@@ -813,7 +824,7 @@ function getLatestImageUserContent(state: typeof DeepResearchState.State): unkno
 }
 
 async function analyzeImages(
-  state: typeof DeepResearchState.State,
+  state: Pick<typeof DeepResearchState.State, "messages">,
   config: RunnableConfig
 ): Promise<Partial<typeof DeepResearchState.State>> {
   const content = getLatestImageUserContent(state);
@@ -821,30 +832,46 @@ async function analyzeImages(
     return {};
   }
 
+  const provider = getConfiguredLlmProvider();
+  const primary = enabledChatModels([{ purpose: "vision" }]).find(entry => entry.provider === provider);
+  // enabledChatModels includes getConfiguredLlmProvider() by construction, even with fallback disabled.
+  // A missing entry would violate that gateway invariant.
+  if (!primary) throw new Error("Missing configured vision provider");
+  const model = primary.model;
+  const deadline = AbortSignal.timeout(getAgentRuntimeConfig().llmFallbackTimeoutMs);
+  const signal = config.signal ? AbortSignal.any([config.signal, deadline]) : deadline;
+  const imageCount = content.filter(part => part && typeof part === "object" && "type" in part && part.type === "image_url").length;
   try {
-    const model = state.reasoning_model.trim() || undefined;
+    signal.throwIfAborted();
     const llm = llmGateway.createChatModel({ purpose: "vision", model, temperature: 0 });
     const response = await llm.invoke([
-      new HumanMessage({
-        content: content as HumanMessage["content"],
-      }),
-    ], { signal: config.signal, attribution: readUsageAttribution(config) });
-
+      new HumanMessage({ content: content as HumanMessage["content"] }),
+    ], { signal, attribution: readUsageAttribution(config) });
+    signal.throwIfAborted();
+    const observation = messageContentToString(response);
+    if (!observation.trim()) throw new Error("Empty vision response");
+    const metadata = isRecord(response.response_metadata) ? response.response_metadata : {};
     return {
-      imageObservations: [messageContentToString(response)],
+      imageObservations: [observation],
+      imageRecognition: {
+        status: "succeeded", imageCount,
+        provider: typeof metadata?.provider === "string" && metadata.provider.trim() ? metadata.provider : provider,
+        model: typeof metadata?.model === "string" && metadata.model.trim() ? metadata.model : model,
+      },
     };
   } catch (error) {
+    const timedOut = deadline.aborted || (error instanceof Error && "code" in error && error.code === "provider_timeout");
+    if (config.signal?.aborted || (!timedOut && error instanceof Error && error.name === "AbortError")) throw error;
+    const code = timedOut ? "provider_timeout" : inferErrorCode(error, provider).code;
     return {
-      imageObservations: [
-        serializeErrorEnvelope(
-          createErrorEnvelope(error, {
-            executionContext: readCanonicalExecutionContext(config),
-            source: "backend",
-            stage: "image_recognition",
-            provider: String(describeLlmGatewayConfig().provider),
-          })
-        ),
-      ],
+      imageObservations: [],
+      imageRecognition: {
+        status: "failed", provider, model, imageCount,
+        error: serializeErrorEnvelope(createErrorEnvelope("Image recognition failed", {
+          executionContext: readCanonicalExecutionContext(config),
+          source: "backend", stage: "image_recognition", provider, code,
+        })),
+      },
     };
   }
 }
@@ -1436,9 +1463,7 @@ async function planResearch(
   }
 
   const contextPack = state.contextPack ?? buildImAgentContextPack(currentTurnMessages(state));
-  const imageContext = state.imageObservations.length
-    ? state.imageObservations.join("\n\n")
-    : "No image attachments were provided.";
+  const imageContext = imageEvidenceText(state, "No image attachments were provided.");
   const plannerPolicy = [
     "You are a research pipeline planner for a LangGraph agent.",
     "Return only one JSON object. Do not use markdown.",
@@ -2709,15 +2734,22 @@ function conversationMessages(state: typeof DeepResearchState.State): BaseMessag
   return state.messages.filter((message) => message.getType() === "human" || message.getType() === "ai");
 }
 
+function imageEvidenceText(state: typeof DeepResearchState.State, empty: string): string {
+  if (state.imageRecognition?.status === "failed") {
+    return "圖片辨識失敗，沒有可用的圖片內容。不得猜測圖片內容，回答時必須告知使用者圖片未能分析。";
+  }
+  return state.imageObservations.length
+    ? "Image recognition observations:\n" + state.imageObservations.join("\n\n")
+    : empty;
+}
+
 /**
  * Citation-guarded evidence: only usable sources carry an [n] index and URL; unusable ones are
  * listed with their failure reason only. Raw tool outputs stay (errors must reach the answer) but
  * are labelled as diagnostics, and guardCitations removes any URL or marker they leak.
  */
 function formatGuardedEvidence(state: typeof DeepResearchState.State): string {
-  const imageEvidence = state.imageObservations.length
-    ? `Image recognition observations:\n${state.imageObservations.join("\n\n")}`
-    : "";
+  const imageEvidence = imageEvidenceText(state, "");
   const toolResults = currentTurnMessages(state)
     .filter((message) => message.getType?.() === "tool")
     .map((message, index) => `Tool result ${index + 1}:\n${excerpt(messageContentToString(message), 2_000)}`)
@@ -2753,9 +2785,7 @@ function formatGuardedEvidence(state: typeof DeepResearchState.State): string {
 
 function formatEvidence(state: typeof DeepResearchState.State): string {
   if (isCitationGuardEnabled()) return formatGuardedEvidence(state);
-  const imageEvidence = state.imageObservations.length
-    ? `Image recognition observations:\n${state.imageObservations.join("\n\n")}`
-    : "";
+  const imageEvidence = imageEvidenceText(state, "");
 
   const toolEvidence = currentTurnMessages(state)
     .filter((message) => message.getType?.() === "tool")
@@ -2952,6 +2982,7 @@ function buildTargetedToolAnswer(
 }
 
 export const deepResearcherWeatherTestInternals = {
+  analyzeImages,
   validateUploads,
   planResearch,
   normalizeWeatherPlanConsistency,

@@ -18,12 +18,13 @@ export type AgentRuntimeEvent = (
   | { type: 'agent.tool.start'; toolName: string; input?: unknown; ts: number }
   | {
       type: 'agent.tool.success';
+      model?: string;
       toolName: string;
       output?: unknown;
       costMs: number;
       ts: number;
     }
-  | { type: 'agent.tool.error'; toolName: string; error: string; ts: number }
+  | { type: 'agent.tool.error'; model?: string; toolName: string; error: string; ts: number }
   | {
       type: 'agent.context.build';
       sources: ContextSource[];

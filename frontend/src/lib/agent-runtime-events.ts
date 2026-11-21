@@ -1,4 +1,5 @@
 import {
+  IMAGE_RECOGNITION_TOOL_NAME,
   RUNTIME_EVENT_LABELS,
   RUNTIME_EVENT_NODE_KEYS,
 } from '@/lib/runtime-event-config';
@@ -50,7 +51,22 @@ const KNOWN_RUNTIME_EVENT_TYPES = new Set<AgentRuntimeEvent['type']>([
   'agent.unknown',
 ]);
 
+function imageRecognitionEvents(node: unknown): AgentRuntimeEvent[] {
+  const result = asRecord(asRecord(node)?.imageRecognition);
+  if (!result || typeof result.model !== 'string' || !result.model.trim()
+    || typeof result.provider !== 'string' || !result.provider.trim()
+    || typeof result.imageCount !== 'number' || !Number.isSafeInteger(result.imageCount)
+    || result.imageCount < 1) return [];
+  const fields = { toolName: IMAGE_RECOGNITION_TOOL_NAME, model: result.model, ts: Date.now() };
+  if (result.status === 'succeeded') return [{ ...fields, type: 'agent.tool.success', costMs: 0 }];
+  if (result.status === 'failed' && 'error' in result) {
+    return [{ ...fields, type: 'agent.tool.error', error: RUNTIME_EVENT_LABELS.imageRecognitionFailureMessage }];
+  }
+  return [];
+}
+
 const NODE_EVENT_RULES: RuntimeEventRule[] = [
+  { nodeKey: RUNTIME_EVENT_NODE_KEYS.analyzeImages, toEvents: imageRecognitionEvents },
   {
     nodeKey: RUNTIME_EVENT_NODE_KEYS.buildContextPack,
     toEvents: (nodeValue) => [getContextPackEvent(nodeValue)],
@@ -841,13 +857,17 @@ export function runtimeEventToProcessedEvent(
       };
     case 'agent.tool.success':
       return {
-        title: RUNTIME_EVENT_LABELS.toolSuccess(event.toolName),
+        title: event.toolName === IMAGE_RECOGNITION_TOOL_NAME && event.model
+          ? RUNTIME_EVENT_LABELS.imageRecognitionSucceeded(event.model)
+          : RUNTIME_EVENT_LABELS.toolSuccess(event.toolName),
         data: stringifyEventData(event.output),
         eventType: event.type,
       };
     case 'agent.tool.error':
       return {
-        title: RUNTIME_EVENT_LABELS.toolError(event.toolName),
+        title: event.toolName === IMAGE_RECOGNITION_TOOL_NAME && event.model
+          ? RUNTIME_EVENT_LABELS.imageRecognitionFailed(event.model)
+          : RUNTIME_EVENT_LABELS.toolError(event.toolName),
         data: event.error,
         eventType: event.type,
       };
